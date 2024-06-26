@@ -1,0 +1,138 @@
+[build-system]
+requires = ["hatchling>=1.22.4,<1.23", "hatch-jupyter-builder"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ccflow"
+description = "TODO"
+version = "0.1.0"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.8"
+authors = [
+    { name = "Point72", email = "OpenSource@Point72.com" },
+]
+keywords = [
+    "configuration",
+    "flow",
+    "dag",
+    "hydra",
+    "pydantic",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: Apache Software License",
+]
+
+dependencies = [
+    "cloudpathlib",
+    "cloudpickle",
+    "hydra-core",
+    "IPython",
+    "numpy<2",
+    "orjson",
+    "pyarrow",
+    "pydantic",
+    "smart_open",
+    "tenacity",
+]
+
+[project.optional-dependencies]
+full = [
+    "dask",
+    "pandas",
+    "pandera",
+    "plotly",
+    "polars",
+    "ray",
+    "xarray"
+]
+develop = [
+    "build",
+    "bump2version>=1.0.0",
+    "check-manifest",
+    "hatchling",
+    "isort",
+    "ruff>=0.3,<0.5",
+    "toml",
+    "twine",
+    "wheel",
+    # Full deps
+    "csp>=0.0.4,<0.1",
+    "dask",
+    "pandas",
+    "pandera",
+    "plotly",
+    "polars",
+    "ray",
+    "xarray",
+    # Test deps
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "pytest-sugar",
+]
+test = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "pytest-sugar",
+]
+
+[project.urls]
+Repository = "https://github.com/point72/ccflow"
+Homepage = "https://github.com/point72/ccflow"
+
+[tool.check-manifest]
+ignore = ["docs/**", ".bumpversion.cfg", "Makefile", "setup.py", "*.ipynb"]
+
+[tool.hatch.build]
+artifacts = []
+
+[tool.hatch.build.sources]
+src = "/"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/ccflow",
+    "LICENSE",
+    "README.md",
+]
+exclude = [
+    "/.github",
+    "/.gitignore",
+    "/docs",
+]
+
+[tool.hatch.build.targets.wheel]
+include = [
+    "/ccflow",
+]
+exclude = [
+    "/.github",
+    "/.gitignore",
+    "/pyproject.toml",
+    "/docs",
+]
+
+[tool.isort]
+combine_as_imports = true
+include_trailing_comma = true
+line_length = 150
+profile = "black"
+default_section = "THIRDPARTY"
+sections = "FUTURE,THIRDPARTY,FIRSTPARTY,LOCALFOLDER"
+known_first_party = "ccflow"
+
+[tool.ruff]
+line-length = 150
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401", "F403"]

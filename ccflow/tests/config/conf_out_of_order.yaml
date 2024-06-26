@@ -1,0 +1,23 @@
+subregistry2:
+    baz:
+        _target_: ccflow.tests.test_base_registry.MyNestedModel
+        x: /subregistry1/foo
+        y: qux
+
+    qux:
+        _target_: ccflow.tests.test_base_registry.MyTestModel
+        a: test
+        b: 0.0
+
+subregistry1:
+    foo:
+        _target_: ccflow.tests.test_base_registry.MyTestModel
+        a: test
+        b: 0.0
+
+    bar:
+        _target_: ccflow.tests.test_base_registry.MyNestedModel
+        x: foo
+        y: /subregistry2/qux
+
+

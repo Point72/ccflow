@@ -1,0 +1,3 @@
+defaults:
+    - registry/default
+    #- override sources/source1: read

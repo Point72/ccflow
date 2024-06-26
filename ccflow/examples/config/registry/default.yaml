@@ -1,0 +1,4 @@
+defaults:
+    - sources/default  # This imports the default config from sources
+    #- override sources/source1: parquet  # You could also override specific elements from the above
+

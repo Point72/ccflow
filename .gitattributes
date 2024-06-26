@@ -1,0 +1,5 @@
+docs/* linguist-documentation
+*.ipynb linguist-documentation
+
+*.py text eol=lf
+*.md text eol=lf

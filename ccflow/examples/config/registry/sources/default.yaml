@@ -1,0 +1,10 @@
+defaults:
+    - source1: db
+    - source2: db
+    - _self_  # Adds the items below to the list (i.e. they don't need to live in subdirectories)
+
+other1:
+    _target_: ccflow.examples.flow.Other1
+
+other2:
+    _target_: ccflow.examples.flow.Other2

@@ -1,0 +1,2 @@
+_target_: ccflow.examples.flow.Source1FromParquet
+path: './source1_{{date}}.parquet'

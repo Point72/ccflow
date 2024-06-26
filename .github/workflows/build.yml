@@ -1,0 +1,299 @@
+name: Build Status
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths-ignore:
+      - docs/
+      - LICENSE
+      - README.md
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      ci-full:
+        description: 'Run Full CI'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+
+jobs:
+  ########################################################
+  #......................................................#
+  #..|########|..|###\.....|##|..|########|..|########|..#
+  #.....|##|.....|##|##\...|##|.....|##|.....|########|..#
+  #.....|##|.....|##|\##\..|##|.....|##|........|##|.....#
+  #.....|##|.....|##|.\##\.|##|.....|##|........|##|.....#
+  #.....|##|.....|##|..\##\|##|.....|##|........|##|.....#
+  #.....|##|.....|##|...\##\#/......|##|........|##|.....#
+  #..|########|..|##|....\##/....|########|.....|##|.....#
+  #......................................................#
+  ########################################################
+  initialize:
+    runs-on: p72-small
+
+    outputs:
+      FULL_RUN: ${{ steps.setuppush.outputs.FULL_RUN || steps.setupmanual.outputs.FULL_RUN }}
+      BRANCH: ${{ steps.setuppush.outputs.BRANCH || steps.setuppr.outputs.BRANCH || steps.setupmanual.outputs.BRANCH }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract branch name
+        run: echo "::set-output name=branch::${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}"
+        id: extract_branch
+
+      - name: Display and Setup Build Args (Push)
+        id: setuppush
+        run: |
+          echo "Full Run: $FULL_RUN"
+          echo "Branch: $BRANCH"
+          echo "FULL_RUN=$FULL_RUN" >> $GITHUB_OUTPUT
+          echo "BRANCH=$BRANCH" >> $GITHUB_OUTPUT
+        env:
+          FULL_RUN: ${{ steps.extract_branch.outputs.branch == 'develop' || steps.extract_branch.outputs.branch == 'main' }}
+          BRANCH: ${{ steps.extract_branch.outputs.branch }}
+        if: ${{ github.event_name == 'push' }}
+
+      - name: Display and Setup Build Args (PR)
+        id: setuppr
+        run: |
+          echo "Full Run: $FULL_RUN"
+          echo "Branch: $BRANCH"
+          echo "FULL_RUN=" >> $GITHUB_OUTPUT
+          echo "BRANCH=$BRANCH" >> $GITHUB_OUTPUT
+        env:
+          BRANCH: ${{ steps.extract_branch.outputs.branch }}
+        if: ${{ github.event_name == 'pull_request' }}
+
+      - name: Display and Setup Build Args (Manual)
+        id: setupmanual
+        run: |
+          echo "Full Run: $FULL_RUN"
+          echo "Branch: $BRANCH"
+          echo "FULL_RUN=$FULL_RUN" >> $GITHUB_OUTPUT
+          echo "BRANCH=$BRANCH" >> $GITHUB_OUTPUT
+        env:
+          FULL_RUN: ${{ github.event.inputs.ci-full }}
+          BRANCH: ${{ steps.extract_branch.outputs.branch }}
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+
+  #######################################################
+  #.....................................................#
+  #..|##|........|########|..|###\....|##|..|########|..#
+  #..|##|...........|##|.....|##|##\..|##|..|########|..#
+  #..|##|...........|##|.....|##|\##\.|##|.....|##|.....#
+  #..|##|...........|##|.....|##|.\##\|##|.....|##|.....#
+  #..|##|...........|##|.....|##|..\##\##|.....|##|.....#
+  #..|########|.....|##|.....|##|...\##\#|.....|##|.....#
+  #..|########|..|########|..|##|....\##/......|##|.....#
+  #.....................................................#
+  #######################################################
+  lint:
+    runs-on: p72-small
+    needs:
+      - initialize
+
+    strategy:
+      matrix:
+        python-version:
+          - '3.9'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install prerequisites (will be removed)
+        uses: 9951-CubistResearchTech/utility-actions/setup-dependencies@main
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: 9951-CubistResearchTech/utility-actions/setup-python@main
+        with:
+          version: '${{ matrix.python-version }}'
+
+      - name: Install dependencies
+        run: make develop
+
+      - name: Lint
+        run: make lint
+
+      - name: Checks
+        run: make check-manifest
+
+  ################################################################
+  #..............................................................#
+  #..|########\..|##|..|##|..|########|..|##|........|#######\...#
+  #..|##|../##/..|##|..|##|.....|##|.....|##|........|##|..\##\..#
+  #..|##|./##/...|##|..|##|.....|##|.....|##|........|##|..|##|..#
+  #..|##||#<.....|##|..|##|.....|##|.....|##|........|##|..|##|..#
+  #..|##|.\##\...|##|..|##|.....|##|.....|##|........|##|..|##|..#
+  #..|##|..\##\..|##|..|##|.....|##|.....|########|..|##|../##/..#
+  #..|########/..|########|..|########|..|########|..|#######/...#
+  #..............................................................#
+  ################################################################
+  build:
+    runs-on: p72-medium
+    needs:
+      - initialize
+
+    strategy:
+      matrix:
+        python-version:
+          - '3.9'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install prerequisites (will be removed)
+        uses: 9951-CubistResearchTech/utility-actions/setup-dependencies@main
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: 9951-CubistResearchTech/utility-actions/setup-python@main
+        with:
+          version: '${{ matrix.python-version }}'
+
+      - name: Install dependencies
+        run: make develop
+
+      - name: Build
+        run: make build
+
+      - name: Check Packaging
+        run: make dist-check
+        if: ${{ matrix.python-version == 3.9 }}
+
+      - name: Upload Wheels
+        uses: actions/upload-artifact@v3
+        with:
+          name: dist-${{ runner.os }}-${{ runner.arch }}-${{ matrix.python-version }}
+          path: dist/*
+          if-no-files-found: error
+        if: ${{ matrix.python-version == 3.9 }}
+
+  ####################################################
+  #..................................................#
+  #..|########|..|########|..../####\....|########|..#
+  #..|########|..|##|......../##/..\##\..|########|..#
+  #.....|##|.....|##|.........\##\..........|##|.....#
+  #.....|##|.....|########|.....\##\........|##|.....#
+  #.....|##|.....|##|.............\##\......|##|.....#
+  #.....|##|.....|##|........\##\../##/.....|##|.....#
+  #.....|##|.....|########|...\####/........|##|.....#
+  #..................................................#
+  ####################################################
+  test:
+    runs-on: p72-medium
+    needs:
+      - initialize
+      - build
+
+    strategy:
+      matrix:
+        python-version:
+          - '3.9'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install prerequisites (will be removed)
+        uses: 9951-CubistResearchTech/utility-actions/setup-dependencies@main
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: 9951-CubistResearchTech/utility-actions/setup-python@main
+        with:
+          version: '${{ matrix.python-version }}'
+
+      - name: Install dependencies
+        run: make develop
+
+      - name: Download wheel
+        uses: actions/download-artifact@v3
+        with:
+          name: dist-${{ runner.os }}-${{ runner.arch }}-${{ matrix.python-version }}
+
+      - name: Install wheel
+        run: python -m pip install -U `ls *.whl` --no-deps --target . --no-build-isolation
+
+      - name: Test
+        run: make test
+
+      - name: Upload test results (Python)
+        uses: actions/upload-artifact@v3
+        with:
+          name: py-test-results-${{ matrix.python-version }}-
+          path: reports/
+        if: ${{ always() }}
+
+  ############################################################################################
+  #..........................................................................................#
+  #..|########\...|########|..|##|........|########|...../#####\......./####\....|########|..#
+  #..|##|../##/...|##|........|##|........|##|........../##/.\##\..../##/..\##\..|##|........#
+  #..|##|./##/....|##|........|##|........|##|........./##/...\##\....\##\.......|##|........#
+  #..|##||##<.....|########|..|##|........|########|../###########\.....\##\.....|########|..#
+  #..|##|.\##\....|##|........|##|........|##|........|##|.....|##|.......\##\...|##|........#
+  #..|##|..\##\...|##|........|########|..|##|........|##|.....|##|..\##\./##/...|##|........#
+  #..|##|...\##\..|########|..|########|..|########|..|##|.....|##|...\####/.....|########|..#
+  #..........................................................................................#
+  ############################################################################################
+  release:
+    runs-on: p72-small
+    needs:
+      - initialize
+      - build
+      - lint
+      - test
+
+    strategy:
+      matrix:
+        python-version:
+          - '3.9'
+
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install prerequisites (will be removed)
+        uses: 9951-CubistResearchTech/utility-actions/setup-dependencies@main
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: 9951-CubistResearchTech/utility-actions/setup-python@main
+        with:
+          version: '${{ matrix.python-version }}'
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name:
+          merge-multiple: true
+          path: artifacts/
+
+      - name: Reorganize and Display structure of downloaded files
+        shell: bash
+        run: |
+          mkdir -p dist/conda docs/
+          cp -r artifacts/dist*/*.whl dist/
+          cp -r artifacts/dist*/*.tar.gz dist/
+          ls -R ./dist ./docs
+
+      # TODO cutover to public
+      # - name: Deploy wheel (develop)
+      #   run: make publish-pypi-dev ARTIFACTORY_USERNAME=svcccrtjenkins ARTIFACTORY_PASSWORD=${{ secrets.AUTOMATION }}
+      #   if: ${{ needs.initialize.outputs.FULL_RUN == 'true' && needs.initialize.outputs.BRANCH == 'develop' }}
+
+      # - name: Deploy wheel (main)
+      #   run: make publish-pypi-prod ARTIFACTORY_USERNAME=svcccrtjenkins ARTIFACTORY_PASSWORD=${{ secrets.AUTOMATION }}
+      #   if: ${{ needs.initialize.outputs.FULL_RUN == 'true' && needs.initialize.outputs.BRANCH == 'main' }}

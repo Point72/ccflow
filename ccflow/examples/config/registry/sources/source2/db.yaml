@@ -1,0 +1,3 @@
+_target_: ccflow.examples.flow.Source2FromDb
+conn_str: 'PROD2'
+query: 'select * from ...'
