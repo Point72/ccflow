@@ -144,7 +144,7 @@ class PotentialNDArray(Generic[T], nd_array_type, _CommonNDArray):
     def validate(cls, val: Any, field) -> Optional[nd_array_type]:
         try:
             dtype_field = field.sub_fields[0] if field.sub_fields is not None else None
-            return cls._validate(val, dtype_field.type_)
+            return cls._validate(val, dtype_field.type_ if dtype_field else None)
         except ValueError:
             return None
 
