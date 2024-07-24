@@ -15,4 +15,4 @@ TODO
 
 ## License
 
-`raydar` is licensed under the Apache 2.0 license. See the [LICENSE](https://github.com/Point72/ccflow/blob/main/LICENSE) file for details.
+`ccflow` is licensed under the Apache 2.0 license. See the [LICENSE](https://github.com/Point72/ccflow/blob/main/LICENSE) file for details.

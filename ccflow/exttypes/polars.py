@@ -4,6 +4,7 @@ import orjson
 import polars as pl
 import scipy as sp
 from io import StringIO
+from packaging import version
 from typing import Any
 
 __all__ = ("PolarsExpression",)
@@ -31,12 +32,20 @@ class PolarsExpression(pl.Expr):
     def _decode(cls, obj):
         # We embed polars expressions as a dict, so we need to convert to a full json string first
         json_str = orjson.dumps(obj).decode("utf-8", "ignore")
-        return pl.Expr.deserialize(StringIO(json_str))
+        if version.parse(pl.__version__) < version.parse("1.0.0"):
+            return pl.Expr.deserialize(StringIO(json_str))
+        else:
+            # polars deserializes from a binary format by default.
+            return pl.Expr.deserialize(StringIO(json_str), format="json")
 
     @classmethod
     def _encode(cls, obj, info=None):
         # obj.meta.serialize produces a string containing a dict, but we just want to return the dict.
-        return orjson.loads(obj.meta.serialize())
+        if version.parse(pl.__version__) < version.parse("1.0.0"):
+            return orjson.loads(obj.meta.serialize())
+        else:
+            # polars serializes into a binary format by default.
+            return orjson.loads(obj.meta.serialize(format="json"))
 
     @classmethod
     def validate(cls, value: Any, field=None) -> Any:
