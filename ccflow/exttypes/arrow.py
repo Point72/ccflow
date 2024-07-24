@@ -1,7 +1,5 @@
 import pandas as pd
-import pyarrow
 import pyarrow as pa
-import pyarrow.lib
 from typing import Any, Generic, Type, TypeVar, Union
 from typing_extensions import Literal, get_args
 
@@ -48,7 +46,7 @@ class ArrowSchema(type):
 S = TypeVar("S", bound=ArrowSchema)
 
 
-class ArrowTable(pyarrow.Table, Generic[S]):
+class ArrowTable(pa.Table, Generic[S]):
     """Pydantic compatible wrapper around Arrow tables, with optional schema validation."""
 
     @classmethod
@@ -84,13 +82,13 @@ class ArrowTable(pyarrow.Table, Generic[S]):
     def _validate(cls, v, schema, strict):
         """Helper function for validation with common functionality between v1 and v2"""
         if isinstance(v, list):
-            v = pyarrow.Table.from_batches(v)
+            v = pa.Table.from_batches(v)
         elif hasattr(v, "to_arrow"):  # For polars, but without importing it
             v = v.to_arrow()
         elif isinstance(v, pd.DataFrame):
-            v = pyarrow.Table.from_pandas(v)
+            v = pa.Table.from_pandas(v)
         elif isinstance(v, dict):
-            v = pyarrow.Table.from_pydict(v)
+            v = pa.Table.from_pydict(v)
         elif not isinstance(v, pa.Table):
             raise ValueError(f"Value of type {type(v)} cannot be converted to pyarrow.Table")
 
