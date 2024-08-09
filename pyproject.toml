@@ -36,8 +36,10 @@ dependencies = [
     "cloudpickle",
     "hydra-core",
     "IPython",
+    "jinja2",
     "numpy<2",
     "orjson",
+    "pandas",
     "pyarrow",
     "pydantic",
     "smart_open",
@@ -52,6 +54,7 @@ full = [
     "plotly",
     "polars",
     "ray",
+    "scipy",
     "xarray"
 ]
 develop = [
@@ -59,7 +62,6 @@ develop = [
     "bump2version>=1.0.0",
     "check-manifest",
     "hatchling",
-    "isort",
     "ruff>=0.3,<0.5",
     "toml",
     "twine",
@@ -72,6 +74,7 @@ develop = [
     "plotly",
     "polars",
     "ray",
+    "scipy",
     "xarray",
     # Test deps
     "pytest",
@@ -91,7 +94,14 @@ Repository = "https://github.com/point72/ccflow"
 Homepage = "https://github.com/point72/ccflow"
 
 [tool.check-manifest]
-ignore = ["docs/**", ".bumpversion.cfg", "Makefile", "setup.py", "*.ipynb"]
+ignore = [
+    "docs/**",
+    "conda-recipe/**",
+    ".bumpversion.cfg",
+    "Makefile",
+    "setup.py",
+    "*.ipynb",
+]
 
 [tool.hatch.build]
 artifacts = []
@@ -122,17 +132,19 @@ exclude = [
     "/docs",
 ]
 
-[tool.isort]
-combine_as_imports = true
-include_trailing_comma = true
-line_length = 150
-profile = "black"
-default_section = "THIRDPARTY"
-sections = "FUTURE,THIRDPARTY,FIRSTPARTY,LOCALFOLDER"
-known_first_party = "ccflow"
-
 [tool.ruff]
 line-length = 150
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+default-section = "third-party"
+known-first-party = ["ccflow"]
+section-order = [
+    "future",
+    "third-party",
+    "first-party",
+    "local-folder",
+]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401", "F403"]

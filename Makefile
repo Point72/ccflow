@@ -1,15 +1,26 @@
+############################
+# Command/Var registration #
+############################
+PYTHON_VERSION := $(shell python -c "import sys; print('{}.{}'.format(sys.version_info.major, sys.version_info.minor), end='')")
+DOCKER := docker
+ENV := dev
+
 ###############
 # Build Tools #
 ###############
-.PHONY: build develop install
+.PHONY: build develop install cubist-sdlc
 
 build:  ## build python
 	python -m build .
 
-requirements:  ## install prerequisite python build requirements
-	python -m pip install --upgrade pip toml
+cubist-sdlc:  ## install prerequisite configuration to be able to install dependencies
+	pip install -U --extra-index-url http://artifacts.prod.devops.point72.com/artifactory/api/pypi/dept-ccrt-pypi-published-local/simple --trusted-host artifacts.prod.devops.point72.com cubist-sdlc
+	cubist-sdlc configure pypi conda
+
+requirements: cubist-sdlc  ## install python dev dependencies
+	python -m pip install toml
 	python -m pip install `python -c 'import toml; c = toml.load("pyproject.toml"); print("\n".join(c["build-system"]["requires"]))'`
-	python -m pip install `python -c 'import toml; c = toml.load("pyproject.toml"); print(" ".join(c["project"]["optional-dependencies"]["develop"]))'`
+	python -m pip install `python -c 'import toml; c = toml.load("pyproject.toml"); print("\n".join(c["project"]["optional-dependencies"]["develop"]))'`
 
 develop:  ## install to site-packages in editable mode
 	python -m pip install -e .[develop]
@@ -20,28 +31,28 @@ install:  ## install to site-packages
 ###########
 # Testing #
 ###########
-.PHONY: test tests
+.PHONY: test tests coverage
 
 test: ## run the python unit tests
 	python -m pytest -v ccflow/tests --junitxml=junit.xml --cov=ccflow --cov-report=xml:.coverage.xml --cov-branch --cov-fail-under=10 --cov-report term-missing
 
 tests: test
+coverage: test
 
 ###########
 # Linting #
 ###########
 .PHONY: lint fix format
 
-lint:  ## lint python with isort and ruff
-	python -m isort ccflow setup.py --check
-	python -m ruff check ccflow setup.py
-	python -m ruff format --check ccflow setup.py
+lint:  ## lint python with ruff
+	python -m ruff check ccflow
+	python -m ruff format --check ccflow
 
 lints: lint
 
-fix:  ## autoformat python code with isort and ruff
-	python -m isort ccflow setup.py
-	python -m ruff format ccflow setup.py
+fix:  ## autoformat python code with ruff
+	python -m ruff check --fix ccflow
+	python -m ruff format ccflow
 
 format: fix
 
@@ -57,19 +68,40 @@ checks: check-manifest  ## run security, packaging, and other checks
 check-manifest:  ## run manifest checker for sdist
 	check-manifest -v
 
-################
-# Distribution #
-################
-.PHONY: dist dist-check publish
+##############################
+# Packaging and Distribution #
+##############################
+.PHONY: conda dist dist-sdist dist-bdist dist-check publish-conda-dev publish-conda-prod publish-pypi-dev publish-pypi-prod
 
-dist: clean build dist-check  ## create dists
-	python -m twine check dist/*
+conda:	## build the conda package
+	mkdir -p dist/conda
+	conda mambabuild --python $(PYTHON_VERSION) --no-anaconda-upload conda-recipe/ --output-folder ./dist/conda/
 
-dist-check:  ## check the dists
-	python -m twine check dist/*
+setup-conda:  ## install conda build environment
+	micromamba create -n cubist-reports-env python=3.9 boa conda-build mamba
 
-publish:  ## dist to pypi
-	python -m twine upload dist/* --skip-existing
+dist: dist-sdist dist-bdist dist-check  ## build the pypi/pip installable package
+
+dist-sdist:  ## build sdist
+	python -m build -s -n
+
+dist-bdist:  ## build wheel
+	python -m build -w -n
+
+dist-check:  ## check the disted assets
+	twine check dist/*
+
+publish-conda-dev:  ## publish conda artifact to dev artifactory
+	cubist-sdlc artifactory upload conda ${ARTIFACTORY_PASSWORD} --user ${ARTIFACTORY_USERNAME} --env builds
+
+publish-conda-prod:  ## publish conda artifact to prod artifactory
+	cubist-sdlc artifactory upload conda ${ARTIFACTORY_PASSWORD} --user ${ARTIFACTORY_USERNAME} --env published
+
+publish-pypi-dev:  ## publish pypi artifact to dev artifactory
+	cubist-sdlc artifactory upload pypi ${ARTIFACTORY_PASSWORD} --user ${ARTIFACTORY_USERNAME} --env builds
+
+publish-pypi-prod:  ## publish pypi artifact to prod artifactory
+	cubist-sdlc artifactory upload pypi ${ARTIFACTORY_PASSWORD} --user ${ARTIFACTORY_USERNAME} --env published
 
 ############
 # Cleaning #

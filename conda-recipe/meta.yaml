@@ -1,0 +1,44 @@
+# NOTE: This file will be removed
+# before open sourcing
+
+package:
+  name: ccflow
+  version: 0.1.0
+
+source:
+  path: ..
+
+build:
+  script:
+    - {{ PYTHON }} -m pip install --no-deps --no-build-isolation --ignore-installed -vvv .
+  noarch: python
+
+requirements:
+  host:
+    - python
+    - hatchling
+    - pip
+  run:
+    - python
+    - cloudpathlib
+    - cloudpickle
+    - hydra-core
+    - IPython
+    - jinja2
+    - numpy<2
+    - orjson
+    - pandas
+    - pyarrow
+    - pydantic
+    - smart_open
+    - tenacity
+
+test:
+  imports:
+    - ccflow
+
+about:
+  home: TODO
+  summary: TODO
+  license: PROPRIETARY
+  license_family: PROPRIETARY

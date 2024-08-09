@@ -1,10 +1,9 @@
-`raydar` is written in Python and Javascript. While prebuilt wheels are provided for end users, it is also straightforward to build `raydar` from either the Python [source distribution](https://packaging.python.org/en/latest/specifications/source-distribution-format/) or the GitHub repository.
+`ccflow` is written in Python. While prebuilt wheels are provided for end users, it is also straightforward to build `ccflow` from either the Python [source distribution](https://packaging.python.org/en/latest/specifications/source-distribution-format/) or the GitHub repository.
 
 ## Table of Contents
 
 - [Table of Contents](#table-of-contents)
 - [Make commands](#make-commands)
-- [Prerequisites](#prerequisites)
 - [Clone](#clone)
 - [Install Python dependencies](#install-python-dependencies)
 - [Build](#build)
@@ -25,10 +24,6 @@ install                        install library
 lint                           run lints
 test                           run the tests
 ```
-
-## Prerequisites
-
-`ccflow` has a few system-level dependencies which you can install from your machine package manager. Other package managers like `conda`, `nix`, etc, should also work fine.
 
 ## Clone
 
@@ -61,10 +56,11 @@ make build
 
 `ccflow` has linting and auto formatting.
 
-| Language   | Linter     | Autoformatter | Description |
-| :--------- | :--------- | :------------ | :---------- |
-| Python     | `ruff`     | `ruff`        | Style       |
-| Python     | `isort`    | `isort`       | Imports     |
+| Language   | Linter      | Autoformatter | Description |
+| :--------- | :---------- | :------------ | :---------- |
+| Python     | `ruff`      | `ruff`        | Style       |
+| Markdown   | `mdformat`  | `mdformat`    | Style       |
+| Markdown   | `codespell` |               | Spelling    |
 
 **Linting**
 

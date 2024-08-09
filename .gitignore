@@ -153,6 +153,3 @@ $RECYCLE.BIN/
 # Coverage data
 # -------------
 **/coverage/
-
-# Compiled JS assets
-raydar/dashboard/static/

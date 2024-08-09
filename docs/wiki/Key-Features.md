@@ -1,150 +1,73 @@
-## Task Tracker
+# Key Features
 
-The `raydar` module provides an actor which can process collections of ray object references on your behalf, and can serve a [perspective](https://github.com/finos/perspective) dashboard in which to visualize that data.
+The `ccflow` framework is a collection of tools and patterns for application and workflow configuration.
+Its intended uses include ETL, data validation, model training, live trading configuration, backtesting, hyperparameter search, and automated report generation.
 
-```python
-from raydar import RayTaskTracker
-task_tracker = RayTaskTracker()
-```
+## Base Model
 
-Passing collections of object references to this actor's `process` method causes those references to be tracked in an internal polars dataframe, as they finish running.
+Central to `ccflow` is the `BaseModel` class.
+`BaseModel` is the base class for models in the `ccflow` framework.
+A model is basically a data class (class with attributes).
+It has nothing to do with mathematical models (sorry if this causes confusion).
+The naming was inspired by the open source library [Pydantic](https://docs.pydantic.dev/latest/)(`BaseModel` actually inherits from the Pydantic base model class).
 
-```python
-@ray.remote
-def example_remote_function():
-    import time
-    import random
-    time.sleep(1)
-    if random.randint(1,100) > 90:
-        raise Exception("This task should sometimes fail!")
-    return True
+## Callable Model
 
-refs = [example_remote_function.remote() for _ in range(100)]
-task_tracker.process(refs)
-```
+`CallableModel` is the base class for a special type of `BaseModel` which can be called.
+`CallableModel`'s are called with a context (something that derives from `ContextBase`) and returns a result (something that derives from `ResultBase`).
+As an example, you may have a `SQLReader` callable model that when called with a `DateRangeContext` returns a `ArrowResult` (wrapper around a Arrow table) with data in the date range defined by the context by querying some SQL database.
 
-This internal dataframe can be accessed via the `.get_df()` method.
 
-| task_id       | user_defined_metadata | attempt_number | name                      | ... | start_time_ms                   | end_time_ms                     | task_log_info                         | error_message |
-| :------------ | :-------------------- | :------------- | :------------------------ | :-- | :------------------------------ | :------------------------------ | :------------------------------------ | :------------ |
-| `str`         | `f32`                 | `i64`          | `str`                     |     | `datetime[ms,America/New_York]` | `datetime[ms,America/New_York]` | `struct[6]`                           | `str`         |
-|               |                       |                |                           |     |                                 |                                 |                                       |               |
-| 16310a0f0a... | `null`                | 0              | `example_remote_function` | ... | 2024-01-29 07:17:09.340 EST     | 2024-01-29 07:17:12.115 EST     | `{"/tmp/ray/session_2024-01-29_07...` | `null`        |
-| c2668a65bd... | `null`                | 0              | `example_remote_function` | ... | 2024-01-29 07:17:09.341 EST     | 2024-01-29 07:17:12.107 EST     | `{"/tmp/ray/session_2024-01-29_07...` | `null`        |
-| 32d950ec0c... | `null`                | 0              | `example_remote_function` | ... | 2024-01-29 07:17:09.342 EST     | 2024-01-29 07:17:12.115 EST     | `{"/tmp/ray/session_2024-01-29_07...` | `null`        |
-| e0dc174c83... | `null`                | 0              | `example_remote_function` | ... | 2024-01-29 07:17:09.343 EST     | 2024-01-29 07:17:12.115 EST     | `{"/tmp/ray/session_2024-01-29_07...` | `null`        |
-| f4402ec78d... | `null`                | 0              | `example_remote_function` | ... | 2024-01-29 07:17:09.343 EST     | 2024-01-29 07:17:12.115 EST     | `{"/tmp/ray/session_2024-01-29_07...` | `null`        |
+## Model Registry
 
-Additionally, setting the `enable_perspective_dashboard` flag to `True` in the `RayTaskTracker`'s construction serves a perspective dashboard with live views of your completed references.
+A `ModelRegistry` is a named collection of models.
+A `ModelRegistry` can be loaded from YAML configuration, which means you can define a collection of models using YAML.
+This is really powerful because this gives you a easy way to define a collection of Python objects via configuration.
 
-```python
-task_tracker = RayTaskTracker(enable_perspective_dashboard=True)
-```
 
-![Example](images/example_perspective_dashboard.gif)
+## Models
 
-## Create/Store Custom Views
+Although you are free to define your own models (`BaseModel` implementations) to use in your flow graph,
+`ccflow` comes with some models that you can use off the shelf to solve common problems.
 
-From the developer console, save your workspace layout locally.
+# Readers
 
-```javascript
-let workspace = document.getElementById("perspective-workspace");
+`ccflow` comes with a range of models for reading data.
+The following table summarizes the "reader" models.
 
-// Save the current layout
-workspace.save().then((config) => {
-  // Convert the configuration object to a JSON string
-  let json = JSON.stringify(config);
+TODO
 
-  // Create a Blob object from the JSON string
-  let blob = new Blob([json], { type: "application/json" });
+## Publishers
 
-  // Create a download link
-  let link = document.createElement("a");
-  link.href = URL.createObjectURL(blob);
-  link.download = "workspace.json";
+`ccflow` also comes with a range of models for writing data.
+These are referred to as publishers.
+The following table summarizes the "publisher" models:
 
-  // Append the link to the document body and click it to start the download
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-});
-```
+TODO
 
-Then, move this json file to `js/src/layouts/default.json`.
+You can "chain" publishers and callable models using `PublisherModel` to call a `CallableModel` and publish
+the results in one step.
+In fact, `ccflow` comes with several implementations of `PublisherModel` for common publishing use cases.
 
-![Example](images/example_perspective_dashboard_layouts.gif)
+TODO
 
-## Expose Ray GCS Information
 
-The data available to you includes much of what Ray's GCS tracks, and also allows for user defined metadata per task.
+## Utilities
 
-Specifically, tracked fields include:
+`ccflow` also comes with some utility models that might be useful in your workflow.
+The following table summaries these:
 
-- `task_id`
-- `user_defined_metadata`
-- `attempt_number`
-- `name`
-- `state`
-- `job_id`
-- `actor_id`
-- `type`
-- `func_or_class_name`
-- `parent_task_id`
-- `node_id`
-- `worker_id`
-- `error_type`
-- `language`
-- `required_resources`
-- `runtime_env_info`
-- `placement_group_id`
-- `events`
-- `profiling_data`
-- `creation_time_ms`
-- `start_time_ms`
-- `end_time_ms`
-- `task_log_info`
-- `error_message`
+TODO
 
-![Example](images/example_task_metadata.gif)
+## Evaluators
 
-## Custom Sources / Update Logic
+`ccflow` comes with "evaluators" that allows you to evaluate (i.e. run) `CallableModel` s in different
+ways.
 
-The proxy server helpd by the `RayTaskTracker` is exposed via the `.proxy_server()` property, meaning we can create new tables as follows:
+TODO
 
-```python
-task_tracker = RayTaskTracker(enable_perspective_dashboard=True)
-proxy_server = task_tracker.proxy_server()
-proxy_server.remote(
-    "new",
-    "metrics_table",
-    {
-        "node_id": "str",
-        "metric_name": "str",
-        "value": "float",
-        "timestamp": "datetime",
-    },
-)
-```
+## Hydra
 
-### Example: Live Per-Node Training Loss Metrics
-
-If a user were to then update this table with data coming from, for example, a pytorch model training loop with metrics:
-
-```python
-def my_model_training_loop()
-
-	for epoch in range(num_epochs):
-        # ... my training code here ...
-
-		data = dict(
-			node_id=ray.get_runtime_context().get_node_id(),
-			metric_name="loss",
-			value=loss.item(),
-			timestamp=time.time(),
-		)
-		proxy_server.remote("update", "metrics_table", [data])
-```
-
-Then they can expose a live view at per-node loss metrics across our model training process:
-
-![Example](images/example_custom_metrics.gif)
+`ccflow` is integrated with [Hydra](https://hydra.cc/docs/intro/).
+This allows for composable and hierarchical configurations.
+Please refer to Hydra's documentation for more details.

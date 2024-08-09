@@ -1,3 +1,5 @@
+# NOTE:
+# This file will be modified when open sourcing
 name: Build Status
 
 on:
@@ -123,7 +125,7 @@ jobs:
           version: '${{ matrix.python-version }}'
 
       - name: Install dependencies
-        run: make develop
+        run: make requirements
 
       - name: Lint
         run: make lint
@@ -165,7 +167,7 @@ jobs:
           version: '${{ matrix.python-version }}'
 
       - name: Install dependencies
-        run: make develop
+        run: make requirements
 
       - name: Build
         run: make build
@@ -217,7 +219,7 @@ jobs:
           version: '${{ matrix.python-version }}'
 
       - name: Install dependencies
-        run: make develop
+        run: make requirements
 
       - name: Download wheel
         uses: actions/download-artifact@v3
@@ -225,10 +227,12 @@ jobs:
           name: dist-${{ runner.os }}-${{ runner.arch }}-${{ matrix.python-version }}
 
       - name: Install wheel
-        run: python -m pip install -U `ls *.whl` --no-deps --target . --no-build-isolation
+        run: |
+          python -m pip install -U `ls *.whl`
+          python -m pip install -U `ls *.whl` --no-deps --target . --no-build-isolation
 
       - name: Test
-        run: make test
+        run: make coverage
 
       - name: Upload test results (Python)
         uses: actions/upload-artifact@v3
@@ -236,6 +240,62 @@ jobs:
           name: py-test-results-${{ matrix.python-version }}-
           path: reports/
         if: ${{ always() }}
+
+  ######################################################################
+  #....................................................................#
+  #.../######\..../######\...|###\....|##|..|#######\....../#####\.....#
+  #../##/..\##\../##/..\##\..|##|##\..|##|..|##|..\##\..../##/.\##\....#
+  #..|##|........|##|..|##|..|##|\##\.|##|..|##|..|##|.../##/...\##\...#
+  #..|##|........|##|..|##|..|##|.\##\|##|..|##|..|##|../###########\..#
+  #..|##|........|##|..|##|..|##|..\##\##|..|##|..|##|..|##|.....|##|..#
+  #..\##\../##/..\##\../##/..|##|...\##\#|..|##|../##/..|##|.....|##|..#
+  #...\######/....\######/...|##|....\##/...|#######/...|##|.....|##|..#
+  #....................................................................#
+  ######################################################################
+  conda:
+    runs-on: p72-large
+    needs:
+      - initialize
+
+    strategy:
+      matrix:
+        python-version:
+          - '3.9'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install prerequisites (will be removed)
+        uses: 9951-CubistResearchTech/utility-actions/setup-dependencies@main
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: 9951-CubistResearchTech/utility-actions/setup-python@main
+        with:
+          version: ${{ matrix.python-version }}
+
+      - uses: mamba-org/setup-micromamba@v1
+        with:
+          environment-name: py39
+          create-args: >-
+            python=3.9
+            mamba
+            boa
+          init-shell: >-
+            bash
+          cache-environment: true
+          post-cleanup: 'all'
+
+      - name: Package Conda
+        run: make conda
+        shell: micromamba-shell {0}
+
+      - name: Upload Conda
+        uses: actions/upload-artifact@v3
+        with:
+            name: conda-${{ runner.os }}-${{ runner.arch }}-${{ matrix.python-version }}
+            path: dist/conda/
+            if-no-files-found: error
 
   ############################################################################################
   #..........................................................................................#
@@ -253,6 +313,7 @@ jobs:
     needs:
       - initialize
       - build
+      - conda
       - lint
       - test
 
@@ -284,16 +345,24 @@ jobs:
       - name: Reorganize and Display structure of downloaded files
         shell: bash
         run: |
-          mkdir -p dist/conda docs/
+          mkdir -p dist/conda
+          cp -r artifacts/conda*/{linux-64,noarch} dist/conda/
           cp -r artifacts/dist*/*.whl dist/
           cp -r artifacts/dist*/*.tar.gz dist/
-          ls -R ./dist ./docs
+          ls -R ./dist
 
-      # TODO cutover to public
-      # - name: Deploy wheel (develop)
-      #   run: make publish-pypi-dev ARTIFACTORY_USERNAME=svcccrtjenkins ARTIFACTORY_PASSWORD=${{ secrets.AUTOMATION }}
-      #   if: ${{ needs.initialize.outputs.FULL_RUN == 'true' && needs.initialize.outputs.BRANCH == 'develop' }}
+      - name: Deploy wheel (develop)
+        run: make publish-pypi-dev ARTIFACTORY_USERNAME=svcccrtjenkins ARTIFACTORY_PASSWORD=${{ secrets.AUTOMATION }}
+        if: ${{ needs.initialize.outputs.FULL_RUN == 'true' && needs.initialize.outputs.BRANCH == 'develop' }}
 
-      # - name: Deploy wheel (main)
-      #   run: make publish-pypi-prod ARTIFACTORY_USERNAME=svcccrtjenkins ARTIFACTORY_PASSWORD=${{ secrets.AUTOMATION }}
-      #   if: ${{ needs.initialize.outputs.FULL_RUN == 'true' && needs.initialize.outputs.BRANCH == 'main' }}
+      - name: Deploy wheel (main)
+        run: make publish-pypi-prod ARTIFACTORY_USERNAME=svcccrtjenkins ARTIFACTORY_PASSWORD=${{ secrets.AUTOMATION }}
+        if: ${{ needs.initialize.outputs.FULL_RUN == 'true' && needs.initialize.outputs.BRANCH == 'main' }}
+
+      - name: Deploy conda (develop)
+        run: make publish-conda-dev ARTIFACTORY_USERNAME=svcccrtjenkins ARTIFACTORY_PASSWORD=${{ secrets.AUTOMATION }}
+        if: ${{ needs.initialize.outputs.FULL_RUN == 'true' && needs.initialize.outputs.BRANCH == 'develop' }}
+
+      - name: Deploy conda (main)
+        run: make publish-conda-prod ARTIFACTORY_USERNAME=svcccrtjenkins ARTIFACTORY_PASSWORD=${{ secrets.AUTOMATION }}
+        if: ${{ needs.initialize.outputs.FULL_RUN == 'true' && needs.initialize.outputs.BRANCH == 'main' }}

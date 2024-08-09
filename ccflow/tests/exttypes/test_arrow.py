@@ -1,11 +1,16 @@
 import pandas as pd
 import polars as pl
 import pyarrow as pa
+from packaging import version
 from pydantic import ValidationError
 from unittest import TestCase
 
 from ccflow import BaseModel
-from ccflow.exttypes.arrow import ArrowSchema, ArrowTable, PyArrowDatatype
+from ccflow.exttypes.arrow import (
+    ArrowSchema,
+    ArrowTable,
+    PyArrowDatatype,
+)
 
 RAW_SCHEMA = pa.schema({"a": pa.int32(), "b": pa.float32(), "c": pa.utf8()})
 RAW_SCHEMA_FULL = pa.schema(
@@ -137,7 +142,11 @@ class TestArrowTable(TestCase):
     def test_bad_type(self):
         t = pa.Table.from_pydict(self.data)
         data_bad = {"a": ["oops", 2, 3], "b": [4, 5, 6], "c": ["foo", "bar", "baz"]}
-        t_bad = pl.DataFrame(data_bad).to_arrow()
+        if version.parse(pl.__version__) < version.parse("1.0.0"):
+            t_bad = pl.DataFrame(data_bad).to_arrow()
+        else:
+            # polars raises a TypeError on encountering mixed datatypes by default.
+            t_bad = pl.DataFrame(data_bad, strict=False).to_arrow()
         self.assertRaises(ValidationError, Model, table=t, filter=t_bad, weak=t)
         self.assertRaises(ValidationError, Model, table=t, filter=t, weak=t_bad)
 
