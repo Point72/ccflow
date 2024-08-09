@@ -103,6 +103,13 @@ ignore = [
     "*.ipynb",
 ]
 
+
+[tool.cubist.sdlc.artifactory]
+pypi = "https://artifacts.prod.devops.point72.com/artifactory/dept-ccrt-pypi-builds-local"
+pypi-prod = "https://artifacts.prod.devops.point72.com/artifactory/dept-ccrt-pypi-published-local"
+conda = "https://artifacts.prod.devops.point72.com/artifactory/dept-ccrt-conda-builds-local"
+conda-prod = "https://artifacts.prod.devops.point72.com/artifactory/dept-ccrt-conda-published-local"
+
 [tool.hatch.build]
 artifacts = []
 
