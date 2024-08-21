@@ -5,6 +5,7 @@ from .base import *
 from .callable import *
 from .context import *
 from .exttypes import *
+from .generic_base import *
 from .object_config import *
 from .publisher import *
 from .result import *
