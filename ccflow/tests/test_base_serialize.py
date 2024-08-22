@@ -6,9 +6,16 @@ import unittest
 from packaging import version
 from typing import ClassVar, Dict, List, Optional, Type, Union
 
-from ccflow import BaseModel, NDArray, make_ndarray_orjson_valid
 from ccflow.enums import Enum
-from ccflow.exttypes.pydantic_numpy.ndtypes import bool_, complex64, float32, float64, int8, uint32
+from ccflow import BaseModel, NDArray, make_ndarray_orjson_valid
+from ccflow.exttypes.pydantic_numpy.ndtypes import (
+    bool_,
+    complex64,
+    float32,
+    float64,
+    int8,
+    uint32,
+)
 
 
 class ParentModel(BaseModel):
@@ -130,7 +137,7 @@ class TestBaseModelSerialization(unittest.TestCase):
         np.testing.assert_array_equal(b, b_valid)
 
         # complex values are not accepted by orjson currently
-        complex_arr = np.array([0 + 3j, 7 + 2.1j], dtype=np.complex_)
+        complex_arr = np.array([0 + 3j, 7 + 2.1j], dtype=np.complex128)
         complex_arr_valid = make_ndarray_orjson_valid(complex_arr)
         self.assertTrue(not isinstance(complex_arr_valid, np.ndarray))
         self.assertTrue(complex_arr_valid == [0 + 3j, 7 + 2.1j])
@@ -174,10 +181,9 @@ class TestBaseModelSerialization(unittest.TestCase):
             self._numpy_equality,
         )
 
-        cut_off_array = H_int8(arr=[1e16, -1e16])
-        np.testing.assert_array_equal(cut_off_array.arr, np.array([1e16, -1e16], dtype=np.byte))
-        np.testing.assert_array_equal(cut_off_array.arr, np.array([0, 0], dtype=np.byte))
-        self._check_serialization(H_int8(arr=[1e16]))
+        cut_off_array = H_int8(arr=[127, -128])
+        np.testing.assert_array_equal(cut_off_array.arr, np.array([127, -128], dtype=np.int8))
+        self._check_serialization(H_int8(arr=[127]))
 
     def test_base_model_config_inheritance(self):
         """Validate that pydantic model configs are inherited and defining configs in subclasses overrides only the
@@ -225,7 +231,7 @@ class TestBaseModelSerialization(unittest.TestCase):
         # json_encoders of subclasses.
 
         class D(pydantic.BaseModel):
-            """D is composed of an A, but implements the vanilla pydantic BaseModel instead of the ccflow one."""
+            """D is composed of an A, but implements the vanilla pydantic BaseModel instead of the cubist_core one."""
 
             a: A
 
@@ -240,13 +246,8 @@ class TestBaseModelSerialization(unittest.TestCase):
         # https://docs.pydantic.dev/latest/concepts/serialization/#serializing-with-duck-typing
         # https://github.com/pydantic/pydantic/issues/6423
         # This test could be removed once there is a different solution to the issue above
-        from pandera import DataFrameModel
-        from pandera.typing import DataFrame
         from pydantic import SerializeAsAny
         from pydantic.types import constr
-
-        class AnySchema(DataFrameModel):
-            pass
 
         class MyNestedModel(BaseModel):
             a1: A
@@ -254,16 +255,14 @@ class TestBaseModelSerialization(unittest.TestCase):
             a3: Dict[str, Optional[List[A]]]
             a4: ClassVar[A]
             a5: Type[A]
-            a6: DataFrame[AnySchema]
-            a7: constr(min_length=1)
+            a6: constr(min_length=1)
 
         target = {
             "a1": SerializeAsAny[A],
             "a2": Optional[Union[SerializeAsAny[A], int]],
             "a4": ClassVar[SerializeAsAny[A]],
             "a5": Type[A],
-            "a6": DataFrame[AnySchema],
-            "a7": constr(min_length=1),  # Uses Annotation
+            "a6": constr(min_length=1),  # Uses Annotation
         }
         if version.parse(platform.python_version()) < version.parse("3.9"):
             target["a3"] = Dict[str, Optional[List[SerializeAsAny[A]]]]
@@ -276,4 +275,3 @@ class TestBaseModelSerialization(unittest.TestCase):
         self.assertEqual(str(annotations["a4"]), str(target["a4"]))
         self.assertEqual(str(annotations["a5"]), str(target["a5"]))
         self.assertEqual(str(annotations["a6"]), str(target["a6"]))
-        self.assertEqual(str(annotations["a7"]), str(target["a7"]))

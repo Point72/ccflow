@@ -3,7 +3,7 @@ import time
 from datetime import time as dt_time, timedelta
 from pydantic import PrivateAttr
 from types import MappingProxyType
-from typing import Dict, List, Optional, Set, Union
+from typing import Callable, Dict, List, Optional, Set, Union
 from typing_extensions import override
 
 from ..base import BaseModel
@@ -13,6 +13,7 @@ from ..utils import normalize_token, tokenize
 __all__ = [
     "cache_key",
     "combine_evaluators",
+    "LazyEvaluator",
     "LoggingEvaluator",
     "MemoryCacheEvaluator",
     "MultiEvaluator",
@@ -51,6 +52,22 @@ class MultiEvaluator(EvaluatorBase):
         for evaluator in self.evaluators:
             context = ModelEvaluationContext(model=evaluator, context=context, options=context.options)
         return context()
+
+
+class LazyEvaluator(EvaluatorBase):
+    """Evaluator that only actually runs the callable once an attribute of the result is queried (by hooking __getattribute__)"""
+
+    additional_callback: Callable = lambda: None
+
+    @override
+    def __call__(self, context: ModelEvaluationContext) -> ResultType:
+        from ccflow.base import make_lazy_result
+
+        def make_result():
+            self.additional_callback()
+            return context()
+
+        return make_lazy_result(context.model.result_type, make_result)
 
 
 class LoggingEvaluator(EvaluatorBase):
