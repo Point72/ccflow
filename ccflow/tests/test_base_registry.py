@@ -1,10 +1,11 @@
 import json
 import os
+from typing import Dict, List
+from unittest import TestCase
+
 from hydra.errors import InstantiationException
 from omegaconf import OmegaConf
 from omegaconf.errors import InterpolationKeyError
-from typing import Dict, List
-from unittest import TestCase
 
 from ccflow import BaseModel, ModelRegistry, RegistryLookupContext, RootModelRegistry, model_alias
 

@@ -1,14 +1,17 @@
 import logging
 import time
-from datetime import time as dt_time, timedelta
-from pydantic import PrivateAttr
+from datetime import time as dt_time
+from datetime import timedelta
 from types import MappingProxyType
 from typing import Callable, Dict, List, Optional, Set, Union
+
+import dask.base
+from dask.base import normalize_token
+from pydantic import PrivateAttr
 from typing_extensions import override
 
 from ..base import BaseModel
 from ..callable import CallableModel, ContextBase, EvaluatorBase, ModelEvaluationContext, ResultType
-from ..utils import normalize_token, tokenize
 
 __all__ = [
     "cache_key",
@@ -109,7 +112,7 @@ def tokenize_bar(t):
 def cache_key(flow_obj: Union[ModelEvaluationContext, ContextBase, CallableModel]) -> bytes:
     """Returns a key suitable for use in caching"""
     if isinstance(flow_obj, (ModelEvaluationContext, ContextBase, CallableModel)):
-        return tokenize(flow_obj.dict()).encode("utf-8")
+        return dask.base.tokenize(flow_obj.dict()).encode("utf-8")
     else:
         raise TypeError(f"object of type {type(flow_obj)} cannot be serialized by this function!")
 

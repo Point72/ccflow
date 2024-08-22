@@ -1,11 +1,12 @@
 import math
+from unittest import TestCase
+
 import numpy as np
 import polars as pl
 import pydantic
 import pytest
 import scipy
 from packaging import version
-from unittest import TestCase
 
 from ccflow.exttypes.polars import PolarsExpression
 

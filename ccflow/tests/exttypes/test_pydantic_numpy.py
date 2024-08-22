@@ -23,12 +23,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
+from pathlib import Path
+from typing import Dict, Optional
+
 import numpy as np
 import pytest
 from numpy.testing import assert_allclose
-from pathlib import Path
 from pydantic import BaseModel, ValidationError
-from typing import Dict, Optional
 
 from ccflow import NDArray, PotentialNDArray, float32, orjson_dumps
 from ccflow.exttypes.pydantic_numpy.ndarray import NPFileDesc

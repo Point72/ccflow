@@ -1,9 +1,10 @@
+from typing import List
+from unittest import TestCase
+
 import pydantic
 import pytest
 from packaging import version
 from pydantic import ValidationError
-from typing import List
-from unittest import TestCase
 
 from ccflow import (
     CallableModel,

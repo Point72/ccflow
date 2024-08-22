@@ -1,7 +1,8 @@
 import logging
-import pandas as pd
 from datetime import date
 from unittest import TestCase
+
+import pandas as pd
 
 from ccflow import DateContext, DateRangeContext, Evaluator, FlowOptionsOverride, ModelEvaluationContext
 from ccflow.evaluators import (

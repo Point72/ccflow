@@ -1,9 +1,10 @@
 """Various arrow tools"""
 
+from typing import Any, Dict, Optional, Sequence
+
 import orjson
 import pandas as pd
 import pyarrow as pa
-from typing import Any, Dict, Optional, Sequence
 
 from ccflow.serialization import orjson_dumps
 

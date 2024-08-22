@@ -2,7 +2,7 @@
 
 This framework helps define fairly generic calculations with strongly typed,
 validated components that can be combined together (as well as registered and
-configured using the tools in cubist_core.flow_core module)
+configured using the tools in ccflow module)
 
 In addition to the CallableModelBase class, we define the Flow decorator, which allows us to inject additional
 functionality, and the Evaluator interface, which lets us control how the models are evaluated.
@@ -13,16 +13,20 @@ which all need to be defined together so that pydantic (especially V1) can resol
 
 import abc
 import logging
-import pydantic
 from functools import wraps
 from inspect import Signature, isclass, signature
-from packaging import version
-from pydantic import BaseModel as PydanticBaseModel, Field, PrivateAttr, ValidationError, root_validator, validator
 from typing import Any, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar
+
+import pydantic
+from packaging import version
+from pydantic import BaseModel as PydanticBaseModel
+from pydantic import Field, PrivateAttr, ValidationError, root_validator, validator
 from typing_extensions import override
 
-from .base import BaseModel, ContextBase, ContextType, ResultBase, ResultType  # noqa: F401
-from .utils.pydantic1to2 import GenericModel
+from ccflow.utils.pydantic1to2 import GenericModel
+
+from .base import ContextType  # noqa: F401
+from .base import BaseModel, ContextBase, ResultBase, ResultType
 from .validators import str_to_log_level
 
 if version.parse(pydantic.__version__) < version.parse("2"):
@@ -243,6 +247,7 @@ class FlowOptions(BaseModel):
     def __call__(self, fn):
         def wrapper(model, context=Signature.empty):
             from .callable import CallableModel
+            from .evaluator import ModelEvaluationContext
 
             # TODO: Let ModelEvaluationContext handle this type checking
             if not isinstance(model, CallableModel):
@@ -262,6 +267,10 @@ class FlowOptions(BaseModel):
             # but exclude the evaluator itself to avoid potential circular dependencies
             # or other difficulties with serialization/caching of the options
             options = FlowOptionsOverride.get_options(model, self).dict(exclude={"evaluator"}, exclude_unset=True)
+            if fn != getattr(model.__class__, fn.__name__).__wrapped__:
+                # This happens when super().__call__ is used when implementing a CallableModel that derives from another one.
+                # In this case, we don't apply the decorator again, we just call the function on the model and context.
+                return fn(model, context)
             evaluation_context = ModelEvaluationContext(model=model, context=context, fn=fn.__name__, options=options)
             evaluator = self.get_evaluator(model)
             result = evaluator(evaluation_context)
@@ -273,6 +282,10 @@ class FlowOptions(BaseModel):
                         raise ValueError("Can only apply Flow.deps decorator to __deps__")
                     if IS_PYDANTIC_V2:
                         result = TypeAdapter(GraphDepList).validate_python(result)
+                # If we validate a delayed result, we will force evaluation.
+                # Instead, we can flag that validation is requested, and have it done after evaluation
+                elif hasattr(result, "_lazy_is_delayed"):
+                    object.__setattr__(result, "_lazy_validation_requested", True)
                 else:
                     result = model.result_type.validate(result)
             return result
@@ -590,7 +603,7 @@ class CallableModelGenericType(CallableModel, Generic[ContextType, ResultType]):
 
         @model_validator(mode="wrap")
         def _validate_callable_model_generic_type(cls, m, handler, info):
-            from .base import resolve_str
+            from ccflow.base import resolve_str
 
             if isinstance(m, str):
                 m = resolve_str(m)

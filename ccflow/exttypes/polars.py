@@ -1,10 +1,11 @@
 import math
+from io import StringIO
+from typing import Any
+
 import numpy as np
 import orjson
 import polars as pl
-from io import StringIO
 from packaging import version
-from typing import Any
 
 __all__ = ("PolarsExpression",)
 

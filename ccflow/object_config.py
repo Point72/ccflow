@@ -1,8 +1,9 @@
+from typing import Any, Dict
+
 import pydantic
 from packaging import version
 from pydantic import PrivateAttr, root_validator
 from pydantic.fields import Field
-from typing import Any, Dict
 
 from .base import BaseModel
 from .exttypes.pyobjectpath import PyObjectPath

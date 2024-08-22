@@ -6,9 +6,10 @@ Control over the chunk size is important: if it's too big, too much un-necessary
 small, performance suffers from too many repeated trips to the underlying data store for long-range queries.
 """
 
-import pandas as pd
 from datetime import date
 from typing import List, Tuple
+
+import pandas as pd
 
 _MIN_END_DATE = date(1969, 12, 31)
 
