@@ -1,6 +1,7 @@
+from typing import Any, Dict, List, Union
+
 import numpy as np
 import orjson
-from typing import Any, Dict, List, Union
 
 from .enums import Enum
 

@@ -1,16 +1,13 @@
+from unittest import TestCase
+
 import pandas as pd
 import polars as pl
 import pyarrow as pa
 from packaging import version
 from pydantic import ValidationError
-from unittest import TestCase
 
 from ccflow import BaseModel
-from ccflow.exttypes.arrow import (
-    ArrowSchema,
-    ArrowTable,
-    PyArrowDatatype,
-)
+from ccflow.exttypes.arrow import ArrowSchema, ArrowTable, PyArrowDatatype
 
 RAW_SCHEMA = pa.schema({"a": pa.int32(), "b": pa.float32(), "c": pa.utf8()})
 RAW_SCHEMA_FULL = pa.schema(

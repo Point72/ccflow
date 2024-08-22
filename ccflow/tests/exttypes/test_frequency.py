@@ -1,8 +1,9 @@
-import pandas as pd
 from datetime import timedelta
+from unittest import TestCase
+
+import pandas as pd
 from packaging.version import parse
 from pandas.tseries.frequencies import to_offset
-from unittest import TestCase
 
 from ccflow.exttypes.frequency import Frequency
 

@@ -1,9 +1,10 @@
+from unittest import TestCase
+
 import numpy as np
 import pandas as pd
 import polars as pl
 import pyarrow as pa
 from packaging import version
-from unittest import TestCase
 
 from ccflow.utils.arrow import add_field_metadata, arrow_lists_to_pandas_dict, convert_large_types, get_field_metadata, pandas_dict_to_arrow_lists
 

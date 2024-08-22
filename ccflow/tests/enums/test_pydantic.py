@@ -1,10 +1,11 @@
 import importlib
 import json
+from typing import Dict
+
 import pydantic
 import pytest
 from packaging import version
 from pydantic import BaseModel
-from typing import Dict
 
 from ccflow.enums import Enum, auto
 from ccflow.utils.pydantic1to2 import ValidationTypeError

@@ -38,7 +38,7 @@ class TestEnum(TestCase):
             import csp  # noqa: F401  # We use this to determine which path the test should take
 
         def g():
-            from csp.impl.enum import DynamicEnum, Enum as BaseEnum  # noqa: F401
+            from csp.impl.enum import Enum as BaseEnum  # noqa: F401
 
         try:
             self.assertRaises(ImportError, f)

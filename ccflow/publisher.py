@@ -1,18 +1,15 @@
 import abc
+from typing import Any, Dict, TypeVar
+
 import pydantic
 from packaging import version
 from pydantic import Field
-from typing import Any, Dict, TypeVar
 from typing_extensions import override
 
 from .base import BaseModel
 from .exttypes import JinjaTemplate
 
-__all__ = (
-    "BasePublisher",
-    "NullPublisher",
-    "PublisherType",
-)
+__all__ = ("BasePublisher", "NullPublisher", "PublisherType")
 
 
 class BasePublisher(BaseModel, abc.ABC):

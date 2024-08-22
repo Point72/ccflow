@@ -1,7 +1,8 @@
 """This module contains extension types for pydantic."""
 
-import jinja2
 from typing import Any
+
+import jinja2
 
 
 class JinjaTemplate(str):

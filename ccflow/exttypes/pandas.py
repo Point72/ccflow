@@ -9,11 +9,12 @@ Based on:
 https://pandas.pydata.org/pandas-docs/stable/development/extending.html#extending-subclassing-pandas
 """
 
+from abc import ABC, abstractmethod
+from typing import Any, Union
+
 import numpy as np
 import orjson
 import pandas as pd
-from abc import ABC, abstractmethod
-from typing import Any, Union
 
 from ..serialization import make_ndarray_orjson_valid, orjson_dumps
 

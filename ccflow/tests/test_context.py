@@ -1,7 +1,8 @@
-import pandas as pd
 from datetime import date, timedelta
-from pydantic import BaseModel, ValidationError
 from unittest import TestCase
+
+import pandas as pd
+from pydantic import BaseModel, ValidationError
 
 from ccflow.context import (
     DateContext,

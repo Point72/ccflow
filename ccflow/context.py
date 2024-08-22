@@ -2,18 +2,21 @@
 defined in flow.callable.py.
 """
 
-import pydantic
 from datetime import date, datetime
+from typing import Optional
+
+import pydantic
 from packaging import version
 from pydantic import validator
-from typing import Optional
 
 from .base import ContextBase
 from .exttypes import Frequency
+from .generic_base import GenericContext
 from .validators import normalize_date
 
 __all__ = [
     "NullContext",
+    "GenericContext",
     "DateContext",
     "EntryTimeContext",
     "DateRangeContext",

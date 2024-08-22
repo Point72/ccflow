@@ -1,8 +1,9 @@
 import logging
+from typing import Dict, Generic, List, Optional
+
 import pydantic
 from packaging import version
 from pydantic import ValidationError, validator
-from typing import Dict, Generic, List, Optional
 from typing_extensions import override
 
 from ..publisher import BasePublisher

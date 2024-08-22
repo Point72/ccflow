@@ -23,13 +23,14 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
-import numpy as np
 import sys
 from abc import ABC, abstractmethod
-from numpy.lib import NumpyVersion
 from pathlib import Path
-from pydantic import BaseModel, FilePath, validator
 from typing import Any, Generic, Mapping, Optional, TypeVar
+
+import numpy as np
+from numpy.lib import NumpyVersion
+from pydantic import BaseModel, FilePath, validator
 from typing_extensions import get_args
 
 T = TypeVar("T", bound=np.generic)
