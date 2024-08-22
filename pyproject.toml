@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "ccflow"
 description = "TODO"
-version = "0.1.0"
+version = "0.1.1"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.8"
@@ -94,7 +94,7 @@ Repository = "https://github.com/point72/ccflow"
 Homepage = "https://github.com/point72/ccflow"
 
 [tool.bumpversion]
-current_version = "0.1.0"
+current_version = "0.1.1"
 commit = true
 tag = false
 commit_args = "-s"
