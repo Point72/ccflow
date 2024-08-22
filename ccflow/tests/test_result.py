@@ -4,7 +4,7 @@ import pyarrow as pa
 import xarray as xr
 from unittest import TestCase
 
-from ccflow.result import GenericResult
+from ccflow.generic_base import GenericResult
 from ccflow.result.numpy import NumpyResult
 from ccflow.result.pandas import PandasResult
 from ccflow.result.pyarrow import ArrowResult

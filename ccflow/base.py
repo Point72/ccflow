@@ -40,6 +40,7 @@ __all__ = (
     "ContextType",
     "ResultBase",
     "ResultType",
+    "make_lazy_result",
 )
 
 
@@ -800,11 +801,25 @@ class ResultBase(BaseModel):
     # the standard pydantic serialization methods will not work
     # This is OK, because for results we want more control over
     # the serialization method, so we build our own serializers.
+
+    def _onaccess_callback(*args, **kwargs):
+        """Function to be called on every attribute access"""
+        pass
+
     class Config(BaseModel.Config):
         arbitrary_types_allowed = True
         if version.parse(pydantic.__version__) < version.parse("2"):
             # Result type might contain a lot of data, so we don't want to copy on validation
             copy_on_model_validation: str = "none"
+
+    def __getattribute__(self, attr):
+        """Call _onaccess_callback before allowing attribute access.
+
+        Necessary to alow features like delayed evaluation.
+        """
+        if not attr.startswith("_lazy"):
+            super().__getattribute__("_onaccess_callback")(self)
+        return super().__getattribute__(attr)
 
 
 class ContextBase(ResultBase):
@@ -867,3 +882,83 @@ class ContextBase(ResultBase):
 
 ContextType = TypeVar("ContextType", bound=ContextBase)
 ResultType = TypeVar("ResultType", bound=ResultBase)
+
+
+def _make_lazy_stub(res_type: ResultType, initializer_fn, *args, **kwargs) -> ResultType:
+    """
+    Makes a result stub without calling __init__, but instead initializer_fn on access
+
+    initializer_fn is called with the stub as first argument.
+    Additional arguments are forwarded to initializer_fn.
+    """
+    if not issubclass(res_type, ResultBase):
+        raise TypeError("Can only create delayed ResultBase-derived instances")
+    new_instance = res_type.__new__(res_type)
+    object.__setattr__(new_instance, "_lazy_is_delayed", True)
+
+    def callback_to_inject(obj):
+        # the callback is responsible for calling __init__ on the new instance
+        # we will give it a clean instance without the callback
+        object.__setattr__(obj, "_onaccess_callback", lambda *_, **__: None)
+        initializer_fn(obj, *args, **kwargs)
+        if hasattr(obj, "_lazy_is_delayed"):
+            object.__delattr__(obj, "_lazy_is_delayed")
+        # now __init__ must have been called
+
+    object.__setattr__(new_instance, "_onaccess_callback", callback_to_inject)
+    return new_instance
+
+
+if version.parse(pydantic.__version__) < version.parse("2"):
+    from pydantic.v1.fields import Undefined
+
+    def make_lazy_result(res_type: ResultType, to_copy_fn) -> ResultType:
+        """Creates a delayed result which will use the result of to_copy_fn to initialize itself
+
+        __dict__ will be copied from the result, as well as extra pydantic attributes if present
+        The copy mechanism is similar to that used in pydantic's copy_and_set_values
+        """
+
+        def initializer(obj, validate=False, *args, **kwargs):
+            new_obj = to_copy_fn()
+
+            if hasattr(obj, "_lazy_validation_requested"):
+                new_obj = res_type.validate(new_obj)
+                object.__delattr__(obj, "_lazy_validation_requested")
+
+            # now we copy the fields into obj : inspired by pydantic copy_and_set_values
+            object.__setattr__(obj, "__dict__", new_obj.__dict__)
+            if hasattr(new_obj, "__fields_set__"):
+                object.__setattr__(obj, "__fields_set__", new_obj.__fields_set__)
+            for name in new_obj.__private_attributes__:
+                value = getattr(new_obj, name, Undefined)
+                if value is not Undefined:
+                    object.__setattr__(obj, name, value)
+
+        return _make_lazy_stub(res_type, initializer)
+else:
+
+    def make_lazy_result(res_type: ResultType, to_copy_fn) -> ResultType:
+        """Creates a delayed result which will use the result of to_copy_fn to initialize itself
+
+        __dict__ will be copied from the result, as well as extra pydantic attributes if present
+        The copy mechanism is similar to that used in pydantic's model_construct
+        """
+
+        def initializer(obj, validate=False, *args, **kwargs):
+            new_obj = to_copy_fn()
+
+            if hasattr(obj, "_lazy_validation_requested"):
+                new_obj = res_type.validate(new_obj)
+                object.__delattr__(obj, "_lazy_validation_requested")
+
+            # now we copy the fields into obj : inspired by pydantic model_construct
+            object.__setattr__(obj, "__dict__", new_obj.__dict__)
+            if hasattr(new_obj, "__pydantic_fields_set__"):
+                object.__setattr__(obj, "__pydantic_fields_set__", new_obj.__pydantic_fields_set__)
+            if hasattr(new_obj, "__pydantic_fields_set__"):
+                object.__setattr__(obj, "__pydantic_fields_set__", new_obj.__pydantic_extra__)
+            if hasattr(new_obj, "__pydantic_private__"):
+                object.__setattr__(obj, "__pydantic_private__", new_obj.__pydantic_private__)
+
+        return _make_lazy_stub(res_type, initializer)

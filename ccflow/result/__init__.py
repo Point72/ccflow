@@ -1,1 +1,1 @@
-from .generic import *
+from .dict import *

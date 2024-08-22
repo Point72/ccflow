@@ -2,7 +2,6 @@ import math
 import numpy as np
 import orjson
 import polars as pl
-import scipy as sp
 from io import StringIO
 from packaging import version
 from typing import Any
@@ -54,11 +53,14 @@ class PolarsExpression(pl.Expr):
 
         if isinstance(value, str):
             try:
-                expression = eval(
-                    value,
-                    {"col": pl.col, "c": pl.col, "np": np, "numpy": np, "pl": pl, "polars": pl, "scipy": sp, "sp": sp, "sc": sp, "math": math},
-                    {},
-                )
+                local_vars = {"col": pl.col, "c": pl.col, "np": np, "numpy": np, "pl": pl, "polars": pl, "math": math}
+                try:
+                    import scipy as sp
+
+                    local_vars.update({"scipy": sp, "sp": sp, "sc": sp})
+                except ImportError:
+                    pass
+                expression = eval(value, local_vars, {})
             except Exception as ex:
                 raise ValueError(f"Error encountered constructing expression - {str(ex)}")
 
