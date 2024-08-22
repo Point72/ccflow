@@ -2,18 +2,20 @@
 
 import copy
 import logging
+import pathlib
+from datetime import timedelta
+from types import MappingProxyType
+from typing import Any, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar, get_args, get_origin
+
 import numpy as np
 import orjson
 import pandas as pd
-import pathlib
 import pydantic
-from datetime import timedelta
 from omegaconf import DictConfig
 from packaging import version
-from pydantic import BaseModel as PydanticBaseModel, PrivateAttr, ValidationError, root_validator, validator
+from pydantic import BaseModel as PydanticBaseModel
+from pydantic import PrivateAttr, ValidationError, root_validator, validator
 from pydantic.fields import Field
-from types import MappingProxyType
-from typing import Any, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar, get_args, get_origin
 
 from .enums import Enum
 from .exttypes.pandas import GenericPandasWrapper
@@ -199,6 +201,7 @@ else:
     import inspect
     import platform
     import typing
+
     import typing_extensions
     from pydantic import SerializeAsAny, computed_field, model_serializer, model_validator
 

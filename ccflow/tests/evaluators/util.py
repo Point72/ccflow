@@ -1,8 +1,9 @@
 import logging
-import pandas as pd
 from datetime import date, datetime
-from pydantic import PrivateAttr
 from typing import Any, ClassVar, List, Optional
+
+import pandas as pd
+from pydantic import PrivateAttr
 
 from ccflow import CallableModel, DateContext, DateRangeContext, Flow, GenericResult, GraphDepList, ResultBase
 

@@ -1,11 +1,12 @@
+from datetime import date
+from unittest import TestCase
+
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.fs as fs
 import pydantic
-from datetime import date
 from packaging import version
 from pydantic import ValidationError
-from unittest import TestCase
 
 from ccflow import (
     ArrowDateFilter,

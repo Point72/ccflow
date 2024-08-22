@@ -1,21 +1,15 @@
-import numpy as np
 import platform
-import pydantic
-import pytest
 import unittest
-from packaging import version
 from typing import ClassVar, Dict, List, Optional, Type, Union
 
-from ccflow.enums import Enum
+import numpy as np
+import pydantic
+import pytest
+from packaging import version
+
 from ccflow import BaseModel, NDArray, make_ndarray_orjson_valid
-from ccflow.exttypes.pydantic_numpy.ndtypes import (
-    bool_,
-    complex64,
-    float32,
-    float64,
-    int8,
-    uint32,
-)
+from ccflow.enums import Enum
+from ccflow.exttypes.pydantic_numpy.ndtypes import bool_, complex64, float32, float64, int8, uint32
 
 
 class ParentModel(BaseModel):
@@ -231,7 +225,7 @@ class TestBaseModelSerialization(unittest.TestCase):
         # json_encoders of subclasses.
 
         class D(pydantic.BaseModel):
-            """D is composed of an A, but implements the vanilla pydantic BaseModel instead of the cubist_core one."""
+            """D is composed of an A, but implements the vanilla pydantic BaseModel instead of the ccflow one."""
 
             a: A
 

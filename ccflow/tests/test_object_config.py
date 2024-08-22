@@ -1,7 +1,8 @@
 import pickle
+from unittest import TestCase
+
 import pytest
 from pydantic import ValidationError
-from unittest import TestCase
 
 from ccflow import BaseModel, LazyObjectConfig, ModelRegistry, ObjectConfig
 

@@ -15,14 +15,16 @@ Notes:
 """
 
 import inspect
+from typing import Any, Callable, Dict, List, Union
+
 import pydantic
 from packaging import version
-from typing import Any, Callable, Dict, List, Union
 
 __all__ = ("auto", "Enum", "make_enum")
 
 try:
-    from csp import DynamicEnum, Enum as BaseEnum
+    from csp import DynamicEnum
+    from csp import Enum as BaseEnum
 
     auto = BaseEnum.auto
 
@@ -35,14 +37,17 @@ except ImportError:
         # and during struct hint/generation csp's
         # enum is not fully constructed yet
         # CSP BaseEnum just uses auto
-        from csp.impl.enum import DynamicEnum, Enum as BaseEnum
         from enum import auto
+
+        from csp.impl.enum import DynamicEnum
+        from csp.impl.enum import Enum as BaseEnum
 
         _CSP_ENUM = True
 
     except ImportError:
         # if csp is not installed, rely on python Enum
-        from enum import Enum as BaseEnum, auto  # noqa: F401
+        from enum import Enum as BaseEnum  # noqa: F401
+        from enum import auto
 
         BaseEnum.auto = auto
 

@@ -1,15 +1,16 @@
-import numpy as np
 import os
-import pandas as pd
 import pickle
-import pydantic
-import pydantic.json
-import pytest
 import tempfile
 from datetime import date
 from pathlib import Path
-from pydantic import BaseModel as PydanticBaseModel
 from unittest import TestCase
+
+import numpy as np
+import pandas as pd
+import pydantic
+import pydantic.json
+import pytest
+from pydantic import BaseModel as PydanticBaseModel
 
 from ccflow.exttypes import NDArray
 from ccflow.publishers import (

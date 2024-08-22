@@ -1,8 +1,10 @@
+from typing import Any, Iterable, Set, TypeVar, Union
+
 import pandas as pd
 import pydantic
 from packaging import version
-from pydantic import BaseModel as PydanticBaseModel, create_model
-from typing import Any, Iterable, Set, TypeVar, Union
+from pydantic import BaseModel as PydanticBaseModel
+from pydantic import create_model
 
 __all__ = (
     "PydanticModelType",

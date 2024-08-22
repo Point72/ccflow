@@ -1,11 +1,12 @@
 """This module contains a frequency extension type for pydantic."""
 
-import pandas as pd
 import warnings
 from datetime import timedelta
 from functools import cached_property
-from pandas.tseries.frequencies import to_offset
 from typing import Any, Type
+
+import pandas as pd
+from pandas.tseries.frequencies import to_offset
 
 
 class Frequency(str):

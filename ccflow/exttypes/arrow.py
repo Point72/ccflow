@@ -1,6 +1,7 @@
+from typing import Any, Generic, Type, TypeVar, Union
+
 import pandas as pd
 import pyarrow as pa
-from typing import Any, Generic, Type, TypeVar, Union
 from typing_extensions import Literal, get_args
 
 

@@ -1,6 +1,7 @@
+from typing import Generic, Hashable, Sequence, Set, TypeVar
+
 import pydantic
 from packaging import version
-from typing import Generic, Hashable, Sequence, Set, TypeVar
 
 from .base import ContextBase, ResultBase
 

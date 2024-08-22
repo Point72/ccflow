@@ -1,7 +1,8 @@
-import pandas as pd
-from pydantic import BaseModel as PydanticBaseModel
 from typing import Dict, List
 from unittest import TestCase
+
+import pandas as pd
+from pydantic import BaseModel as PydanticBaseModel
 
 from ccflow.utils import PydanticDictOptions, models_to_pandas
 

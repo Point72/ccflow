@@ -1,13 +1,14 @@
 import logging
-import numpy as np
 import os
-import pydantic.json
 import tempfile
 from datetime import date, timedelta
 from pathlib import Path
-from pydantic import BaseModel as PydanticBaseModel
 from typing import Dict
 from unittest import TestCase
+
+import numpy as np
+import pydantic.json
+from pydantic import BaseModel as PydanticBaseModel
 
 from ccflow.exttypes import NDArray
 from ccflow.publisher import BasePublisher

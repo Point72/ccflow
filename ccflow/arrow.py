@@ -3,12 +3,13 @@ Note that arrow related extension types are in exttypes.arrow.
 """
 
 import abc
+from datetime import date, datetime, time
+from typing import Any, Dict, List, Optional, Tuple, Union
+
 import pyarrow as pa
 import pydantic
-from datetime import date, datetime, time
 from packaging import version
 from pydantic import Field, root_validator
-from typing import Any, Dict, List, Optional, Tuple, Union
 from typing_extensions import Literal  # For pydantic 1 compatibility on python 3.9
 
 from .base import BaseModel

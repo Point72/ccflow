@@ -23,11 +23,12 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
+from typing import Any, Dict
+
 import numpy as np
 import pydantic
 from packaging import version
 from pydantic import ValidationError
-from typing import Any, Dict
 from typing_extensions import get_args
 
 from .ndarray import NDArray

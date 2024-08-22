@@ -1,8 +1,9 @@
+from typing import Any, Dict, List
+from unittest import TestCase
+
 import pydantic
 import pytest
 from pydantic import ValidationError
-from typing import Any, Dict, List
-from unittest import TestCase
 
 from ccflow import BaseModel, PyObjectPath
 
