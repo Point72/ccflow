@@ -7,7 +7,6 @@ import pandas as pd
 from pydantic import ValidationError
 
 from .exttypes import PyObjectPath
-from .utils.pydantic1to2 import annotation
 
 
 def normalize_date(v):
@@ -48,7 +47,7 @@ def eval_or_load_object(v, values=None):
 def str_to_enum(v, field):
     """Validator for enum fields that will try to convert a string value to the enum type."""
     if isinstance(v, str):
-        return annotation(field)[v]
+        return field.type_[v]
     return v
 
 

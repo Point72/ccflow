@@ -1,9 +1,6 @@
 from typing import List
 from unittest import TestCase
 
-import pydantic
-import pytest
-from packaging import version
 from pydantic import ValidationError
 
 from ccflow import (
@@ -20,7 +17,6 @@ from ccflow import (
     ResultType,
     WrapperModel,
 )
-from ccflow.utils.pydantic1to2 import ValidationTypeError
 
 
 class MyContext(ContextBase):
@@ -226,13 +222,13 @@ class TestCallableModel(TestCase):
         self.assertRaises(TypeError, lambda: m.result_type)
 
         error = "__call__ function of CallableModel must be wrapped with the Flow.call decorator"
-        self.assertRaisesRegex(ValidationTypeError, error, BadModel3)
+        self.assertRaisesRegex(ValueError, error, BadModel3)
 
         error = "__call__ method must take a single argument, named 'context'"
-        self.assertRaisesRegex(ValidationTypeError, error, BadModel4)
+        self.assertRaisesRegex(ValueError, error, BadModel4)
 
         error = "__call__ method must take a single argument, named 'context'"
-        self.assertRaisesRegex(ValidationTypeError, error, BadModel5)
+        self.assertRaisesRegex(ValueError, error, BadModel5)
 
     def test_identity(self):
         # Make sure that an "identity" mapping works
@@ -278,7 +274,7 @@ class TestCallableModelGenericType(TestCase):
 
     def test_wrapper_bad(self):
         m = IdentityCallable()
-        self.assertRaises(ValidationTypeError, MyWrapperGeneric, model=m)
+        self.assertRaises(ValueError, MyWrapperGeneric, model=m)
 
     def test_wrapper_reference(self):
         m = MyCallable(i=1)
@@ -327,10 +323,6 @@ class TestCallableModelDeps(TestCase):
         result = n(context)
         self.assertEqual(result, MyResult(x=1, y="hello"))
 
-    @pytest.mark.skipif(
-        pydantic.__version__.startswith("1"),
-        reason="Context validation only supported in pydantic 2",
-    )
     def test_dep_context_validation(self):
         m = MyCallable(i=1)
         n = MyCallableParent_bad_context(my_callable=m)
@@ -342,36 +334,22 @@ class TestCallableModelDeps(TestCase):
 
     def test_bad_deps_sig(self):
         m = MyCallable(i=1)
-        with self.assertRaises(ValidationTypeError) as e:
+        with self.assertRaises(ValueError) as e:
             MyCallableParent_bad_deps_sig(my_callable=m)
 
-        if version.parse(pydantic.__version__) < version.parse("2"):
-            msg = e.exception.args[0][0].exc.args
-            self.assertEqual(
-                msg,
-                ("__deps__ method must take a single argument, named 'context'",),
-            )
-        else:
-            msg = e.exception.errors()[0]["msg"]
-            self.assertEqual(
-                msg,
-                "Value error, __deps__ method must take a single argument, named 'context'",
-            )
+        msg = e.exception.errors()[0]["msg"]
+        self.assertEqual(
+            msg,
+            "Value error, __deps__ method must take a single argument, named 'context'",
+        )
 
     def test_bad_annotation(self):
         m = MyCallable(i=1)
         with self.assertRaises(ValidationError) as e:
             MyCallableParent_bad_annotation(my_callable=m)
 
-        if version.parse(pydantic.__version__) < version.parse("2"):
-            msg = e.exception.args[0][0].exc.args[0]
-            target = (
-                "The type of the context accepted by __deps__ ~ContextType must match that accepted by "
-                "__call__ <class 'ccflow.tests.test_callable.MyContext'>!"
-            )
-        else:
-            msg = e.exception.errors()[0]["msg"]
-            target = "Value error, The type of the context accepted by __deps__ ~ContextType must match that accepted by __call__ <class 'ccflow.tests.test_callable.MyContext'>!"
+        msg = e.exception.errors()[0]["msg"]
+        target = "Value error, The type of the context accepted by __deps__ ~ContextType must match that accepted by __call__ <class 'ccflow.tests.test_callable.MyContext'>!"
 
         self.assertEqual(msg, target)
 

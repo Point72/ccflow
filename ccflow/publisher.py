@@ -1,8 +1,6 @@
 import abc
 from typing import Any, Dict, TypeVar
 
-import pydantic
-from packaging import version
 from pydantic import Field
 from typing_extensions import override
 
@@ -32,9 +30,6 @@ class BasePublisher(BaseModel, abc.ABC):
         validate_assignment = True
         # Many publishers will require arbitrary types set on data
         arbitrary_types_allowed = True
-        if version.parse(pydantic.__version__) < version.parse("2"):
-            # Do not copy on validate as "data" might be large
-            copy_on_model_validation = "none"
 
     def get_name(self):
         """Get the name with the template parameters filled in."""

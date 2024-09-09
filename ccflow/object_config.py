@@ -1,8 +1,6 @@
 from typing import Any, Dict
 
-import pydantic
-from packaging import version
-from pydantic import PrivateAttr, root_validator
+from pydantic import PrivateAttr, model_validator
 from pydantic.fields import Field
 
 from .base import BaseModel
@@ -28,66 +26,36 @@ class ObjectConfig(BaseModel):  # TODO: Generic model version for type checking
     object_kwargs: Dict[str, Any] = {}
     _object: Any = PrivateAttr(None)
 
-    if version.parse(pydantic.__version__) < version.parse("2"):
+    class Config(BaseModel.Config):
+        ignored_types = (property,)
+        extra = "allow"
+        frozen = True  # Because we cache _object
 
-        class Config(BaseModel.Config):
-            keep_untouched = (property,)
-            extra = "allow"
-            frozen = True  # Because we cache _object
-
-        @root_validator(pre=True, skip_on_failure=True)
-        def _root_validate(cls, values):
+    @model_validator(mode="wrap")
+    def _kwarg_validator(cls, values, handler, info):
+        if isinstance(values, dict):
             # Uplift extra fields into object_kwargs
             obj_kwargs = values.get("object_kwargs", {})
             for field in list(values):
                 if field not in cls.__fields__:
                     obj_kwargs[field] = values.pop(field)
             values["object_kwargs"] = obj_kwargs
-            return values
+        return handler(values)
 
-        def __getstate__(self):
-            """Override pickling to ignore _object, so that configs can be pickled even if the underlying object cannot."""
-            state_dict = self.__dict__.copy()
-            state_dict.pop("_object", None)
-            return {"__dict__": state_dict, "__fields_set__": self.__fields_set__}
+    def __getstate__(self):
+        """Override pickling to ignore _object, so that configs can be pickled even if the underlying object cannot."""
+        state_dict = self.__dict__.copy()
+        state_dict.pop("_object", None)
+        return {
+            "__dict__": state_dict,
+            "__pydantic_fields_set__": self.__pydantic_fields_set__,
+            "__pydantic_extra__": self.__pydantic_extra__,
+            "__pydantic_private__": self.__pydantic_private__,
+        }
 
-        def __setstate__(self, state):
-            super().__setstate__(state)
-            self._object = self.object_type.object(**self.object_kwargs)
-
-    else:
-        from pydantic import model_validator
-
-        class Config(BaseModel.Config):
-            ignored_types = (property,)
-            extra = "allow"
-            frozen = True  # Because we cache _object
-
-        @model_validator(mode="wrap")
-        def _kwarg_validator(cls, values, handler, info):
-            if isinstance(values, dict):
-                # Uplift extra fields into object_kwargs
-                obj_kwargs = values.get("object_kwargs", {})
-                for field in list(values):
-                    if field not in cls.__fields__:
-                        obj_kwargs[field] = values.pop(field)
-                values["object_kwargs"] = obj_kwargs
-            return handler(values)
-
-        def __getstate__(self):
-            """Override pickling to ignore _object, so that configs can be pickled even if the underlying object cannot."""
-            state_dict = self.__dict__.copy()
-            state_dict.pop("_object", None)
-            return {
-                "__dict__": state_dict,
-                "__pydantic_fields_set__": self.__pydantic_fields_set__,
-                "__pydantic_extra__": self.__pydantic_extra__,
-                "__pydantic_private__": self.__pydantic_private__,
-            }
-
-        def __setstate__(self, state):
-            super().__setstate__(state)
-            self._object = self.object_type.object(**self.object_kwargs)
+    def __setstate__(self, state):
+        super().__setstate__(state)
+        self._object = self.object_type.object(**self.object_kwargs)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

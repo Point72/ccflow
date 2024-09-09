@@ -3,30 +3,22 @@
 import copy
 import logging
 import pathlib
-from datetime import timedelta
 from types import MappingProxyType
 from typing import Any, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar, get_args, get_origin
 
-import numpy as np
-import orjson
 import pandas as pd
-import pydantic
 from omegaconf import DictConfig
-from packaging import version
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import PrivateAttr, ValidationError, root_validator, validator
 from pydantic.fields import Field
 
-from .enums import Enum
 from .exttypes.pandas import GenericPandasWrapper
 from .exttypes.pyobjectpath import PyObjectPath
-from .serialization import make_ndarray_orjson_valid, orjson_dumps
+from .serialization import make_ndarray_orjson_valid
+from pydantic import TypeAdapter, model_validator
+import inspect
 
-if version.parse(pydantic.__version__) < version.parse("2"):
-    pass
-else:
-    from pydantic import TypeAdapter, model_validator
-
+from pydantic import SerializeAsAny, computed_field, model_serializer
 
 log = logging.getLogger(__name__)
 
@@ -81,310 +73,167 @@ class _RegistryMixin:
         return deps
 
 
-if version.parse(pydantic.__version__) < version.parse("2"):
+# Pydantic 2 has different handling of serialization.
+# This requires some workarounds at the moment until the feature is added to easily get a mode that
+# is compatible with Pydantic 1
+# This is done by adjusting annotations via a MetaClass for any annotation that includes a BaseModel,
+# such that the new annotation contains SerializeAsAny
+# https://docs.pydantic.dev/latest/concepts/serialization/#serializing-with-duck-typing
+# https://github.com/pydantic/pydantic/issues/6423
+# https://github.com/pydantic/pydantic-core/pull/740
+# See https://github.com/pydantic/pydantic/issues/6381 for inspiration on implementation
+from pydantic._internal._model_construction import ModelMetaclass  # noqa: E402
 
-    class BaseModel(PydanticBaseModel, _RegistryMixin):
-        """BaseModel is a base class for all pydantic models within the cubist flow framework.
 
-        This gives us a way to add functionality to the framework, including
-            - Type of object is part of serialization/deserialization
-            - Registration by name, and coercion from string name
-        """
+def _adjust_annotations(annotation):
+    origin = get_origin(annotation)
+    args = get_args(annotation)
+    if inspect.isclass(annotation) and issubclass(annotation, PydanticBaseModel):
+        return SerializeAsAny[annotation]
+    elif origin and args:
+        # Filter out typing.Type and generic types
+        if origin is type or (inspect.isclass(origin) and issubclass(origin, Generic)):
+            return annotation
+        elif origin is ClassVar:  # ClassVar doesn't accept a tuple of length 1 in py39
+            return ClassVar[_adjust_annotations(args[0])]
+        else:
+            try:
+                return origin[tuple(_adjust_annotations(arg) for arg in args)]
+            except TypeError:
+                raise TypeError(f"Could not adjust annotations for {origin}")
+    else:
+        return annotation
 
-        # We want to save the full path to the class type as part of the model when exporting
-        # so that it's clear how to create it again.
-        # Ideally, we would like to use _target_ as a field name, so that this lines up
-        # with hydra. Unfortunately pydantic does not support "public" underscore fields
-        # The suggested workaround is to use aliases
-        # See https://github.com/samuelcolvin/pydantic/issues/288
-        type_: PyObjectPath = Field(
-            None,
-            alias="_target_",
-            repr=False,
-            description="The (sub)type of BaseModel to be included in serialization "
-            "to allow for faithful deserialization using hydra.utils.instantiate based on '_target_',"
-            "which is the hydra convention.",
-        )
 
-        # We want to track under what names a model has been registered
-        _registrations: List[Tuple["ModelRegistry", str]] = PrivateAttr(default_factory=list)
+class _SerializeAsAnyMeta(ModelMetaclass):
+    def __new__(self, name: str, bases: Tuple[type], namespaces: Dict[str, Any], **kwargs):
+        annotations: dict = namespaces.get("__annotations__", {})
 
-        class Config:
-            validate_assignment = True
-            # The flag below is needed to make validate_assignment work properly with aliases
-            allow_population_by_field_name = True
-            # Lots of bugs happen because of a mis-named field with a default value,
-            # where the default behavior is just to drop the mis-named value. This prevents that
-            extra = "forbid"
-            json_loads = orjson.loads
-            json_dumps = orjson_dumps
-            json_encoders = {
-                GenericPandasWrapper: lambda x: type(x).encode(x),
-                np.ndarray: make_ndarray_orjson_valid,
-                # encode is a classmethod
-                pd.Index: lambda x: make_ndarray_orjson_valid(x.to_numpy()),
-                Enum: lambda x: x.name,
-                timedelta: lambda x: x.total_seconds(),
-            }
+        for base in bases:
+            for base_ in base.__mro__:
+                if base_ is PydanticBaseModel:
+                    annotations.update(base_.__annotations__)
 
-        def __str__(self):
-            # Because the standard string representation does not include class name
-            return repr(self)
+        for field, annotation in annotations.items():
+            if not field.startswith("__"):
+                annotations[field] = _adjust_annotations(annotation)
 
-        def get_widget(
-            self,
-            json_kwargs: Optional[Dict[str, Any]] = None,
-            widget_kwargs: Optional[Dict[str, Any]] = None,
-        ):
-            """Get an IPython widget to view the object."""
-            from IPython.display import JSON
+        namespaces["__annotations__"] = annotations
 
-            kwargs = {"encoder": str}
-            kwargs.update(json_kwargs or {})
-            return JSON(self.json(**kwargs), **(widget_kwargs or {}))
+        return super().__new__(self, name, bases, namespaces, **kwargs)
 
-        @root_validator(pre=True)
-        def _type_validate(cls, values):
-            values.pop("_target_", None)
-            values["type_"] = PyObjectPath.validate(cls)
-            return values
 
-        @classmethod
-        def validate(cls, v, field=None):
-            """Validation will lookup a string in the root registry,
-            and return the registered model if found."""
-            if isinstance(v, str):
-                return resolve_str(v)
+class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta):
+    """BaseModel is a base class for all pydantic models within the cubist flow framework.
 
-            # If we already have an instance, run parent validation.
-            if isinstance(v, cls):
-                return super(BaseModel, cls).validate(v)
+    This gives us a way to add functionality to the framework, including
+        - Type of object is part of serialization/deserialization
+        - Registration by name, and coercion from string name
+    """
 
-            # Look for type data on the object, because if it's a sub-class, need to instantiate it explicitly
-            if isinstance(v, dict):
-                if "_target_" in v:
-                    type_ = v["_target_"]
-                else:
-                    type_ = v.get("type_")
-            else:
-                type_ = getattr(v, "type_", None)
+    @computed_field(
+        alias="_target_",
+        repr=False,
+        description="The (sub)type of BaseModel to be included in serialization "
+        "to allow for faithful deserialization using hydra.utils.instantiate based on '_target_',"
+        "which is the hydra convention.",
+    )
+    @property
+    def type_(self) -> PyObjectPath:
+        return PyObjectPath.validate(type(self))
+
+    # We want to track under what names a model has been registered
+    _registrations: List[Tuple["ModelRegistry", str]] = PrivateAttr(default_factory=list)
+
+    # Don't use ConfigDict/model_config here because many subclasses are still using ConfigDict
+    class Config:
+        validate_assignment = True
+        populate_by_name = True
+        coerce_numbers_to_str = True  # New in v2 for backwards compatibility with V1
+        # Lots of bugs happen because of a mis-named field with a default value,
+        # where the default behavior is just to drop the mis-named value. This prevents that
+        extra = "forbid"
+        ser_json_timedelta = "float"
+        json_encoders = {
+            GenericPandasWrapper: lambda x: type(x).encode(x),
+            pd.Index: lambda x: make_ndarray_orjson_valid(x.to_numpy()),
+        }
+
+    def __str__(self):
+        # Because the standard string representation does not include class name
+        return repr(self)
+
+    def __eq__(self, other: Any) -> bool:
+        # Override the method from pydantic's base class so as not to include private attributes,
+        # which was a change made in V2 (https://docs.pydantic.dev/latest/migration/)
+        if isinstance(other, BaseModel):
+            # When comparing instances of generic types for equality, as long as all field values are equal,
+            # only require their generic origin types to be equal, rather than exact type equality.
+            # This prevents headaches like MyGeneric(x=1) != MyGeneric[Any](x=1).
+            self_type = self.__pydantic_generic_metadata__["origin"] or self.__class__
+            other_type = other.__pydantic_generic_metadata__["origin"] or other.__class__
+            return self_type == other_type and self.__dict__ == other.__dict__
+        else:
+            return NotImplemented  # delegate to the other item in the comparison
+
+    def get_widget(
+        self,
+        json_kwargs: Optional[Dict[str, Any]] = None,
+        widget_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        """Get an IPython widget to view the object."""
+        from IPython.display import JSON
+
+        kwargs = {"fallback": str, "mode": "json"}
+        kwargs.update(json_kwargs or {})
+        # Can't use self.model_dump_json or self.model_dump because they don't expose the fallback argument
+        return JSON(self.__pydantic_serializer__.to_python(self, **kwargs), **(widget_kwargs or {}))
+
+    @model_validator(mode="wrap")
+    def _base_model_validator(cls, v, handler, info):
+        if isinstance(v, str):
+            try:
+                v = resolve_str(v)
+            except RegistryKeyError as e:
+                # Need to throw a value error so that validation of Unions works properly.
+                raise ValueError from e
+            return handler(v)
+
+        # If we already have an instance, run parent validation.
+        if isinstance(v, cls):
+            return handler(v)
+
+        # Look for type data on the object, because if it's a sub-class, need to instantiate it explicitly
+        if isinstance(v, dict):
+            type_ = None
+            if "_target_" in v:
+                v = v.copy()
+                type_ = v.pop("_target_")
+            if "type_" in v:
+                v = v.copy()
+                type_ = v.pop("type_")
 
             if type_ is not None:
                 type_cls = PyObjectPath(type_).object
                 if cls != type_cls:
-                    v = type_cls.validate(v)
-            return super(BaseModel, cls).validate(v)
+                    return type_cls.model_validate(v)
 
-        @classmethod
-        def parse_obj(cls, obj):
-            return cls.validate(obj)
+        if isinstance(v, PydanticBaseModel):
+            # Coerce from one BaseModel type to another (because it worked automatically in v1)
+            v = v.model_dump(exclude={"type_"})
 
-        def __init_subclass__(cls, *args, **kwargs):
-            if hasattr(cls, "Config") and hasattr(cls.Config, "json_encoders"):
-                # Register the JSON encoder of subclasses to the BaseModel so that we can serialize from a reference to
-                # the base class.
-                BaseModel.__config__.json_encoders.update(cls.Config.json_encoders)
-            super(BaseModel, cls).__init_subclass__(*args, **kwargs)
+        return handler(v)
 
-    class _ModelRegistryData(PydanticBaseModel):
-        """A data structure representation of the model registry, without the associated functionality"""
 
-        type_: PyObjectPath = Field(
-            alias="_target_",
-            repr=False,
-        )
-        name: str
-        models: Dict[str, BaseModel]
+class _ModelRegistryData(PydanticBaseModel):
+    """A data structure representation of the model registry, without the associated functionality"""
 
-else:
-    import collections.abc
-    import inspect
-    import platform
-    import typing
-
-    import typing_extensions
-    from pydantic import SerializeAsAny, computed_field, model_serializer, model_validator
-
-    # Pydantic 2 has different handling of serialization.
-    # This requires some workarounds at the moment until the feature is added to easily get a mode that
-    # is compatible with Pydantic 1
-    # This is done by adjusting annotations via a MetaClass for any annotation that includes a BaseModel,
-    # such that the new annotation contains SerializeAsAny
-    # https://docs.pydantic.dev/latest/concepts/serialization/#serializing-with-duck-typing
-    # https://github.com/pydantic/pydantic/issues/6423
-    # https://github.com/pydantic/pydantic-core/pull/740
-    # See https://github.com/pydantic/pydantic/issues/6381 for inspiration on implementation
-    from pydantic._internal._model_construction import ModelMetaclass
-
-    # Required for py38 compatibility
-    # In python 3.8, get_origin(List[float]) returns list, but you can't call list[float] to retrieve the annotation
-    # Furthermore, Annotated is part of typing_Extensions and get_origin(Annotated[str, ...]) returns str rather than Annotated
-    _IS_PY38 = version.parse(platform.python_version()) < version.parse("3.9")
-    # For a more complete list, see https://github.com/alexmojaki/eval_type_backport/blob/main/eval_type_backport/eval_type_backport.py
-    _PY38_ORIGIN_MAP = {
-        tuple: typing.Tuple,
-        list: typing.List,
-        dict: typing.Dict,
-        set: typing.Set,
-        frozenset: typing.FrozenSet,
-        collections.abc.Callable: typing.Callable,
-        collections.abc.Iterable: typing.Iterable,
-        collections.abc.Mapping: typing.Mapping,
-        collections.abc.MutableMapping: typing.MutableMapping,
-        collections.abc.Sequence: typing.Sequence,
-    }
-
-    def _adjust_annotations(annotation):
-        origin = get_origin(annotation)
-        if _IS_PY38:
-            if isinstance(annotation, typing_extensions._AnnotatedAlias):
-                return annotation
-            else:
-                origin = _PY38_ORIGIN_MAP.get(origin, origin)
-        args = get_args(annotation)
-        if inspect.isclass(annotation) and issubclass(annotation, PydanticBaseModel):
-            return SerializeAsAny[annotation]
-        elif origin and args:
-            # Filter out typing.Type and generic types
-            if origin is type or (inspect.isclass(origin) and issubclass(origin, Generic)):
-                return annotation
-            elif origin is ClassVar:  # ClassVar doesn't accept a tuple of length 1 in py39
-                return ClassVar[_adjust_annotations(args[0])]
-            else:
-                try:
-                    return origin[tuple(_adjust_annotations(arg) for arg in args)]
-                except TypeError:
-                    raise TypeError(f"Could not adjust annotations for {origin}")
-        else:
-            return annotation
-
-    class _SerializeAsAnyMeta(ModelMetaclass):
-        def __new__(self, name: str, bases: Tuple[type], namespaces: Dict[str, Any], **kwargs):
-            annotations: dict = namespaces.get("__annotations__", {})
-
-            for base in bases:
-                for base_ in base.__mro__:
-                    if base_ is PydanticBaseModel:
-                        annotations.update(base_.__annotations__)
-
-            for field, annotation in annotations.items():
-                if not field.startswith("__"):
-                    annotations[field] = _adjust_annotations(annotation)
-
-            namespaces["__annotations__"] = annotations
-
-            return super().__new__(self, name, bases, namespaces, **kwargs)
-
-    class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta):
-        """BaseModel is a base class for all pydantic models within the cubist flow framework.
-
-        This gives us a way to add functionality to the framework, including
-            - Type of object is part of serialization/deserialization
-            - Registration by name, and coercion from string name
-        """
-
-        @computed_field(
-            alias="_target_",
-            repr=False,
-            description="The (sub)type of BaseModel to be included in serialization "
-            "to allow for faithful deserialization using hydra.utils.instantiate based on '_target_',"
-            "which is the hydra convention.",
-        )
-        @property
-        def type_(self) -> PyObjectPath:
-            return PyObjectPath.validate(type(self))
-
-        # We want to track under what names a model has been registered
-        _registrations: List[Tuple["ModelRegistry", str]] = PrivateAttr(default_factory=list)
-
-        # Don't use ConfigDict/model_config here because many subclasses are still using ConfigDict
-        class Config:
-            validate_assignment = True
-            populate_by_name = True
-            coerce_numbers_to_str = True  # New in v2 for backwards compatibility with V1
-            # Lots of bugs happen because of a mis-named field with a default value,
-            # where the default behavior is just to drop the mis-named value. This prevents that
-            extra = "forbid"
-            ser_json_timedelta = "float"
-            json_encoders = {
-                GenericPandasWrapper: lambda x: type(x).encode(x),
-                pd.Index: lambda x: make_ndarray_orjson_valid(x.to_numpy()),
-            }
-
-        def __str__(self):
-            # Because the standard string representation does not include class name
-            return repr(self)
-
-        def __eq__(self, other: Any) -> bool:
-            # Override the method from pydantic's base class so as not to include private attributes,
-            # which was a change made in V2 (https://docs.pydantic.dev/latest/migration/)
-            if isinstance(other, BaseModel):
-                # When comparing instances of generic types for equality, as long as all field values are equal,
-                # only require their generic origin types to be equal, rather than exact type equality.
-                # This prevents headaches like MyGeneric(x=1) != MyGeneric[Any](x=1).
-                self_type = self.__pydantic_generic_metadata__["origin"] or self.__class__
-                other_type = other.__pydantic_generic_metadata__["origin"] or other.__class__
-                return self_type == other_type and self.__dict__ == other.__dict__
-            else:
-                return NotImplemented  # delegate to the other item in the comparison
-
-        def get_widget(
-            self,
-            json_kwargs: Optional[Dict[str, Any]] = None,
-            widget_kwargs: Optional[Dict[str, Any]] = None,
-        ):
-            """Get an IPython widget to view the object."""
-            from IPython.display import JSON
-
-            kwargs = {"fallback": str, "mode": "json"}
-            kwargs.update(json_kwargs or {})
-            # Can't use self.model_dump_json or self.model_dump because they don't expose the fallback argument
-            return JSON(self.__pydantic_serializer__.to_python(self, **kwargs), **(widget_kwargs or {}))
-
-        @model_validator(mode="wrap")
-        def _base_model_validator(cls, v, handler, info):
-            if isinstance(v, str):
-                try:
-                    v = resolve_str(v)
-                except RegistryKeyError as e:
-                    # Need to throw a value error so that validation of Unions works properly.
-                    raise ValueError from e
-                return handler(v)
-
-            # If we already have an instance, run parent validation.
-            if isinstance(v, cls):
-                return handler(v)
-
-            # Look for type data on the object, because if it's a sub-class, need to instantiate it explicitly
-            if isinstance(v, dict):
-                type_ = None
-                if "_target_" in v:
-                    v = v.copy()
-                    type_ = v.pop("_target_")
-                if "type_" in v:
-                    v = v.copy()
-                    type_ = v.pop("type_")
-
-                if type_ is not None:
-                    type_cls = PyObjectPath(type_).object
-                    if cls != type_cls:
-                        return type_cls.model_validate(v)
-
-            if isinstance(v, PydanticBaseModel):
-                # Coerce from one BaseModel type to another (because it worked automatically in v1)
-                v = v.model_dump(exclude={"type_"})
-
-            return handler(v)
-
-    class _ModelRegistryData(PydanticBaseModel):
-        """A data structure representation of the model registry, without the associated functionality"""
-
-        type_: PyObjectPath = Field(
-            alias="_target_",
-            repr=False,
-        )
-        name: str
-        models: SerializeAsAny[Dict[str, BaseModel]]
+    type_: PyObjectPath = Field(
+        alias="_target_",
+        repr=False,
+    )
+    name: str
+    models: SerializeAsAny[Dict[str, BaseModel]]
 
 
 def _get_registry_dependencies(value, types: Optional[Tuple[Type]]) -> List[List[str]]:
@@ -468,30 +317,11 @@ class ModelRegistry(BaseModel):
             raise ValueError("name must be non-empty")
         return v
 
-    if version.parse(pydantic.__version__) < version.parse("2"):
-
-        def dict(self, **kwargs):
-            """
-            Custom implementation of dict method from parent to include a copy of the models dict
-            """
-            type_ = PyObjectPath.validate(ModelRegistry)
-            data = _ModelRegistryData.construct(name=self.name, models=self.models.copy(), type_=type_)
-            return data.dict(**kwargs)
-
-        def json(self, **kwargs):
-            """
-            Custom implementation of json method from parent to include a copy of the models dict
-            """
-            type_ = PyObjectPath.validate(ModelRegistry)
-            data = _ModelRegistryData.construct(name=self.name, models=self.models.copy(), type_=type_)
-            return data.json(**kwargs)
-    else:
-
-        @model_serializer(mode="wrap")
-        def _registry_serializer(self, handler):
-            values = handler(self)
-            values["models"] = handler(self._models)
-            return values
+    @model_serializer(mode="wrap")
+    def _registry_serializer(self, handler):
+        values = handler(self)
+        values["models"] = handler(self._models)
+        return values
 
     @property
     def _debug_name(self) -> str:
@@ -811,9 +641,6 @@ class ResultBase(BaseModel):
 
     class Config(BaseModel.Config):
         arbitrary_types_allowed = True
-        if version.parse(pydantic.__version__) < version.parse("2"):
-            # Result type might contain a lot of data, so we don't want to copy on validation
-            copy_on_model_validation: str = "none"
 
     def __getattribute__(self, attr):
         """Call _onaccess_callback before allowing attribute access.
@@ -838,49 +665,25 @@ class ContextBase(ResultBase):
         arbitrary_types_allowed = False
         # This separator is used when parsing strings into contexts (i.e. from command line)
         separator = ","
-        if version.parse(pydantic.__version__) < version.parse("2"):
-            # Contexts should be immutable, so make sure we deep-copy the model on validation (i.e. during construction)
-            copy_on_model_validation: str = "deep"
 
-    if version.parse(pydantic.__version__) < version.parse("2"):
+    @model_validator(mode="wrap")
+    def _context_validator(cls, v, handler, info):
+        # Add deepcopy for v2 because it doesn't support copy_on_model_validation
+        v = copy.deepcopy(v)
 
-        @classmethod
-        def validate(cls, v, field=None):
-            # Try to validate as-is
-            try:
-                return super(ContextBase, cls).validate(v)
-            except Exception as e:
-                # If it fails, then perhaps it is a delimited string, tuple or list
-                if isinstance(v, (str, tuple, list)):
-                    if isinstance(v, str):
-                        v = v.split(cls.Config.separator)
-                    # Map these values to fields of the context (ignoring "type_", which is the first field)
-                    fields = iter(cls.__fields__)
-                    next(fields)
-                    v = dict(zip(fields, v))
-                    return super(ContextBase, cls).validate(v)
-                raise e
+        if isinstance(v, (dict, cls)):
+            return handler(v)
 
-    else:
-
-        @model_validator(mode="wrap")
-        def _context_validator(cls, v, handler, info):
-            # Add deepcopy for v2 because it doesn't support copy_on_model_validation
-            v = copy.deepcopy(v)
-
-            if isinstance(v, (dict, cls)):
+        BaseValidator = TypeAdapter(BaseModel)
+        try:
+            return handler(BaseValidator.validate_python(v))
+        except Exception as e:
+            if isinstance(v, (str, tuple, list)):
+                if isinstance(v, str):
+                    v = v.split(cls.Config.separator)
+                v = dict(zip(cls.model_fields, v))
                 return handler(v)
-
-            BaseValidator = TypeAdapter(BaseModel)
-            try:
-                return handler(BaseValidator.validate_python(v))
-            except Exception as e:
-                if isinstance(v, (str, tuple, list)):
-                    if isinstance(v, str):
-                        v = v.split(cls.Config.separator)
-                    v = dict(zip(cls.model_fields, v))
-                    return handler(v)
-                raise e
+            raise e
 
 
 ContextType = TypeVar("ContextType", bound=ContextBase)
@@ -912,56 +715,27 @@ def _make_lazy_stub(res_type: ResultType, initializer_fn, *args, **kwargs) -> Re
     return new_instance
 
 
-if version.parse(pydantic.__version__) < version.parse("2"):
-    from pydantic.v1.fields import Undefined
+def make_lazy_result(res_type: ResultType, to_copy_fn) -> ResultType:
+    """Creates a delayed result which will use the result of to_copy_fn to initialize itself
 
-    def make_lazy_result(res_type: ResultType, to_copy_fn) -> ResultType:
-        """Creates a delayed result which will use the result of to_copy_fn to initialize itself
+    __dict__ will be copied from the result, as well as extra pydantic attributes if present
+    The copy mechanism is similar to that used in pydantic's model_construct
+    """
 
-        __dict__ will be copied from the result, as well as extra pydantic attributes if present
-        The copy mechanism is similar to that used in pydantic's copy_and_set_values
-        """
+    def initializer(obj, validate=False, *args, **kwargs):
+        new_obj = to_copy_fn()
 
-        def initializer(obj, validate=False, *args, **kwargs):
-            new_obj = to_copy_fn()
+        if hasattr(obj, "_lazy_validation_requested"):
+            new_obj = res_type.validate(new_obj)
+            object.__delattr__(obj, "_lazy_validation_requested")
 
-            if hasattr(obj, "_lazy_validation_requested"):
-                new_obj = res_type.validate(new_obj)
-                object.__delattr__(obj, "_lazy_validation_requested")
+        # now we copy the fields into obj : inspired by pydantic model_construct
+        object.__setattr__(obj, "__dict__", new_obj.__dict__)
+        if hasattr(new_obj, "__pydantic_fields_set__"):
+            object.__setattr__(obj, "__pydantic_fields_set__", new_obj.__pydantic_fields_set__)
+        if hasattr(new_obj, "__pydantic_fields_set__"):
+            object.__setattr__(obj, "__pydantic_fields_set__", new_obj.__pydantic_extra__)
+        if hasattr(new_obj, "__pydantic_private__"):
+            object.__setattr__(obj, "__pydantic_private__", new_obj.__pydantic_private__)
 
-            # now we copy the fields into obj : inspired by pydantic copy_and_set_values
-            object.__setattr__(obj, "__dict__", new_obj.__dict__)
-            if hasattr(new_obj, "__fields_set__"):
-                object.__setattr__(obj, "__fields_set__", new_obj.__fields_set__)
-            for name in new_obj.__private_attributes__:
-                value = getattr(new_obj, name, Undefined)
-                if value is not Undefined:
-                    object.__setattr__(obj, name, value)
-
-        return _make_lazy_stub(res_type, initializer)
-else:
-
-    def make_lazy_result(res_type: ResultType, to_copy_fn) -> ResultType:
-        """Creates a delayed result which will use the result of to_copy_fn to initialize itself
-
-        __dict__ will be copied from the result, as well as extra pydantic attributes if present
-        The copy mechanism is similar to that used in pydantic's model_construct
-        """
-
-        def initializer(obj, validate=False, *args, **kwargs):
-            new_obj = to_copy_fn()
-
-            if hasattr(obj, "_lazy_validation_requested"):
-                new_obj = res_type.validate(new_obj)
-                object.__delattr__(obj, "_lazy_validation_requested")
-
-            # now we copy the fields into obj : inspired by pydantic model_construct
-            object.__setattr__(obj, "__dict__", new_obj.__dict__)
-            if hasattr(new_obj, "__pydantic_fields_set__"):
-                object.__setattr__(obj, "__pydantic_fields_set__", new_obj.__pydantic_fields_set__)
-            if hasattr(new_obj, "__pydantic_fields_set__"):
-                object.__setattr__(obj, "__pydantic_fields_set__", new_obj.__pydantic_extra__)
-            if hasattr(new_obj, "__pydantic_private__"):
-                object.__setattr__(obj, "__pydantic_private__", new_obj.__pydantic_private__)
-
-        return _make_lazy_stub(res_type, initializer)
+    return _make_lazy_stub(res_type, initializer)

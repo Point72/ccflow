@@ -11,7 +11,6 @@ from ..exttypes import JinjaTemplate
 from ..publisher import BasePublisher
 from ..serialization import orjson_dumps
 from ..utils import PydanticDictOptions, PydanticModelType, dict_to_model
-from ..utils.pydantic1to2 import GenericModel
 
 __all__ = (
     "DictTemplateFilePublisher",
@@ -134,7 +133,7 @@ class DictTemplateFilePublisher(BasePublisher):
         )()
 
 
-class PydanticJSONPublisher(BasePublisher, GenericModel, Generic[PydanticModelType]):
+class PydanticJSONPublisher(BasePublisher, Generic[PydanticModelType]):
     """See https://pydantic-docs.helpmanual.io/usage/exporting_models/#modeljson"""
 
     data: PydanticModelType = None

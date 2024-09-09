@@ -5,9 +5,7 @@ defined in flow.callable.py.
 from datetime import date, datetime
 from typing import Optional
 
-import pydantic
-from packaging import version
-from pydantic import validator
+from pydantic import validator, model_validator
 
 from .base import ContextBase
 from .exttypes import Frequency
@@ -60,29 +58,14 @@ class DateContext(ContextBase):
     # validators
     _normalize_date = validator("date", allow_reuse=True, pre=True)(normalize_date)
 
-    if version.parse(pydantic.__version__) < version.parse("2"):
+    @model_validator(mode="wrap")
+    def _date_context_validator(cls, v, handler, info):
+        if cls is DateContext and not isinstance(v, (DateContext, dict)):
+            if isinstance(v, (tuple, list)) and len(v) == 1:
+                v = v[0]
 
-        @classmethod
-        def validate(cls, v, field=None):
-            """Validation will coerce date types to DateContexts."""
-            if cls is DateContext and not isinstance(v, (DateContext, dict)):
-                if isinstance(v, (tuple, list)) and len(v) == 1:
-                    v = v[0]
-
-                v = DateContext(date=v)
-            return super(DateContext, cls).validate(v)
-
-    else:
-        from pydantic import model_validator
-
-        @model_validator(mode="wrap")
-        def _date_context_validator(cls, v, handler, info):
-            if cls is DateContext and not isinstance(v, (DateContext, dict)):
-                if isinstance(v, (tuple, list)) and len(v) == 1:
-                    v = v[0]
-
-                v = DateContext(date=v)
-            return handler(v)
+            v = DateContext(date=v)
+        return handler(v)
 
 
 class EntryTimeContext(ContextBase):

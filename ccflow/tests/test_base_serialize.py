@@ -1,11 +1,8 @@
-import platform
 import unittest
 from typing import ClassVar, Dict, List, Optional, Type, Union
 
 import numpy as np
 import pydantic
-import pytest
-from packaging import version
 
 from ccflow import BaseModel, NDArray, make_ndarray_orjson_valid
 from ccflow.enums import Enum
@@ -208,34 +205,6 @@ class TestBaseModelSerialization(unittest.TestCase):
         # C implements the normal pydantic BaseModel which should allow extra fields.
         _ = C(extra_field1=1)
 
-    @pytest.mark.skipif(
-        pydantic.__version__.startswith("2"),
-        reason="Fixed in version 2 because serialization handled by the type.",
-    )
-    def test_subclass_json_encoders(self):
-        """Test that json encoders in subclasses of BaseModel gets registered in the BaseModel config."""
-
-        c = C(a=B(x=ArbitraryType(1)))
-
-        # If the json_encoders of B didn't get registered in BaseModel, serializing C should fail.
-        self.assertIsNotNone(c.json())
-
-        # Just to prove that serialization will fail if the json_encoder doesn't get registered in the BaseModel,
-        # we create class D which implements pydantic's vanilla BaseModel which doesn't know to register the
-        # json_encoders of subclasses.
-
-        class D(pydantic.BaseModel):
-            """D is composed of an A, but implements the vanilla pydantic BaseModel instead of the ccflow one."""
-
-            a: A
-
-        d = D(a=B(x=ArbitraryType(1)))
-        self.assertRaises(TypeError, d.json)
-
-    @pytest.mark.skipif(
-        pydantic.__version__.startswith("1"),
-        reason="SerializeAsAny introduced in pydantic 2.",
-    )
     def test_serialize_as_any(self):
         # https://docs.pydantic.dev/latest/concepts/serialization/#serializing-with-duck-typing
         # https://github.com/pydantic/pydantic/issues/6423
@@ -258,10 +227,7 @@ class TestBaseModelSerialization(unittest.TestCase):
             "a5": Type[A],
             "a6": constr(min_length=1),  # Uses Annotation
         }
-        if version.parse(platform.python_version()) < version.parse("3.9"):
-            target["a3"] = Dict[str, Optional[List[SerializeAsAny[A]]]]
-        else:
-            target["a3"] = dict[str, Optional[list[SerializeAsAny[A]]]]
+        target["a3"] = dict[str, Optional[list[SerializeAsAny[A]]]]
         annotations = MyNestedModel.__annotations__
         self.assertEqual(str(annotations["a1"]), str(target["a1"]))
         self.assertEqual(str(annotations["a2"]), str(target["a2"]))

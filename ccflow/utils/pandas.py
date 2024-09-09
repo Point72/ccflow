@@ -1,8 +1,6 @@
 from typing import Any, Iterable, Set, TypeVar, Union
 
 import pandas as pd
-import pydantic
-from packaging import version
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import create_model
 
@@ -42,8 +40,6 @@ def dict_to_model(cls, v) -> PydanticBaseModel:
 
         class Config:
             arbitrary_types_allowed = True
-            if version.parse(pydantic.__version__) < version.parse("2"):
-                copy_on_model_validation = "none"
 
         fields = {f: (Any, None) for f in v}
         v = create_model("DynamicDictModel", **fields, __config__=Config)(**v)

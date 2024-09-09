@@ -1,8 +1,6 @@
 from typing import Any, Dict, List
 from unittest import TestCase
 
-import pydantic
-import pytest
 from pydantic import ValidationError
 
 from ccflow import BaseModel, PyObjectPath
@@ -107,16 +105,6 @@ class TestBaseModel(TestCase):
         m.x = "bar"
         self.assertIsInstance(m.type_, PyObjectPath)
         self.assertEqual(m.type_, path)
-
-    @pytest.mark.skipif(
-        pydantic.__version__.startswith("2"),
-        reason="copy_on_validate only relevant in v1",
-    )
-    def test_copy_on_validate(self):
-        # Make sure that this functionality works (and isn't broken by our validation function)
-        m = CopyModel(x="foo")
-        self.assertEqual(CopyModel.validate(m), m)
-        self.assertIsNot(CopyModel.validate(m), m)
 
     def test_validate(self):
         self.assertEqual(ModelA.validate({"x": "foo"}), ModelA(x="foo"))

@@ -4,7 +4,6 @@ from unittest import TestCase
 import numpy as np
 import polars as pl
 import pydantic
-import pytest
 import scipy
 from packaging import version
 
@@ -44,10 +43,6 @@ class TestPolarsExpression(TestCase):
         with self.assertRaises(ValueError):
             PolarsExpression.validate("invalid_statement")
 
-    @pytest.mark.skipif(
-        pydantic.__version__.startswith("1"),
-        reason="JSON serialization for polars expression only supported in pydantic 2.",
-    )
     def test_json_serialization(self):
         expression = pl.col("Col1") + pl.col("Col2")
         json_result = pydantic.TypeAdapter(PolarsExpression).dump_json(expression)

@@ -7,9 +7,6 @@ from unittest import TestCase
 
 import numpy as np
 import pandas as pd
-import pydantic
-import pydantic.json
-import pytest
 from pydantic import BaseModel as PydanticBaseModel
 
 from ccflow.exttypes import NDArray
@@ -19,7 +16,6 @@ from ccflow.publishers import (
     JSONPublisher,
     PandasFilePublisher,
     PicklePublisher,
-    PydanticJSONPublisher,
     YAMLPublisher,
 )
 
@@ -122,63 +118,6 @@ class TestFilePublishers(TestCase):
             path = p()
             with open(path, "r") as f:
                 self.assertEqual(f.read(), "The value of foo is 5 and the value of bar is 2020-01-01")
-
-    @pytest.mark.skipif(
-        pydantic.__version__.startswith("2"),
-        reason="Not supported in v2, but it seems like a bug in pydantic!",
-    )
-    def test_pydantic_json(self):
-        with tempfile.TemporaryDirectory() as tempdir:
-            os.chdir(tempdir)
-
-            # Use generic type
-            p = PydanticJSONPublisher[MyTestModel](name="test_pydantic_json")
-            p.data = {"foo": 5, "bar": date(2020, 1, 1), "baz": np.array([])}
-            self.assertIsInstance(p.data, MyTestModel)
-            p.options.include = {"foo", "bar"}
-            path = p()
-            with open(path, "r") as f:
-                self.assertEqual(f.read(), '{"foo": 5, "bar": "2020-01-01"}')
-
-            # Don't use the generic type, and pass the numpy value
-            # Because MyTestModel knows how to serialize JSON, it works
-            p2 = PydanticJSONPublisher(name="test_pydantic_json_numpy")
-            model = MyTestModel.validate({"foo": 5, "bar": date(2020, 1, 1), "baz": np.array([1.0, 2.0, 3.0])})
-            p2.data = model
-            p2.options.exclude = {"foo"}
-            path2 = p2()
-            with open(path2, "r") as f:
-                self.assertEqual(f.read(), '{"bar": "2020-01-01", "baz": [1.0, 2.0, 3.0]}')
-
-    @pytest.mark.skipif(
-        pydantic.__version__.startswith("2"),
-        reason="Not supported in v2, because you can't pass encoders at json serialization time",
-    )
-    def test_pydantic_json_custom(self):
-        """Similar to the above test, but without specifying the pydantic model upfront,
-        and passing it a numpy array."""
-        with tempfile.TemporaryDirectory() as tempdir:
-            os.chdir(tempdir)
-
-            p = PydanticJSONPublisher(name="test_pydantic_json_numpy")
-            p.data = {
-                "foo": 5,
-                "bar": date(2020, 1, 1),
-                "baz": np.array([1.0, 2.0, 3.0]),
-            }
-            p.options.exclude = {"foo"}
-            # Because the dynamically created model does *not* have a config for numpy json encoding,
-            # we need to pass a custom encoder
-
-            def custom_encoder(v):
-                if isinstance(v, np.ndarray):
-                    return v.tolist()
-                return pydantic.json.pydantic_encoder(v)
-
-            p.kwargs["encoder"] = custom_encoder
-            path = p()
-            with open(path, "r") as f:
-                self.assertEqual(f.read(), '{"bar": "2020-01-01", "baz": [1.0, 2.0, 3.0]}')
 
     def test_pandas_html(self):
         with tempfile.TemporaryDirectory() as tempdir:

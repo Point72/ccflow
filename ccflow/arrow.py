@@ -7,9 +7,7 @@ from datetime import date, datetime, time
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import pyarrow as pa
-import pydantic
-from packaging import version
-from pydantic import Field, root_validator
+from pydantic import Field, root_validator, model_validator
 from typing_extensions import Literal  # For pydantic 1 compatibility on python 3.9
 
 from .base import BaseModel
@@ -54,15 +52,12 @@ class ArrowFilter(BaseModel):
         """Convert the filter back to a tuple"""
         return self.key, self.op, self.value
 
-    if version.parse(pydantic.__version__) >= version.parse("2"):
-        from pydantic import model_validator
-
-        @model_validator(mode="before")
-        def _validate_fields(cls, v, info):
-            if isinstance(v, (list, tuple)):
-                key, op, value = v
-                return dict(key=key, op=op, value=value)
-            return v
+    @model_validator(mode="before")
+    def _validate_fields(cls, v, info):
+        if isinstance(v, (list, tuple)):
+            key, op, value = v
+            return dict(key=key, op=op, value=value)
+        return v
 
 
 class ArrowDateFilter(ArrowFilter):
@@ -132,34 +127,20 @@ class ArrowSchemaModel(BaseModel):
     fields: Dict[str, PyArrowDatatype]
     metadata: Optional[Dict[bytes, bytes]] = None
 
-    if version.parse(pydantic.__version__) < version.parse("2"):
+    @model_validator(mode="before")
+    def _validate_fields(cls, values, info):
+        if isinstance(values, dict) and "fields" in values:
+            values["fields"] = dict(values["fields"])
+        return values
 
-        @classmethod
-        def validate(cls, v, field=None):
-            if isinstance(v, pa.Schema):
-                v = dict(
-                    fields={name: v.field(name).type for name in v.names},
-                    metadata=v.metadata,
-                )
-            return super(ArrowSchemaModel, cls).validate(v)
-
-    else:
-        from pydantic import model_validator
-
-        @model_validator(mode="before")
-        def _validate_fields(cls, values, info):
-            if isinstance(values, dict) and "fields" in values:
-                values["fields"] = dict(values["fields"])
-            return values
-
-        @model_validator(mode="wrap")
-        def _schema_validator(cls, v, handler, info):
-            if isinstance(v, pa.Schema):
-                v = dict(
-                    fields={name: v.field(name).type for name in v.names},
-                    metadata=v.metadata,
-                )
-            return handler(v)
+    @model_validator(mode="wrap")
+    def _schema_validator(cls, v, handler, info):
+        if isinstance(v, pa.Schema):
+            v = dict(
+                fields={name: v.field(name).type for name in v.names},
+                metadata=v.metadata,
+            )
+        return handler(v)
 
     @property
     def schema(self) -> pa.Schema:

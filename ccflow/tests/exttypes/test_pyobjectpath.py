@@ -2,7 +2,6 @@ from typing import Generic, TypeVar
 from unittest import TestCase
 
 from ccflow import PyObjectPath
-from ccflow.utils.pydantic1to2 import GenericModel
 
 
 class A:
@@ -12,7 +11,7 @@ class A:
 T = TypeVar("T")
 
 
-class B(GenericModel, Generic[T]):
+class B(Generic[T]):
     t: T
 
 

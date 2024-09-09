@@ -3,15 +3,10 @@
 from functools import cached_property
 from typing import Any, Type, get_origin
 
-import pydantic
-from packaging import version
 
-if version.parse(pydantic.__version__) < version.parse("2"):
-    from pydantic.utils import import_string
-else:
-    from pydantic import ImportString, TypeAdapter
+from pydantic import ImportString, TypeAdapter
 
-    import_string = TypeAdapter(ImportString).validate_python
+import_string = TypeAdapter(ImportString).validate_python
 
 
 class PyObjectPath(str):

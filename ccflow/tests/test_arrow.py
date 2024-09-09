@@ -4,9 +4,7 @@ from unittest import TestCase
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.fs as fs
-import pydantic
-from packaging import version
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from ccflow import (
     ArrowDateFilter,
@@ -20,7 +18,6 @@ from ccflow import (
     ArrowTemplateFilter,
     render_filters,
 )
-from ccflow.utils.pydantic1to2 import ValidationTypeError
 
 
 class TestArrowParquetOptions(TestCase):
@@ -105,11 +102,11 @@ class TestArrowParquetOptions(TestCase):
 
     def test_bad_schemamodel(self):
         # test validation errors on bad schemas
-        self.assertRaises(ValidationTypeError, ArrowSchemaModel, fields=[("str_field", True)])
-        self.assertRaises(ValidationTypeError, ArrowSchemaModel, fields={"str_field": 7})
-        self.assertRaises(ValidationTypeError, ArrowSchemaModel, fields=[("str_field", "foo")])
+        self.assertRaises(ValueError, ArrowSchemaModel, fields=[("str_field", True)])
+        self.assertRaises(ValueError, ArrowSchemaModel, fields={"str_field": 7})
+        self.assertRaises(ValueError, ArrowSchemaModel, fields=[("str_field", "foo")])
         self.assertRaises(
-            ValidationTypeError,
+            ValueError,
             ArrowSchemaModel,
             fields={"str_field": "pa.timestamp('foo')"},
         )
@@ -119,12 +116,7 @@ class TestArrowParquetOptions(TestCase):
             [pa.field("date", pa.date32()), pa.field("x", pa.float64())],
             metadata={"A": "b"},
         )
-        if version.parse(pydantic.__version__) < version.parse("2"):
-            model = ArrowSchemaModel.validate(s)
-        else:
-            from pydantic import TypeAdapter
-
-            model = TypeAdapter(ArrowSchemaModel).validate_python(s)
+        model = TypeAdapter(ArrowSchemaModel).validate_python(s)
 
         target = ArrowSchemaModel(fields={"date": pa.date32(), "x": pa.float64()}, metadata={"A": "b"})
         self.assertEqual(model, target)
@@ -205,12 +197,12 @@ class TestArrowSchemaTransform(TestCase):
             fields=self.bad_transform1,
         )
         self.assertRaises(
-            ValidationTypeError,
+            ValueError,
             ArrowSchemaTransformModel,
             fields=self.bad_transform2,
         )
         self.assertRaises(
-            ValidationTypeError,
+            ValueError,
             ArrowSchemaTransformModel,
             fields=self.bad_transform3,
         )

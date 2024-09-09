@@ -1,14 +1,11 @@
 import logging
 from typing import Dict, Generic, List, Optional
 
-import pydantic
-from packaging import version
 from pydantic import ValidationError, validator
 from typing_extensions import override
 
 from ..publisher import BasePublisher
 from ..utils import PydanticDictOptions, PydanticModelType, dict_to_model
-from ..utils.pydantic1to2 import GenericModel
 
 __all__ = ("CompositePublisher",)
 
@@ -17,7 +14,7 @@ log = logging.getLogger(__name__)
 ROOT_KEY = "__root__"  # Used even outside the context of pydantic version 1
 
 
-class CompositePublisher(BasePublisher, GenericModel, Generic[PydanticModelType]):
+class CompositePublisher(BasePublisher, Generic[PydanticModelType]):
     """Highly configurable, publisher that decomposes a pydantic BaseModel or a dictionary into pieces
     and publishes each piece separately."""
 
@@ -40,19 +37,10 @@ class CompositePublisher(BasePublisher, GenericModel, Generic[PydanticModelType]
     def _get_dict(self):
         if self.data is None:
             raise ValueError("'data' field must be set before publishing")
-        if version.parse(pydantic.__version__) < version.parse("2"):
-            # This bit of code below copied from PydanticBaseModel.json
-            # We don't directly call `self.dict()`, which does exactly this with `to_dict=True`
-            # because we want to be able to keep raw `BaseModel` instances and not as `dict`.
-            # This allows users to configure custom publishers for the sub-models.
-            data = dict(self.data._iter(to_dict=self.models_as_dict, **self.options.dict()))
-            if self.data.__custom_root_type__:
-                data = data[ROOT_KEY]
+        if self.models_as_dict:
+            data = self.data.model_dump(**self.options.model_dump())
         else:
-            if self.models_as_dict:
-                data = self.data.model_dump(**self.options.model_dump())
-            else:
-                data = dict(self.data)
+            data = dict(self.data)
         return data
 
     def _get_publishers(self, data):
