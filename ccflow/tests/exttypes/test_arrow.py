@@ -4,7 +4,7 @@ import pandas as pd
 import polars as pl
 import pyarrow as pa
 from packaging import version
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from ccflow import BaseModel
 from ccflow.exttypes.arrow import ArrowSchema, ArrowTable, PyArrowDatatype
@@ -39,7 +39,6 @@ class TestArrowSchema(TestCase):
 
         # You can't actually construct the schema type (because the schema is on the type, not the instance)
         self.assertRaises(TypeError, SCHEMA_WEAK)
-        self.assertRaises(ValueError, SCHEMA_WEAK.validate, SCHEMA_WEAK.schema)
 
 
 class TestArrowTable(TestCase):
@@ -175,9 +174,10 @@ class TestArrowTable(TestCase):
 class TestPyArrowDatatype(TestCase):
     def test_validate(self):
         # test validation logic to accpet pa.lib.DataType or a string representation of it
-        self.assertRaises(ValueError, PyArrowDatatype.validate, True)
-        self.assertRaises(ValueError, PyArrowDatatype.validate, "foo")
-        self.assertRaises(ValueError, PyArrowDatatype.validate, 7)
-        self.assertRaises(ValueError, PyArrowDatatype.validate, "pa.string")
-        self.assertIsInstance(PyArrowDatatype.validate("pa.string()"), PyArrowDatatype)
-        self.assertIsInstance(PyArrowDatatype.validate(pa.int32()), pa.lib.DataType)
+        ta = TypeAdapter(PyArrowDatatype)
+        self.assertRaises(ValueError, ta.validate_python, True)
+        self.assertRaises(ValueError, ta.validate_python, "foo")
+        self.assertRaises(ValueError, ta.validate_python, 7)
+        self.assertRaises(ValueError, ta.validate_python, "pa.string")
+        self.assertIsInstance(ta.validate_python("pa.string()"), PyArrowDatatype)
+        self.assertIsInstance(ta.validate_python(pa.int32()), pa.lib.DataType)

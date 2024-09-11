@@ -1,4 +1,5 @@
 from typing import Any, Generic, Type, TypeVar, Union
+from pydantic_core import core_schema
 
 import pandas as pd
 import pyarrow as pa
@@ -31,15 +32,7 @@ class ArrowSchema(type):
         def __init__(self, *args, **kwargs):
             raise TypeError(err_msg)
 
-        def __get_validators__(cls):
-            yield cls.validate
-
-        def validate(cls, v, field=None):
-            raise ValueError(err_msg)
-
         newclass.__init__ = __init__
-        newclass.__get_validators__ = classmethod(__get_validators__)
-        newclass.validate = classmethod(validate)
 
         return newclass
 
@@ -51,25 +44,7 @@ class ArrowTable(pa.Table, Generic[S]):
     """Pydantic compatible wrapper around Arrow tables, with optional schema validation."""
 
     @classmethod
-    def __get_validators__(cls):
-        """Validation for pydantic v1"""
-        yield cls.validate
-
-    @classmethod
-    def validate(cls, v, field):
-        if field.sub_fields:
-            schema = field.sub_fields[0].type_.schema
-            strict = field.sub_fields[0].type_.strict
-        else:
-            schema = None
-            strict = None
-        return cls._validate(v, schema, strict)
-
-    @classmethod
     def __get_pydantic_core_schema__(cls, source_type, handler):
-        """Validation for pydantic v2"""
-        from pydantic_core import core_schema
-
         def _validate(v):
             subtypes = get_args(source_type)
             if subtypes:
@@ -123,18 +98,11 @@ class PyArrowDatatype(str):
             raise ValueError(f"ensure this value contains a valid PyarrowDatatype string: {e}")
 
     @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
-
-    @classmethod
     def __get_pydantic_core_schema__(cls, source_type, handler):
-        """Validation for pydantic v2"""
-        from pydantic_core import core_schema
-
-        return core_schema.no_info_plain_validator_function(cls.validate)
+        return core_schema.no_info_plain_validator_function(cls._validate)
 
     @classmethod
-    def validate(cls, value, field=None) -> Any:
+    def _validate(cls, value) -> Any:
         if isinstance(value, pa.lib.DataType):
             return value
 

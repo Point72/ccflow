@@ -3,6 +3,7 @@
 from typing import Any
 
 import jinja2
+from pydantic_core import core_schema
 
 
 class JinjaTemplate(str):
@@ -14,11 +15,11 @@ class JinjaTemplate(str):
         return jinja2.Template(str(self))
 
     @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
+    def __get_pydantic_core_schema__(cls, source_type, handler):
+        return core_schema.no_info_plain_validator_function(cls._validate)
 
     @classmethod
-    def validate(cls, value, field=None) -> Any:
+    def _validate(cls, value) -> Any:
         if isinstance(value, JinjaTemplate):
             return value
 

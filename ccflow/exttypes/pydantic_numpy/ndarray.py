@@ -55,10 +55,6 @@ class _CommonNDArray(ABC):
     @abstractmethod
     def validate(cls, val: Any, field) -> nd_array_type: ...
 
-    @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
-
     @staticmethod
     def _validate(val: Any, dtype=None) -> nd_array_type:
         if isinstance(val, Mapping):
@@ -116,7 +112,6 @@ class _CommonNDArray(ABC):
 
     @classmethod
     def __get_pydantic_core_schema__(cls, source_type, handler):
-        """Validation for pydantic v2"""
         from pydantic_core import core_schema
 
         return core_schema.no_info_before_validator_function(

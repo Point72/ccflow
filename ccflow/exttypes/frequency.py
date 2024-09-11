@@ -7,6 +7,7 @@ from typing import Any, Type
 
 import pandas as pd
 from pandas.tseries.frequencies import to_offset
+from pydantic_core import core_schema
 
 
 class Frequency(str):
@@ -24,13 +25,13 @@ class Frequency(str):
         return pd.to_timedelta(self.offset).to_pytimedelta()
 
     @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
+    def __get_pydantic_core_schema__(cls, source_type, handler):
+        return core_schema.no_info_plain_validator_function(cls._validate)
 
     @classmethod
-    def validate(cls, value, field=None) -> Any:
+    def _validate(cls, value) -> Any:
         if isinstance(value, cls):
-            return cls.validate(str(value))
+            return cls._validate(str(value))
 
         if isinstance(value, (timedelta, str)):
             try:

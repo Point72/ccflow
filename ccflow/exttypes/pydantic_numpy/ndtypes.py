@@ -89,7 +89,6 @@ class _BaseDType:
 
     @classmethod
     def __get_pydantic_core_schema__(cls, source_type, handler):
-        """Validation for pydantic v2"""
         from pydantic_core import core_schema
 
         def _validate(val):

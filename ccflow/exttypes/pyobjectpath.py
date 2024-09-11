@@ -4,6 +4,7 @@ from functools import cached_property
 from typing import Any, Type, get_origin
 
 
+from pydantic_core import core_schema
 from pydantic import ImportString, TypeAdapter
 
 import_string = TypeAdapter(ImportString).validate_python
@@ -28,11 +29,11 @@ class PyObjectPath(str):
         return import_string(str(self))
 
     @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
+    def __get_pydantic_core_schema__(cls, source_type, handler):
+        return core_schema.no_info_plain_validator_function(cls.validate)
 
     @classmethod
-    def validate(cls, value: Any, field=None) -> Any:
+    def validate(cls, value: Any) -> Any:
         if isinstance(value, PyObjectPath):
             return value
 

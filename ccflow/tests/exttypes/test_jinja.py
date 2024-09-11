@@ -1,5 +1,6 @@
 from unittest import TestCase
 
+from pydantic import TypeAdapter
 from ccflow.exttypes.jinja import JinjaTemplate
 
 
@@ -8,11 +9,11 @@ class TestJinjaTemplate(TestCase):
         v = "My {{foo|lower}}"
         t = JinjaTemplate(v)
         self.assertEqual(t.template.render(foo="FOO"), "My foo")
-        self.assertEqual(JinjaTemplate.validate(v), t)
+        self.assertEqual(TypeAdapter(JinjaTemplate).validate_python(v), t)
 
     def test_bad(self):
         v = "My {{"
-        self.assertRaises(ValueError, JinjaTemplate.validate, v)
+        self.assertRaises(ValueError, TypeAdapter(JinjaTemplate).validate_python, v)
 
     def test_deepcopy(self):
         # Pydantic models sometimes require deep copy, and this can pose problems

@@ -23,11 +23,7 @@ from ..serialization import make_ndarray_orjson_valid, orjson_dumps
 class GenericPandasWrapper(ABC):
     @classmethod
     @abstractmethod
-    def validate(cls, val: Any, field) -> Any: ...
-
-    @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
+    def validate(cls, val: Any) -> Any: ...
 
     @classmethod
     @abstractmethod
@@ -37,7 +33,6 @@ class GenericPandasWrapper(ABC):
 
     @classmethod
     def __get_pydantic_core_schema__(cls, source_type, handler):
-        """Validation for pydantic v2"""
         from pydantic_core import core_schema
 
         return core_schema.no_info_before_validator_function(
@@ -53,20 +48,8 @@ class GenericPandasWrapper(ABC):
 
 
 class SeriesWrapper(pd.Series, GenericPandasWrapper):
-    # @property
-    # def _constructor(self):
-    #     return SeriesWrapper
-
-    # @property
-    # def _constructor_expanddim(self):
-    #     return DataFrameWrapper
-
     @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
-
-    @classmethod
-    def validate(cls, v, field=None):
+    def validate(cls, v):
         if isinstance(v, cls):
             return v
 
@@ -108,20 +91,8 @@ class DataFrameWrapper(pd.DataFrame, GenericPandasWrapper):
     without needing to enable arbitrary_types_allowed.
     """
 
-    # @property
-    # def _constructor(self):
-    #     return DataFrameWrapper
-
-    # @property
-    # def _constructor_sliced(self):
-    #     return SeriesWrapper
-
     @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
-
-    @classmethod
-    def validate(cls, v, field=None):
+    def validate(cls, v):
         if isinstance(v, cls):
             return v
 
