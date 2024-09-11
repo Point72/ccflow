@@ -76,14 +76,14 @@ class TestBaseModel(TestCase):
 
     def test_dict(self):
         m = MyTestModel(a="foo", b=0.0)
-        self.assertEqual(m.parse_obj(m.dict(by_alias=False)), m)
-        self.assertEqual(m.parse_obj(m.dict(by_alias=True)), m)
+        self.assertEqual(m.model_validate(m.model_dump(by_alias=False)), m)
+        self.assertEqual(m.model_validate(m.model_dump(by_alias=True)), m)
 
         # Make sure parsing doesn't impact original dict (i.e. by popping element out of it)
-        d = m.dict(by_alias=False)
-        self.assertEqual(m.parse_obj(d).dict(by_alias=False), d)
-        d = m.dict(by_alias=True)
-        self.assertEqual(m.parse_obj(d).dict(by_alias=True), d)
+        d = m.model_dump(by_alias=False)
+        self.assertEqual(m.model_validate(d).model_dump(by_alias=False), d)
+        d = m.model_dump(by_alias=True)
+        self.assertEqual(m.model_validate(d).model_dump(by_alias=True), d)
 
     def test_coerce_from_other_type(self):
         # This test would have broken when we originally turned on extra field validation,

@@ -5,7 +5,6 @@ from datetime import date
 from pathlib import Path
 from unittest import TestCase
 
-import numpy as np
 import pandas as pd
 from pydantic import BaseModel as PydanticBaseModel
 
@@ -24,9 +23,6 @@ class MyTestModel(PydanticBaseModel):
     foo: int
     bar: date
     baz: NDArray[float]
-
-    class Config:
-        json_encoders = {np.ndarray: lambda arr: arr.tolist()}
 
 
 class TestFilePublishers(TestCase):

@@ -112,7 +112,7 @@ def tokenize_bar(t):
 def cache_key(flow_obj: Union[ModelEvaluationContext, ContextBase, CallableModel]) -> bytes:
     """Returns a key suitable for use in caching"""
     if isinstance(flow_obj, (ModelEvaluationContext, ContextBase, CallableModel)):
-        return dask.base.tokenize(flow_obj.dict()).encode("utf-8")
+        return dask.base.tokenize(flow_obj.model_dump(mode="python")).encode("utf-8")
     else:
         raise TypeError(f"object of type {type(flow_obj)} cannot be serialized by this function!")
 

@@ -188,7 +188,7 @@ class TestCallableModel(TestCase):
         self.assertEqual(m(MyContext(a="foo")), MyResult(x=5, y="foo"))
         self.assertEqual(m.context_type, MyContext)
         self.assertEqual(m.result_type, MyResult)
-        out = m.dict()
+        out = m.model_dump(mode="python")
         self.assertIn("meta", out)
         self.assertIn("i", out)
         self.assertIn("type_", out)

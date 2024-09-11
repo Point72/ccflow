@@ -37,7 +37,7 @@ class ObjectConfig(BaseModel):  # TODO: Generic model version for type checking
             # Uplift extra fields into object_kwargs
             obj_kwargs = values.get("object_kwargs", {})
             for field in list(values):
-                if field not in cls.__fields__:
+                if field not in cls.model_fields:
                     obj_kwargs[field] = values.pop(field)
             values["object_kwargs"] = obj_kwargs
         return handler(values)

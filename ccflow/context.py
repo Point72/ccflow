@@ -5,7 +5,7 @@ defined in flow.callable.py.
 from datetime import date, datetime
 from typing import Optional
 
-from pydantic import validator, model_validator
+from pydantic import field_validator, model_validator
 
 from .base import ContextBase
 from .exttypes import Frequency
@@ -56,7 +56,7 @@ class DateContext(ContextBase):
     date: date
 
     # validators
-    _normalize_date = validator("date", allow_reuse=True, pre=True)(normalize_date)
+    _normalize_date = field_validator("date", mode="before")(normalize_date)
 
     @model_validator(mode="wrap")
     def _date_context_validator(cls, v, handler, info):
@@ -80,8 +80,8 @@ class DateRangeContext(ContextBase):
     start_date: date
     end_date: date
 
-    _normalize_start = validator("start_date", allow_reuse=True, pre=True)(normalize_date)
-    _normalize_end = validator("end_date", allow_reuse=True, pre=True)(normalize_date)
+    _normalize_start = field_validator("start_date", mode="before")(normalize_date)
+    _normalize_end = field_validator("end_date", mode="before")(normalize_date)
 
 
 class SeededDateRangeContext(DateRangeContext):

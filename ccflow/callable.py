@@ -18,7 +18,7 @@ from inspect import Signature, isclass, signature
 from typing import Any, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar
 
 from pydantic import BaseModel as PydanticBaseModel
-from pydantic import Field, PrivateAttr, model_validator, root_validator, validator
+from pydantic import Field, PrivateAttr, model_validator, field_validator, root_validator
 from typing_extensions import override
 
 from .base import ContextType  # noqa: F401
@@ -196,7 +196,7 @@ class FlowOptions(BaseModel):
     )
     evaluator: Optional["EvaluatorBase"] = Field(None, description="A hook to set a custom evaluator")
     _deps: bool = PrivateAttr(False)
-    _parse_log_level = validator("log_level", allow_reuse=True, pre=True)(str_to_log_level)
+    _parse_log_level = field_validator("log_level", mode="before")(str_to_log_level)
 
     def get_options(self, model: CallableModelType):
         """Gets the options with overrides applied."""
@@ -235,7 +235,7 @@ class FlowOptions(BaseModel):
             # Record the options that are used, in case the evaluators want to use it,
             # but exclude the evaluator itself to avoid potential circular dependencies
             # or other difficulties with serialization/caching of the options
-            options = FlowOptionsOverride.get_options(model, self).dict(exclude={"evaluator"}, exclude_unset=True)
+            options = FlowOptionsOverride.get_options(model, self).model_dump(mode="python", exclude={"evaluator"}, exclude_unset=True)
             if fn != getattr(model.__class__, fn.__name__).__wrapped__:
                 # This happens when super().__call__ is used when implementing a CallableModel that derives from another one.
                 # In this case, we don't apply the decorator again, we just call the function on the model and context.
@@ -265,7 +265,7 @@ class FlowOptions(BaseModel):
         # Used for building a graph of model evaluation contexts without evaluating
         def get_evaluation_context(model: CallableModelType, context: ContextType):
             # TODO: This logic is duplicative of the logic in wrapper - combine into a single place
-            options = FlowOptionsOverride.get_options(model, self).dict(exclude={"evaluator"}, exclude_unset=True)
+            options = FlowOptionsOverride.get_options(model, self).model_dump(mode="python", exclude={"evaluator"}, exclude_unset=True)
             evaluation_context = ModelEvaluationContext(model=model, context=context, fn=fn.__name__, options=options)
             evaluator = self.get_evaluator(model)
             return ModelEvaluationContext(model=evaluator, context=evaluation_context)
@@ -295,12 +295,7 @@ class FlowOptionsOverride(BaseModel):
 
     @classmethod
     def _apply_options(cls, old: FlowOptions, new: FlowOptions) -> FlowOptions:
-        return old.copy(update=dict(new._iter(to_dict=False, exclude_unset=True)))
-        # new = old.copy(update=dict(new._iter(to_dict=False, exclude_unset=True)))
-        # from .evaluators import combine_evaluators
-        #
-        # new.evaluator = combine_evaluators(new.evaluator, old.evaluator)
-        # return new
+        return old.model_copy(update={f: v for f, v in new if f in new.model_fields_set})
 
     @classmethod
     def get_options(cls, model: CallableModelType, model_options: Optional[FlowOptions] = None) -> FlowOptions:

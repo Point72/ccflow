@@ -113,13 +113,13 @@ def test_model_with_wrappers(ModelClass):
         assert model.df.equals(my_df * 3)
 
         # Object serialization
-        serialized = model.dict()
-        deserialized = type(model).parse_obj(serialized)
+        serialized = model.model_dump(mode="python")
+        deserialized = type(model).model_validate(serialized)
         assert model == deserialized
 
         # JSON serialization
-        serialized = model.json()
-        deserialized = type(model).parse_raw(serialized)
+        serialized = model.model_dump_json()
+        deserialized = type(model).model_validate_json(serialized)
         for field, value in model:
             other_value = getattr(deserialized, field)
             if isinstance(other_value, pd.Series):

@@ -10,6 +10,7 @@ https://pandas.pydata.org/pandas-docs/stable/development/extending.html#extendin
 """
 
 from abc import ABC, abstractmethod
+from io import StringIO
 from typing import Any, Union
 
 import numpy as np
@@ -142,7 +143,7 @@ class DataFrameWrapper(pd.DataFrame, GenericPandasWrapper):
     @classmethod
     def decode(cls, x: Union[str, dict]) -> "DataFrameWrapper":
         if isinstance(x, str):
-            return cls(pd.read_json(x, orient="table"))
+            return cls(pd.read_json(StringIO(x), orient="table"))
         return cls(pd.DataFrame.from_dict(x))
 
 

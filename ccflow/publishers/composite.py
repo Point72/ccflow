@@ -1,7 +1,7 @@
 import logging
 from typing import Dict, Generic, List, Optional
 
-from pydantic import ValidationError, validator
+from pydantic import ValidationError, field_validator
 from typing_extensions import override
 
 from ..publisher import BasePublisher
@@ -32,7 +32,7 @@ class CompositePublisher(BasePublisher, Generic[PydanticModelType]):
     # Options for iterating through the pydantic model.
     options: PydanticDictOptions = PydanticDictOptions()
 
-    _normalize_data = validator("data", pre=True, allow_reuse=True)(dict_to_model)
+    _normalize_data = field_validator("data", mode="before")(dict_to_model)
 
     def _get_dict(self):
         if self.data is None:
@@ -53,7 +53,7 @@ class CompositePublisher(BasePublisher, Generic[PydanticModelType]):
                 for try_publisher in self.default_publishers:
                     try:
                         try_publisher.data = value
-                        publishers[field] = try_publisher.copy()
+                        publishers[field] = try_publisher.model_copy()
                         publishers[field].name = full_name
                         publishers[field].name_params = self.name_params
                         break
@@ -71,14 +71,14 @@ class CompositePublisher(BasePublisher, Generic[PydanticModelType]):
                 # User should provide the right type of publisher for a given field.
                 publisher.data = value
                 if not publisher.name:
-                    publisher = publisher.copy()
+                    publisher = publisher.model_copy()
                     publisher.name = full_name
                     publisher.name_params = self.name_params
                 publishers[field] = publisher
         return publishers
 
     def _get_root_publisher(self, data, publishers):
-        root_publisher = self.root_publisher.copy(deep=True)
+        root_publisher = self.root_publisher.model_copy(deep=True)
         if not root_publisher.name:
             root_publisher.name = self.name or ROOT_KEY
             root_publisher.name_params = self.name_params

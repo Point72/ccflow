@@ -6,16 +6,12 @@ import pathlib
 from types import MappingProxyType
 from typing import Any, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar, get_args, get_origin
 
-import pandas as pd
 from omegaconf import DictConfig
 from pydantic import BaseModel as PydanticBaseModel
-from pydantic import PrivateAttr, ValidationError, root_validator, validator
+from pydantic import PrivateAttr, ValidationError, TypeAdapter, field_validator, model_validator
 from pydantic.fields import Field
 
-from .exttypes.pandas import GenericPandasWrapper
 from .exttypes.pyobjectpath import PyObjectPath
-from .serialization import make_ndarray_orjson_valid
-from pydantic import TypeAdapter, model_validator
 import inspect
 
 from pydantic import SerializeAsAny, computed_field, model_serializer
@@ -154,10 +150,6 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
         # where the default behavior is just to drop the mis-named value. This prevents that
         extra = "forbid"
         ser_json_timedelta = "float"
-        json_encoders = {
-            GenericPandasWrapper: lambda x: type(x).encode(x),
-            pd.Index: lambda x: make_ndarray_orjson_valid(x.to_numpy()),
-        }
 
     def __str__(self):
         # Because the standard string representation does not include class name
@@ -311,7 +303,7 @@ class ModelRegistry(BaseModel):
         for name, model in models.items():
             self.add(name, model)
 
-    @validator("name")
+    @field_validator("name")
     def _validate_name(cls, v):
         if not v:
             raise ValueError("name must be non-empty")
@@ -485,8 +477,8 @@ class RootModelRegistry(ModelRegistry):
 
     name: str = Field("", repr=False)
 
-    @root_validator(pre=True, skip_on_failure=True)
-    def _root_validate(cls, v):
+    @model_validator(mode="before")
+    def _root_validate(cls, v, info):
         raise ValueError("You are not allowed to construct the RootModelRegistry directly. Use ModelRegistry.root().")
 
     @property
@@ -495,7 +487,7 @@ class RootModelRegistry(ModelRegistry):
         return "RootModelRegistry"
 
 
-_REGISTRY_ROOT = RootModelRegistry.construct()
+_REGISTRY_ROOT = RootModelRegistry.model_construct()
 
 
 class _ModelRegistryLoader:

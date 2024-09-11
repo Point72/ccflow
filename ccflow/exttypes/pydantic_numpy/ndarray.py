@@ -30,7 +30,7 @@ from typing import Any, Generic, Mapping, Optional, TypeVar
 
 import numpy as np
 from numpy.lib import NumpyVersion
-from pydantic import BaseModel, FilePath, validator
+from pydantic import BaseModel, FilePath, field_validator
 from typing_extensions import get_args
 
 T = TypeVar("T", bound=np.generic)
@@ -45,7 +45,7 @@ class NPFileDesc(BaseModel):
     path: FilePath
     key: Optional[str] = None
 
-    @validator("path")
+    @field_validator("path")
     def absolute(cls, value: Path) -> Path:
         return value.resolve().absolute()
 

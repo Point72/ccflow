@@ -7,7 +7,7 @@ from datetime import date, datetime, time
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import pyarrow as pa
-from pydantic import Field, root_validator, model_validator
+from pydantic import Field, model_validator, root_validator
 from typing_extensions import Literal  # For pydantic 1 compatibility on python 3.9
 
 from .base import BaseModel

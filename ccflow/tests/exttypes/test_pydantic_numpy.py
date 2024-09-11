@@ -31,15 +31,12 @@ import pytest
 from numpy.testing import assert_allclose
 from pydantic import BaseModel, ValidationError
 
-from ccflow import NDArray, PotentialNDArray, float32, orjson_dumps
+from ccflow import NDArray, PotentialNDArray, float32
 from ccflow.exttypes.pydantic_numpy.ndarray import NPFileDesc
 
 
 class MySettings(BaseModel):
     K: NDArray[float32]
-
-    class Config:
-        json_dumps = orjson_dumps
 
 
 def test_init_from_values():
@@ -47,7 +44,7 @@ def test_init_from_values():
     cfg = MySettings(K=[1, 2])
     assert_allclose(cfg.K, [1.0, 2.0])
     assert cfg.K.dtype == np.float32
-    assert cfg.json()
+    assert cfg.model_dump_json()
 
     cfg = MySettings(K=np.eye(2))
     assert_allclose(cfg.K, [[1.0, 0], [0.0, 1.0]])
@@ -107,11 +104,8 @@ def test_json_encoders():
     class MySettingsNoGeneric(BaseModel):
         K: NDArray
 
-        class Config:
-            json_dumps = orjson_dumps
-
     cfg = MySettingsNoGeneric(K=[1, 2])
-    jdata = orjson.loads(cfg.json())
+    jdata = orjson.loads(cfg.model_dump_json())
 
     assert "K" in jdata
     assert isinstance(jdata["K"], list)
@@ -153,21 +147,15 @@ def test_subclass_basemodel():
     class MyModelField(BaseModel):
         K: NDArray[float32]
 
-        class Config:
-            json_dumps = orjson_dumps
-
     class MyModel(BaseModel):
         L: Dict[str, MyModelField]
 
-        class Config:
-            json_dumps = orjson_dumps
-
     model_field = MyModelField(K=[1.0, 2.0])
-    assert model_field.json()
+    assert model_field.model_dump_json()
 
     model = MyModel(L={"a": MyModelField(K=[1.0, 2.0])})
     assert model.L["a"].K.dtype == np.dtype("float32")
-    assert model.json()
+    assert model.model_dump_json()
 
 
 # We have added the tests below
@@ -181,8 +169,5 @@ def test_default_value():
     class MyModelField(BaseModel):
         K: NDArray[float32] = Field(default_factory=lambda: np.array([1.0, 2.0]))
 
-        class Config:
-            json_dumps = orjson_dumps
-
     model_field = MyModelField()
-    assert model_field.json()
+    assert model_field.model_dump_json()

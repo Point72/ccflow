@@ -4,7 +4,7 @@ defined in flow.callable.py.
 
 import pandas as pd
 import pyarrow as pa
-from pydantic import Field, root_validator, validator
+from pydantic import Field, model_validator, field_validator
 
 from ..base import ResultBase
 from ..context import DateRangeContext
@@ -19,7 +19,7 @@ __all__ = (
 class ArrowResult(ResultBase):
     table: ArrowTable
 
-    @validator("table", pre=True)
+    @field_validator("table", mode="before")
     def _from_pandas(cls, v):
         if isinstance(v, pd.DataFrame):
             return pa.Table.from_pandas(v)
@@ -42,23 +42,23 @@ class ArrowDateRangeResult(ArrowResult):
         description="The context that generated the result. Validation will check that all the dates in the date_col are within the context range."
     )
 
-    @root_validator(skip_on_failure=True)
-    def _validate_date_col(cls, values):
+    @model_validator(mode="after")
+    def _validate_date_col(self):
         import pyarrow.compute
 
-        if values["date_col"] not in values["table"].column_names:
+        if self.date_col not in self.table.column_names:
             raise ValueError("date_col must be a column in table")
-        col_type = values["table"].schema.field(values["date_col"]).type
+        col_type = self.table.schema.field(self.date_col).type
         if not pa.types.is_date(col_type):
             raise TypeError(f"date_col must be of date type, not {col_type}")
-        dates = values["table"][values["date_col"]]
+        dates = self.table[self.date_col]
         if len(dates):
             min_date = pyarrow.compute.min(dates).as_py()
             max_date = pyarrow.compute.max(dates).as_py()
-            start_date = values["context"].start_date
-            end_date = values["context"].end_date
+            start_date = self.context.start_date
+            end_date = self.context.end_date
             if min_date < start_date:
                 raise ValueError(f"The min date value ({min_date}) is smaller than the start date of the context ({start_date})")
             if max_date > end_date:
                 raise ValueError(f"The max date value ({max_date}) is smaller than the end date of the context ({end_date})")
-        return values
+        return self

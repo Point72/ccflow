@@ -55,7 +55,7 @@ def models_to_pandas(
     """
     if isinstance(models, PydanticBaseModel):
         models = [models]
-    data = [model.dict(**options.dict()) for model in models]
+    data = [model.model_dump(**options.model_dump(mode="python")) for model in models]
     return pd.json_normalize(data, **kwargs)
 
 

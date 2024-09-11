@@ -106,7 +106,7 @@ class TestRegistry(TestCase):
                 }
             },
         }
-        self.assertDictEqual(r.dict(by_alias=True), target)
+        self.assertDictEqual(r.model_dump(by_alias=True), target)
 
         # Test round-trip
         r2 = ModelRegistry(name="test")
@@ -121,7 +121,7 @@ class TestRegistry(TestCase):
             '"models": {"foo": {"_target_": "ccflow.tests.test_base_registry.MyTestModel", '
             '"a": "test", "b": 0.0, "c": [], "d": {}}}}'
         )
-        self.assertEqual(json.loads(r.json(by_alias=True)), json.loads(target))
+        self.assertEqual(json.loads(r.model_dump_json(by_alias=True)), json.loads(target))
 
     def test_equality(self):
         # Make sure equality doesn't pass just because two registries have the same name
@@ -299,7 +299,7 @@ class TestRegistryLoading(TestCase):
         r = ModelRegistry(name="test")
         r.load_config(cfg)
         # Can't do r.dict because of private _models. Need to fix
-        cfg2 = {name: model.dict(by_alias=True) for name, model in r.models.items()}
+        cfg2 = {name: model.model_dump(by_alias=True) for name, model in r.models.items()}
         # print(cfg2)
         # return
         r2 = ModelRegistry(name="test")
@@ -338,7 +338,7 @@ class TestRegistryLoading(TestCase):
         r = ModelRegistry.root()
         r.load_config_from_path(path)
 
-        cfg2 = {name: model.dict(by_alias=True) for name, model in r.models.items()}
+        cfg2 = {name: model.model_dump(by_alias=True) for name, model in r.models.items()}
         r2 = ModelRegistry(name="replica")
         r2.load_config(cfg2)
         self.assertEqual(r.models, r2.models)
@@ -383,7 +383,7 @@ class TestRegistryLoading(TestCase):
         r.load_config_from_path(path)
 
         # cfg2 = {name: model.dict(by_alias=True) for name, model in r.models.items()}
-        cfg2 = r.dict(by_alias=True)
+        cfg2 = r.model_dump(by_alias=True)
         self.assertIn("_target_", cfg2)
         r2 = ModelRegistry(name="replica")
         r2.load_config(cfg2["models"])

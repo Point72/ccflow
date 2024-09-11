@@ -39,7 +39,6 @@ class B(A):
 
     class Config:
         arbitrary_types_allowed = True
-        json_encoders = {ArbitraryType: lambda x: x.x}
 
 
 class C(BaseModel):
@@ -105,13 +104,13 @@ class TestBaseModelSerialization(unittest.TestCase):
         if equality_check is None:
             equality_check = self.assertEqual
         # Object serialization
-        serialized = model.dict()
-        deserialized = type(model).parse_obj(serialized)
+        serialized = model.model_dump(mode="python")
+        deserialized = type(model).model_validate(serialized)
         equality_check(model, deserialized)
 
         # JSON serialization
-        serialized = model.json()
-        deserialized = type(model).parse_raw(serialized)
+        serialized = model.model_dump_json()
+        deserialized = type(model).model_validate_json(serialized)
         equality_check(model, deserialized)
 
     def test_make_ndarray_orjson_valid(self):
@@ -150,7 +149,7 @@ class TestBaseModelSerialization(unittest.TestCase):
 
     def test_from_str_serialization(self):
         serialized = '{"_target_": "ccflow.tests.test_base_serialize.ChildModel", ' '"field1": 9, "field2": 4}'
-        deserialized = BaseModel.parse_raw(serialized)
+        deserialized = BaseModel.model_validate_json(serialized)
         self.assertEqual(deserialized, ChildModel(field1=9, field2=4))
 
     def test_numpy_serialize(self):

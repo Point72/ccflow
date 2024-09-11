@@ -27,7 +27,7 @@ class TestPolarsExpression(TestCase):
         )
         expected_result = pl.col("Col1") + (scipy.linalg.det(np.eye(2, dtype=int)) - 1) * math.pi * pl.col("Col2") + pl.col("Col2")
 
-        self.assertEquals(
+        self.assertEqual(
             PolarsExpression.validate(expression).meta.serialize(),
             expected_result.meta.serialize(),
         )

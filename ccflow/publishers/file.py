@@ -4,7 +4,7 @@ from typing import IO, Any, Callable, Dict, Generic
 import pandas as pd
 import yaml
 from cloudpathlib import AnyPath
-from pydantic import Field, validator
+from pydantic import Field, field_validator
 from typing_extensions import Literal, override
 
 from ..exttypes import JinjaTemplate
@@ -140,16 +140,16 @@ class PydanticJSONPublisher(BasePublisher, Generic[PydanticModelType]):
     options: PydanticDictOptions = Field(default_factory=PydanticDictOptions)
     kwargs: Dict[str, Any] = Field(default_factory=dict)
 
-    _normalize_data = validator("data", pre=True, allow_reuse=True)(dict_to_model)
+    _normalize_data = field_validator("data", mode="before")(dict_to_model)
 
     @classmethod
     def dump(cls, data, file, **kwargs):
-        out = data.json(**kwargs)
+        out = data.model_dump_json(**kwargs)
         file.write(out)
 
     @override
     def __call__(self) -> AnyPath:
-        kwargs = self.options.dict()
+        kwargs = self.options.model_dump(mode="python")
         kwargs.update(self.kwargs)
         return GenericFilePublisher(
             name=self.name,
