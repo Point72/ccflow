@@ -198,7 +198,7 @@ class TestRegistry(TestCase):
         m = MyTestModel(a="test", b=0.0)
         r = ModelRegistry.root()
         r.add("foo", m)
-        self.assertEqual(BaseModel.validate("foo"), m)
+        self.assertEqual(BaseModel.model_validate("foo"), m)
 
         m2 = MyNestedModel(x="foo", y=MyTestModel(a="test2", b=1.0))
         self.assertEqual(m2.x, m)
@@ -537,29 +537,29 @@ class TestRegistryLookupContext(TestCase):
         r.add("foo", r2)
 
         # Does not work in the base context
-        self.assertRaises((KeyError, ValueError), BaseModel.validate, "baz")
+        self.assertRaises((KeyError, ValueError), BaseModel.model_validate, "baz")
 
         # Add m2 to root
         r.add("baz", m2)
         # All of below work in root context
-        self.assertIs(BaseModel.validate("baz"), m2)
-        self.assertIs(BaseModel.validate("baz"), m2)
-        self.assertIs(BaseModel.validate("./baz"), m2)  # From root
+        self.assertIs(BaseModel.model_validate("baz"), m2)
+        self.assertIs(BaseModel.model_validate("baz"), m2)
+        self.assertIs(BaseModel.model_validate("./baz"), m2)  # From root
 
         # Validation works in the context where "registry" is foo/bar
         with RegistryLookupContext([r3]):
-            self.assertIs(BaseModel.validate("baz"), m)
-            self.assertIs(BaseModel.validate("./baz"), m)
+            self.assertIs(BaseModel.model_validate("baz"), m)
+            self.assertIs(BaseModel.model_validate("./baz"), m)
 
         # Also works in nested contexts
         with RegistryLookupContext([r2, r3]):
-            self.assertIs(BaseModel.validate("baz"), m)
+            self.assertIs(BaseModel.model_validate("baz"), m)
 
         with RegistryLookupContext([r2]):
-            self.assertIs(BaseModel.validate("bar"), r3)
+            self.assertIs(BaseModel.model_validate("bar"), r3)
         with RegistryLookupContext([r2, r3]):
-            self.assertIs(BaseModel.validate("../bar"), r3)
+            self.assertIs(BaseModel.model_validate("../bar"), r3)
         with RegistryLookupContext([r2, r3, r]):
-            self.assertIs(BaseModel.validate("../baz"), m)
-            self.assertIs(BaseModel.validate("foo"), r2)
-            self.assertIs(BaseModel.validate("./foo/bar/baz"), m)
+            self.assertIs(BaseModel.model_validate("../baz"), m)
+            self.assertIs(BaseModel.model_validate("foo"), r2)
+            self.assertIs(BaseModel.model_validate("./foo/bar/baz"), m)

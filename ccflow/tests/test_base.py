@@ -91,9 +91,9 @@ class TestBaseModel(TestCase):
         # to take dict(ModelA(x="foo")), which contains the "type_" field, which is considered as
         # an "extra" field due to the aliasing, which then causes a failure.
         # It was fixed by popping this out in the pre-root validation.
-        self.assertEqual(ModelB.validate(ModelA(x="foo")), ModelB(x="foo"))
+        self.assertEqual(ModelB.model_validate(ModelA(x="foo")), ModelB(x="foo"))
 
-        self.assertRaises(ValidationError, ModelA.validate, ModelC(x="foo", y="bar"))
+        self.assertRaises(ValidationError, ModelA.model_validate, ModelC(x="foo", y="bar"))
 
     def test_type_after_assignment(self):
         # This test catches an original bug where the type_ validator didn't originally return
@@ -107,11 +107,11 @@ class TestBaseModel(TestCase):
         self.assertEqual(m.type_, path)
 
     def test_validate(self):
-        self.assertEqual(ModelA.validate({"x": "foo"}), ModelA(x="foo"))
+        self.assertEqual(ModelA.model_validate({"x": "foo"}), ModelA(x="foo"))
         type_ = "ccflow.tests.test_base.ModelA"
-        self.assertEqual(ModelA.validate({"_target_": type_, "x": "foo"}), ModelA(x="foo"))
-        self.assertEqual(BaseModel.validate({"_target_": type_, "x": "foo"}), ModelA(x="foo"))
-        self.assertEqual(BaseModel.validate(ModelA(x="foo")), ModelA(x="foo"))
+        self.assertEqual(ModelA.model_validate({"_target_": type_, "x": "foo"}), ModelA(x="foo"))
+        self.assertEqual(BaseModel.model_validate({"_target_": type_, "x": "foo"}), ModelA(x="foo"))
+        self.assertEqual(BaseModel.model_validate(ModelA(x="foo")), ModelA(x="foo"))
 
     def test_widget(self):
         obj = object()

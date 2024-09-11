@@ -41,7 +41,7 @@ class GenericPandasWrapper(ABC):
             serialization=core_schema.wrap_serializer_function_ser_schema(
                 cls.encode,
                 info_arg=False,
-                return_schema=core_schema.list_schema(),
+                return_schema=core_schema.str_schema(),
                 when_used="json",
             ),
         )

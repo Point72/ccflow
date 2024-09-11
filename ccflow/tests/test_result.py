@@ -16,20 +16,20 @@ class TestGenericResult(TestCase):
     def test_generic(self):
         v = {"a": 1, "b": [2, 3]}
         result = GenericResult(value=v)
-        self.assertEqual(GenericResult.validate(v), result)
-        self.assertIs(GenericResult.validate(result), result)
+        self.assertEqual(GenericResult.model_validate(v), result)
+        self.assertIs(GenericResult.model_validate(result), result)
 
         v = {"value": 5}
-        self.assertEqual(GenericResult.validate(v), GenericResult(value=5))
-        self.assertEqual(GenericResult[int].validate(v), GenericResult[int](value=5))
-        self.assertEqual(GenericResult[str].validate(v), GenericResult[str](value="5"))
+        self.assertEqual(GenericResult.model_validate(v), GenericResult(value=5))
+        self.assertEqual(GenericResult[int].model_validate(v), GenericResult[int](value=5))
+        self.assertEqual(GenericResult[str].model_validate(v), GenericResult[str](value="5"))
 
-        self.assertEqual(GenericResult.validate("foo"), GenericResult(value="foo"))
-        self.assertEqual(GenericResult[str].validate(5), GenericResult[str](value="5"))
+        self.assertEqual(GenericResult.model_validate("foo"), GenericResult(value="foo"))
+        self.assertEqual(GenericResult[str].model_validate(5), GenericResult[str](value="5"))
 
         result = GenericResult(value=5)
         # Note that this will work, even though GenericResult is not a subclass of GenericResult[str]
-        self.assertEqual(GenericResult[str].validate(result), GenericResult[str](value="5"))
+        self.assertEqual(GenericResult[str].model_validate(result), GenericResult[str](value="5"))
 
 
 class TestResult(TestCase):
@@ -57,7 +57,7 @@ class TestResult(TestCase):
         r = PandasResult(df=t)
         self.assertIsInstance(r.df, pd.DataFrame)
 
-        r = PandasResult.validate({"df": t})
+        r = PandasResult.model_validate({"df": t})
         self.assertIsInstance(r.df, pd.DataFrame)
 
         r = PandasResult(df=df["A"])
@@ -66,7 +66,7 @@ class TestResult(TestCase):
 
     def test_arrow(self):
         df = pd.DataFrame({"A": [1, 2, 3], "B": [4, 5, 6]})
-        r = ArrowResult.validate({"table": df})
+        r = ArrowResult.model_validate({"table": df})
         self.assertIsInstance(r.table, pa.Table)
 
         r = ArrowResult(table=df)
@@ -85,10 +85,10 @@ class TestResult(TestCase):
         self.assertIsInstance(r.array, xr.DataArray)
         self.assertTrue(r.array.equals(da))
 
-        r = XArrayResult.validate({"array": df})
+        r = XArrayResult.model_validate({"array": df})
         self.assertIsInstance(r.array, xr.DataArray)
         self.assertTrue(r.array.equals(da))
 
-        r = XArrayResult.validate({"array": t})
+        r = XArrayResult.model_validate({"array": t})
         self.assertIsInstance(r.array, xr.DataArray)
         self.assertTrue(r.array.equals(da))

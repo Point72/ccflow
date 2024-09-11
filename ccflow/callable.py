@@ -230,7 +230,7 @@ class FlowOptions(BaseModel):
                 if context is Signature.empty:
                     raise TypeError(f"{fn.__name__}() missing 1 required positional argument: 'context'")
             # Type coercion on input  TODO: Move to ModelEvaluationContext
-            context = model.context_type.validate(context)
+            context = model.context_type.model_validate(context)
             # Create the evaluation context.
             # Record the options that are used, in case the evaluators want to use it,
             # but exclude the evaluator itself to avoid potential circular dependencies
@@ -255,7 +255,7 @@ class FlowOptions(BaseModel):
                 elif hasattr(result, "_lazy_is_delayed"):
                     object.__setattr__(result, "_lazy_validation_requested", True)
                 else:
-                    result = model.result_type.validate(result)
+                    result = model.result_type.model_validate(result)
             return result
 
         wrap = wraps(fn)(wrapper)

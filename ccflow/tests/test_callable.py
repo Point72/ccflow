@@ -159,27 +159,27 @@ class TestContext(TestCase):
         c = ListContext(ll=ll)
         ll.append("foo")
         self.assertEqual(c.ll, [])
-        c2 = ListContext.validate(c)
+        c2 = ListContext.model_validate(c)
         c.ll.append("bar")
         # c2 context does not share the same list as c1 context
         self.assertEqual(c2.ll, [])
 
     def test_parse(self):
-        out = MyContext.validate("foo")
+        out = MyContext.model_validate("foo")
         self.assertEqual(out, MyContext(a="foo"))
 
-        out = MyExtendedContext.validate("foo,5,True")
+        out = MyExtendedContext.model_validate("foo,5,True")
         self.assertEqual(out, MyExtendedContext(a="foo", b=5, c=True))
-        out2 = MyExtendedContext.validate(("foo", 5, True))
+        out2 = MyExtendedContext.model_validate(("foo", 5, True))
         self.assertEqual(out2, out)
-        out3 = MyExtendedContext.validate(["foo", 5, True])
+        out3 = MyExtendedContext.model_validate(["foo", 5, True])
         self.assertEqual(out3, out)
 
     def test_registration(self):
         r = ModelRegistry.root()
         r.add("bar", MyContext(a="foo"))
-        self.assertEqual(MyContext.validate("bar"), MyContext(a="foo"))
-        self.assertEqual(MyContext.validate("baz"), MyContext(a="baz"))
+        self.assertEqual(MyContext.model_validate("bar"), MyContext(a="foo"))
+        self.assertEqual(MyContext.model_validate("baz"), MyContext(a="baz"))
 
 
 class TestCallableModel(TestCase):
@@ -207,7 +207,7 @@ class TestCallableModel(TestCase):
         ll.append("foo")
         # List is copied on construction
         self.assertEqual(m.ll, [])
-        m2 = MyCallable.validate(m)
+        m2 = MyCallable.model_validate(m)
         m.ll.append("bar")
         # When m2 is validated, it still shares same list with m1
         self.assertEqual(m.ll, m2.ll)
@@ -250,7 +250,7 @@ class TestWrapperModel(TestCase):
 
     def test_validate(self):
         data = {"model": {"i": 1, "meta": {"name": "bar"}}}
-        w = MyWrapper.validate(data)
+        w = MyWrapper.model_validate(data)
         self.assertIsInstance(w.model, MyCallable)
         self.assertEqual(w.model.i, 1)
 
@@ -261,7 +261,7 @@ class TestWrapperModel(TestCase):
         r = ModelRegistry.root().clear()
         r.add("foo", m)
         data = {"model": "foo"}
-        w = MyWrapper.validate(data)
+        w = MyWrapper.model_validate(data)
         self.assertEqual(w.model, m)
 
 

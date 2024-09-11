@@ -40,14 +40,6 @@ class ArrowFilter(BaseModel):
     op: str
     value: Any
 
-    @classmethod
-    def validate(cls, v, field=None):
-        """Override validate function so that we can convert directly from a tuple"""
-        if isinstance(v, (list, tuple)):
-            key, op, value = v
-            return super().validate(dict(key=key, op=op, value=value))
-        return super().validate(v)
-
     def tuple(self):
         """Convert the filter back to a tuple"""
         return self.key, self.op, self.value

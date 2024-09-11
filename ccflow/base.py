@@ -270,7 +270,7 @@ def model_alias(model_name: str) -> BaseModel:
     _target_: ccflow.alias
     model_name: foo
     """
-    return BaseModel.validate(model_name)
+    return BaseModel.model_validate(model_name)
 
 
 ModelType = TypeVar("ModelType", bound=BaseModel)
@@ -312,7 +312,7 @@ class ModelRegistry(BaseModel):
     @model_serializer(mode="wrap")
     def _registry_serializer(self, handler):
         values = handler(self)
-        values["models"] = handler(self._models)
+        values["models"] = self._models
         return values
 
     @property
@@ -718,7 +718,7 @@ def make_lazy_result(res_type: ResultType, to_copy_fn) -> ResultType:
         new_obj = to_copy_fn()
 
         if hasattr(obj, "_lazy_validation_requested"):
-            new_obj = res_type.validate(new_obj)
+            new_obj = res_type.model_validate(new_obj)
             object.__delattr__(obj, "_lazy_validation_requested")
 
         # now we copy the fields into obj : inspired by pydantic model_construct
