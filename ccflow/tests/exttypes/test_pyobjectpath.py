@@ -1,6 +1,8 @@
 from typing import Generic, TypeVar
 from unittest import TestCase
+
 from pydantic import TypeAdapter
+
 from ccflow import PyObjectPath
 
 

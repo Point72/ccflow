@@ -1,8 +1,8 @@
 from typing import Any, Generic, Type, TypeVar, Union
-from pydantic_core import core_schema
 
 import pandas as pd
 import pyarrow as pa
+from pydantic_core import core_schema
 from typing_extensions import Literal, get_args
 
 

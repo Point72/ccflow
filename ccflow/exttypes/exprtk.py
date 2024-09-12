@@ -1,4 +1,5 @@
 from typing import Any
+
 from pydantic_core import core_schema
 
 __all__ = ("ExprTkExpression",)

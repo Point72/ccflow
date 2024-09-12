@@ -1,6 +1,7 @@
 from unittest import TestCase
 
 from pydantic import TypeAdapter
+
 from ccflow.exttypes.jinja import JinjaTemplate
 
 

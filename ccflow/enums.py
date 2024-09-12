@@ -16,16 +16,15 @@ Notes:
 
 import inspect
 from typing import Any, Callable, Dict, List, Union
+
 from pydantic import GetJsonSchemaHandler
 from pydantic.json_schema import JsonSchemaValue
 from pydantic_core import core_schema
 
-
 __all__ = ("auto", "Enum", "make_enum")
 
 try:
-    from csp import DynamicEnum
-    from csp import Enum as BaseEnum
+    from csp import DynamicEnum, Enum as BaseEnum
 
     auto = BaseEnum.auto
 
@@ -40,15 +39,16 @@ except ImportError:
         # CSP BaseEnum just uses auto
         from enum import auto
 
-        from csp.impl.enum import DynamicEnum
-        from csp.impl.enum import Enum as BaseEnum
+        from csp.impl.enum import DynamicEnum, Enum as BaseEnum
 
         _CSP_ENUM = True
 
     except ImportError:
         # if csp is not installed, rely on python Enum
-        from enum import Enum as BaseEnum  # noqa: F401
-        from enum import auto
+        from enum import (
+            Enum as BaseEnum,  # noqa: F401
+            auto,
+        )
 
         BaseEnum.auto = auto
 

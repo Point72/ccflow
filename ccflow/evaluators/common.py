@@ -1,7 +1,6 @@
 import logging
 import time
-from datetime import time as dt_time
-from datetime import timedelta
+from datetime import time as dt_time, timedelta
 from types import MappingProxyType
 from typing import Callable, Dict, List, Optional, Set, Union
 

@@ -4,7 +4,7 @@ defined in flow.callable.py.
 
 import pandas as pd
 import pyarrow as pa
-from pydantic import Field, model_validator, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from ..base import ResultBase
 from ..context import DateRangeContext

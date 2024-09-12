@@ -161,6 +161,9 @@ exclude = [
 [tool.ruff]
 line-length = 150
 
+[tool.ruff.lint]
+select = ["I"]
+
 [tool.ruff.lint.isort]
 combine-as-imports = true
 default-section = "third-party"

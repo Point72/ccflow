@@ -1,6 +1,8 @@
 import unittest
 from unittest import TestCase
+
 from pydantic import TypeAdapter
+
 from ccflow import BaseModel, ExprTkExpression
 
 

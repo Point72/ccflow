@@ -3,9 +3,8 @@
 from functools import cached_property
 from typing import Any, Type, get_origin
 
-
-from pydantic_core import core_schema
 from pydantic import ImportString, TypeAdapter
+from pydantic_core import core_schema
 
 import_string = TypeAdapter(ImportString).validate_python
 
