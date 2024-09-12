@@ -1,20 +1,32 @@
 """This module defines the base model and registry for flow."""
 
+import collections.abc
 import copy
+import inspect
 import logging
 import pathlib
+import platform
+import typing
 from types import MappingProxyType
 from typing import Any, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar, get_args, get_origin
 
+import typing_extensions
 from omegaconf import DictConfig
-from pydantic import BaseModel as PydanticBaseModel
-from pydantic import PrivateAttr, ValidationError, TypeAdapter, field_validator, model_validator
+from packaging import version
+from pydantic import (
+    BaseModel as PydanticBaseModel,
+    PrivateAttr,
+    SerializeAsAny,
+    TypeAdapter,
+    ValidationError,
+    computed_field,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 from pydantic.fields import Field
 
 from .exttypes.pyobjectpath import PyObjectPath
-import inspect
-
-from pydantic import SerializeAsAny, computed_field, model_serializer
 
 log = logging.getLogger(__name__)
 
@@ -80,9 +92,32 @@ class _RegistryMixin:
 # See https://github.com/pydantic/pydantic/issues/6381 for inspiration on implementation
 from pydantic._internal._model_construction import ModelMetaclass  # noqa: E402
 
+# Required for py38 compatibility
+# In python 3.8, get_origin(List[float]) returns list, but you can't call list[float] to retrieve the annotation
+# Furthermore, Annotated is part of typing_Extensions and get_origin(Annotated[str, ...]) returns str rather than Annotated
+_IS_PY38 = version.parse(platform.python_version()) < version.parse("3.9")
+# For a more complete list, see https://github.com/alexmojaki/eval_type_backport/blob/main/eval_type_backport/eval_type_backport.py
+_PY38_ORIGIN_MAP = {
+    tuple: typing.Tuple,
+    list: typing.List,
+    dict: typing.Dict,
+    set: typing.Set,
+    frozenset: typing.FrozenSet,
+    collections.abc.Callable: typing.Callable,
+    collections.abc.Iterable: typing.Iterable,
+    collections.abc.Mapping: typing.Mapping,
+    collections.abc.MutableMapping: typing.MutableMapping,
+    collections.abc.Sequence: typing.Sequence,
+}
+
 
 def _adjust_annotations(annotation):
     origin = get_origin(annotation)
+    if _IS_PY38:
+        if isinstance(annotation, typing_extensions._AnnotatedAlias):
+            return annotation
+        else:
+            origin = _PY38_ORIGIN_MAP.get(origin, origin)
     args = get_args(annotation)
     if inspect.isclass(annotation) and issubclass(annotation, PydanticBaseModel):
         return SerializeAsAny[annotation]
