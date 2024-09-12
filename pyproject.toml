@@ -162,7 +162,7 @@ exclude = [
 line-length = 150
 
 [tool.ruff.lint]
-select = ["I"]
+extend-select = ["I"]
 
 [tool.ruff.lint.isort]
 combine-as-imports = true
