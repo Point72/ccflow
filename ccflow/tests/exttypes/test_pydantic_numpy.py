@@ -1,4 +1,4 @@
-"""Code from MIT-licensed open source library https://github.com/cheind/pydantic-numpy
+"""Code adapted from MIT-licensed open source library https://github.com/cheind/pydantic-numpy
 
 MIT License
 
@@ -23,16 +23,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
-from pathlib import Path
 from typing import Dict, Optional
 
 import numpy as np
-import pytest
 from numpy.testing import assert_allclose
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
-from ccflow import NDArray, PotentialNDArray, float32
-from ccflow.exttypes.pydantic_numpy.ndarray import NPFileDesc
+from ccflow import NDArray, float32
 
 
 class MySettings(BaseModel):
@@ -51,42 +48,6 @@ def test_init_from_values():
     assert cfg.K.dtype == np.float32
 
 
-def test_load_from_npy_path(tmpdir):
-    # Load from npy
-    np.save(Path(tmpdir) / "data.npy", np.arange(5))
-    cfg = MySettings(K={"path": Path(tmpdir) / "data.npy"})
-    assert_allclose(cfg.K, [0.0, 1.0, 2.0, 3.0, 4.0])
-    assert cfg.K.dtype == np.float32
-
-
-def test_load_from_NPFileDesc(tmpdir):
-    np.save(Path(tmpdir) / "data.npy", np.arange(5))
-    cfg = MySettings(K=NPFileDesc(path=Path(tmpdir) / "data.npy"))
-    assert_allclose(cfg.K, [0.0, 1.0, 2.0, 3.0, 4.0])
-    assert cfg.K.dtype == np.float32
-
-
-def test_load_field_from_npz(tmpdir):
-    np.savez(Path(tmpdir) / "data.npz", values=np.arange(5))
-    cfg = MySettings(K={"path": Path(tmpdir) / "data.npz", "key": "values"})
-    assert_allclose(cfg.K, [0.0, 1.0, 2.0, 3.0, 4.0])
-    assert cfg.K.dtype == np.float32
-
-
-def test_exceptional(tmpdir):
-    with pytest.raises(ValidationError):
-        MySettings(K={"path": Path(tmpdir) / "nosuchfile.npz", "key": "values"})
-
-    with pytest.raises(ValidationError):
-        MySettings(K={"path": Path(tmpdir) / "nosuchfile.npy", "key": "nosuchkey"})
-
-    with pytest.raises(ValidationError):
-        MySettings(K={"path": Path(tmpdir) / "nosuchfile.npy"})
-
-    with pytest.raises(ValidationError):
-        MySettings(K="absc")
-
-
 def test_unspecified_npdtype():
     # Not specifying a dtype will use numpy default dtype resolver
 
@@ -98,7 +59,7 @@ def test_unspecified_npdtype():
     assert cfg.K.dtype == int
 
 
-def test_json_encoders():
+def test_json():
     import orjson
 
     class MySettingsNoGeneric(BaseModel):
@@ -111,6 +72,10 @@ def test_json_encoders():
     assert isinstance(jdata["K"], list)
     assert jdata["K"] == list([1, 2])
 
+    # Test round-trip
+    cfg2 = MySettingsNoGeneric.model_validate_json(cfg.model_dump_json())
+    np.testing.assert_array_equal(cfg.K, cfg2.K)
+
 
 def test_optional_construction():
     class MySettingsOptional(BaseModel):
@@ -122,25 +87,6 @@ def test_optional_construction():
     cfg = MySettingsOptional(K=[1, 2])
     assert type(cfg.K) is np.ndarray
     assert cfg.K.dtype == np.float32
-
-
-def test_potential_array(tmpdir):
-    class MySettingsPotential(BaseModel):
-        K: PotentialNDArray[float32]
-
-    np.savez(Path(tmpdir) / "data.npz", values=np.arange(5))
-
-    cfg = MySettingsPotential(K={"path": Path(tmpdir) / "data.npz", "key": "values"})
-    assert cfg.K is not None
-    assert_allclose(cfg.K, [0.0, 1.0, 2.0, 3.0, 4.0])
-
-    # Path not found
-    cfg = MySettingsPotential(K={"path": Path(tmpdir) / "nothere.npz", "key": "values"})
-    assert cfg.K is None
-
-    # Key not there
-    cfg = MySettingsPotential(K={"path": Path(tmpdir) / "data.npz", "key": "nothere"})
-    assert cfg.K is None
 
 
 def test_subclass_basemodel():
@@ -158,16 +104,9 @@ def test_subclass_basemodel():
     assert model.model_dump_json()
 
 
-# We have added the tests below
 def test_default_value():
-    """Numpy type doesn't work with default values.
-    The work-around is to use a default factory.
-    See https://github.com/samuelcolvin/pydantic/issues/2923#issuecomment-885788163
-    """
-    from pydantic import Field
-
     class MyModelField(BaseModel):
-        K: NDArray[float32] = Field(default_factory=lambda: np.array([1.0, 2.0]))
+        K: NDArray[float32] = np.array([1.0, 2.0])
 
     model_field = MyModelField()
-    assert model_field.model_dump_json()
+    np.testing.assert_array_equal(model_field.K, np.array([1.0, 2.0]))

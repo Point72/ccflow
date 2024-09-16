@@ -1,2 +1,2 @@
-from .ndarray import NDArray, PotentialNDArray
+from .ndarray import NDArray
 from .ndtypes import *

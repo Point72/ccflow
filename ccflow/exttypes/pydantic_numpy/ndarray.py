@@ -1,4 +1,4 @@
-"""Code from MIT-licensed open source library https://github.com/cheind/pydantic-numpy
+"""Code adapted from MIT-licensed open source library https://github.com/cheind/pydantic-numpy
 
 MIT License
 
@@ -24,13 +24,10 @@ SOFTWARE.
 """
 
 import sys
-from abc import ABC, abstractmethod
-from pathlib import Path
-from typing import Any, Generic, Mapping, Optional, TypeVar
+from typing import Any, Generic, TypeVar
 
 import numpy as np
 from numpy.lib import NumpyVersion
-from pydantic import BaseModel, FilePath, field_validator
 from typing_extensions import get_args
 
 T = TypeVar("T", bound=np.generic)
@@ -41,67 +38,7 @@ else:
     nd_array_type = np.ndarray[Any, T]
 
 
-class NPFileDesc(BaseModel):
-    path: FilePath
-    key: Optional[str] = None
-
-    @field_validator("path")
-    def absolute(cls, value: Path) -> Path:
-        return value.resolve().absolute()
-
-
-class _CommonNDArray(ABC):
-    @classmethod
-    @abstractmethod
-    def validate(cls, val: Any, field) -> nd_array_type: ...
-
-    @staticmethod
-    def _validate(val: Any, dtype=None) -> nd_array_type:
-        if isinstance(val, Mapping):
-            try:
-                val = NPFileDesc(**val)
-            except TypeError:
-                raise ValueError("Unable to convert from mapping.")
-
-        if isinstance(val, NPFileDesc):
-            val: NPFileDesc
-
-            if val.path.suffix.lower() not in [".npz", ".npy"]:
-                raise ValueError("Expected npz or npy file.")
-
-            if not val.path.is_file():
-                raise ValueError(f"Path does not exist {val.path}")
-
-            try:
-                content = np.load(str(val.path))
-            except FileNotFoundError:
-                raise ValueError(f"Failed to load numpy data from file {val.path}")
-
-            if val.path.suffix.lower() == ".npz":
-                key = val.key or content.files[0]
-                try:
-                    data = content[key]
-                except KeyError:
-                    raise ValueError(f"Key {key} not found in npz.")
-            else:
-                data = content
-
-        else:
-            data = val
-
-        if dtype is not None:
-            return np.asarray(data, dtype=dtype)
-        return np.asarray(data)
-
-    @classmethod
-    def _make_validator(cls, source_type):
-        def _validate(v):
-            subtypes = get_args(source_type)
-            dtype = subtypes[0] if subtypes and subtypes[0] != Any else None
-            return cls._validate(v, dtype)
-
-        return _validate
-
+class NDArray(Generic[T], nd_array_type):
     @classmethod
     def _serialize(cls, v, nxt):
         # Not as efficient as using orjson, but we need a list type to pass to pydantic,
@@ -114,8 +51,15 @@ class _CommonNDArray(ABC):
     def __get_pydantic_core_schema__(cls, source_type, handler):
         from pydantic_core import core_schema
 
+        def _validate(v):
+            subtypes = get_args(source_type)
+            dtype = subtypes[0] if subtypes and subtypes[0] != Any else None
+            if dtype is not None:
+                return np.asarray(v, dtype=dtype)
+            return np.asarray(v)
+
         return core_schema.no_info_before_validator_function(
-            cls._make_validator(source_type),
+            _validate,
             core_schema.any_schema(),
             serialization=core_schema.wrap_serializer_function_ser_schema(
                 cls._serialize,
@@ -123,35 +67,3 @@ class _CommonNDArray(ABC):
                 return_schema=core_schema.list_schema(),
             ),
         )
-
-
-class NDArray(Generic[T], nd_array_type, _CommonNDArray):
-    @classmethod
-    def validate(cls, val: Any, field) -> nd_array_type:
-        dtype_field = field.sub_fields[0] if field.sub_fields is not None else None
-        dtype = None if dtype_field is None else dtype_field.type_
-        return cls._validate(val, dtype)
-
-
-class PotentialNDArray(Generic[T], nd_array_type, _CommonNDArray):
-    """Like NDArray, but validation errors result in None."""
-
-    @classmethod
-    def validate(cls, val: Any, field) -> Optional[nd_array_type]:
-        try:
-            dtype_field = field.sub_fields[0] if field.sub_fields is not None else None
-            return cls._validate(val, dtype_field.type_ if dtype_field else None)
-        except ValueError:
-            return None
-
-    @classmethod
-    def _make_validator(cls, source_type):
-        def _validate(v):
-            subtypes = get_args(source_type)
-            dtype = subtypes[0] if subtypes and subtypes[0] != Any else None
-            try:
-                return cls._validate(v, dtype)
-            except ValueError:
-                return None
-
-        return _validate
