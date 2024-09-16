@@ -3,7 +3,7 @@ import json
 from typing import Dict
 
 import pytest
-from pydantic import BaseModel, RootModel
+from pydantic import BaseModel, ConfigDict, RootModel
 
 from ccflow.enums import Enum, auto
 
@@ -19,10 +19,9 @@ class MyModel(BaseModel):
 
 
 class MyDictModel(BaseModel):
-    enum_dict: Dict[MyEnum, int] = None
+    model_config = ConfigDict(use_enum_values=True)
 
-    class Config:
-        use_enum_values = True
+    enum_dict: Dict[MyEnum, int] = None
 
 
 def test_validation():
@@ -47,18 +46,16 @@ def test_serialization():
 
 
 class DictWrapper(RootModel[Dict[MyEnum, int]]):
+    model_config = ConfigDict(use_enum_values=True)
+
     def __getitem__(self, item):
         return self.root[item]
 
-    class Config:
-        use_enum_values = True
-
 
 class MyDictWrapperModel(BaseModel):
-    enum_dict: DictWrapper
+    model_config = ConfigDict(use_enum_values=True)
 
-    class Config:
-        use_enum_values = True
+    enum_dict: DictWrapper
 
 
 def test_enum_as_dict_key_json_serialization():

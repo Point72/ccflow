@@ -1,7 +1,7 @@
 from typing import Any, Iterable, Set, TypeVar, Union
 
 import pandas as pd
-from pydantic import BaseModel as PydanticBaseModel, create_model
+from pydantic import BaseModel as PydanticBaseModel, ConfigDict, create_model
 
 __all__ = (
     "PydanticModelType",
@@ -16,16 +16,17 @@ PydanticModelType = TypeVar("ModelType", bound=PydanticBaseModel)
 class PydanticDictOptions(PydanticBaseModel):
     """See https://pydantic-docs.helpmanual.io/usage/exporting_models/#modeldict"""
 
+    model_config = ConfigDict(
+        # Want to validate assignment so that if lists are assigned to include/exclude, they get validated
+        validate_assignment=True
+    )
+
     include: Set[str] = None
     exclude: Set[str] = set()
     by_alias: bool = False
     exclude_unset: bool = False
     exclude_defaults: bool = False
     exclude_none: bool = False
-
-    class Config:
-        # Want to validate assignment so that if lists are assigned to include/exclude, they get validated
-        validate_assignment = True
 
 
 _DEFAULT_OPTIONS = PydanticDictOptions()
@@ -36,12 +37,10 @@ def dict_to_model(cls, v) -> PydanticBaseModel:
     Without it, dict is coerced to PydanticBaseModel, losing all data.
     """
     if isinstance(v, dict):
-
-        class Config:
-            arbitrary_types_allowed = True
+        config = ConfigDict(arbitrary_types_allowed=True)
 
         fields = {f: (Any, None) for f in v}
-        v = create_model("DynamicDictModel", **fields, __config__=Config)(**v)
+        v = create_model("DynamicDictModel", **fields, __config__=config)(**v)
     return v
 
 

@@ -6,6 +6,7 @@ from unittest import TestCase
 from hydra.errors import InstantiationException
 from omegaconf import OmegaConf
 from omegaconf.errors import InterpolationKeyError
+from pydantic import ConfigDict
 
 from ccflow import BaseModel, ModelRegistry, RegistryLookupContext, RootModelRegistry, model_alias
 
@@ -28,12 +29,11 @@ class MyClass:
 
 
 class MyNestedModel(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)  # To allow z = MyClass, even though there is no validator
+
     x: MyTestModel
     y: MyTestModel
     z: MyClass = MyClass()
-
-    class Config:
-        arbitrary_types_allowed = True  # To allow z = MyClass, even though there is no validator
 
 
 class DoubleNestedModel(BaseModel):

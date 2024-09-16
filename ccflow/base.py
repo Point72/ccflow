@@ -15,6 +15,7 @@ from omegaconf import DictConfig
 from packaging import version
 from pydantic import (
     BaseModel as PydanticBaseModel,
+    ConfigDict,
     PrivateAttr,
     SerializeAsAny,
     TypeAdapter,
@@ -176,15 +177,15 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
     # We want to track under what names a model has been registered
     _registrations: List[Tuple["ModelRegistry", str]] = PrivateAttr(default_factory=list)
 
-    # Don't use ConfigDict/model_config here because many subclasses are still using ConfigDict
-    class Config:
-        validate_assignment = True
-        populate_by_name = True
-        coerce_numbers_to_str = True  # New in v2 for backwards compatibility with V1
+    model_config = ConfigDict(
+        validate_assignment=True,
+        populate_by_name=True,
+        coerce_numbers_to_str=True,  # New in v2 for backwards compatibility with V1
         # Lots of bugs happen because of a mis-named field with a default value,
         # where the default behavior is just to drop the mis-named value. This prevents that
-        extra = "forbid"
-        ser_json_timedelta = "float"
+        extra="forbid",
+        ser_json_timedelta="float",
+    )
 
     def __str__(self):
         # Because the standard string representation does not include class name
@@ -661,13 +662,11 @@ class ResultBase(BaseModel):
     # the standard pydantic serialization methods will not work
     # This is OK, because for results we want more control over
     # the serialization method, so we build our own serializers.
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def _onaccess_callback(*args, **kwargs):
         """Function to be called on every attribute access"""
         pass
-
-    class Config(BaseModel.Config):
-        arbitrary_types_allowed = True
 
     def __getattribute__(self, attr):
         """Call _onaccess_callback before allowing attribute access.
@@ -687,11 +686,12 @@ class ContextBase(ResultBase):
     that is an input into another CallableModel.
     """
 
-    class Config(ResultBase.Config):
-        frozen = True
-        arbitrary_types_allowed = False
+    model_config = ConfigDict(
+        frozen=True,
+        arbitrary_types_allowed=False,
         # This separator is used when parsing strings into contexts (i.e. from command line)
-        separator = ","
+        separator=",",
+    )
 
     @model_validator(mode="wrap")
     def _context_validator(cls, v, handler, info):
@@ -707,7 +707,7 @@ class ContextBase(ResultBase):
         except Exception as e:
             if isinstance(v, (str, tuple, list)):
                 if isinstance(v, str):
-                    v = v.split(cls.Config.separator)
+                    v = v.split(cls.model_config["separator"])
                 v = dict(zip(cls.model_fields, v))
                 return handler(v)
             raise e

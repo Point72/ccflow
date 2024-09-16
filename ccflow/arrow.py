@@ -4,21 +4,19 @@ Note that arrow related extension types are in exttypes.arrow.
 
 import abc
 from datetime import date, datetime, time
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Union
 
 import pyarrow as pa
-from pydantic import Field, model_validator, root_validator
+from pydantic import Field, model_validator
 from typing_extensions import Literal  # For pydantic 1 compatibility on python 3.9
 
 from .base import BaseModel
-from .exttypes import ArrowTable, JinjaTemplate, PyArrowDatatype, PyObjectPath
+from .exttypes import JinjaTemplate, PyArrowDatatype, PyObjectPath
 from .object_config import ObjectConfig
 
 __all__ = (
     "ArrowSchemaModel",
     "ArrowPartitioning",
-    "ArrowSchemaTransformModel",
-    "ArrowTableTransform",
     "ArrowDateFilter",
     "ArrowDatetimeFilter",
     "ArrowFilter",
@@ -182,78 +180,3 @@ class ArrowPartitioning(BaseModel):
             return self.field_names
         else:
             return []
-
-
-class ArrowSchemaTransformModel(BaseModel):
-    """ArrowSchemaTransformModel is a pydantic model to transform arrow table
-    1. filter fields
-    2. rename fields
-    3. cast fields
-    schema is defined as a List of 3 part Tuples:
-    [
-        (input_field_name_1, output_field_name_1, output_field_type_1),
-        ...
-        (input_field_name_N, output_field_name_N, output_field_type_N),
-    ]
-    """
-
-    @property
-    def input_fields(self) -> List[str]:
-        if isinstance(self.fields, Dict):
-            return [key for key in self.fields.keys()]
-        elif isinstance(self.fields, List):
-            return [entry[0] for entry in self.fields]
-        else:
-            raise TypeError("Transform fields must be either List or Dict type")
-
-    @property
-    def output_fields(self) -> List[str]:
-        if isinstance(self.fields, Dict):
-            return [entry[0] for entry in self.fields.values()]
-        elif isinstance(self.fields, List):
-            return [entry[1] for entry in self.fields]
-        else:
-            raise TypeError("Transform fields must be either List or Dict type")
-
-    @property
-    def schema(self) -> pa.Schema:
-        schema_fields = []
-        if isinstance(self.fields, Dict):
-            schema_fields = [entry for entry in self.fields.values()]
-        elif isinstance(self.fields, List):
-            # get 2 last elements of the tuple
-            schema_fields = [(entry[1], entry[2]) for entry in self.fields]
-        else:
-            raise TypeError("Transform fields must be either List or Dict type")
-        return pa.schema(
-            [(k, v.datatype if isinstance(v, PyArrowDatatype) else v) for (k, v) in schema_fields],
-            self.metadata,
-        )
-
-    fields: Union[List[Tuple[str, str, PyArrowDatatype]], Dict[str, Tuple[str, PyArrowDatatype]]]
-    metadata: Dict[Any, Any] = None
-
-
-class ArrowTableTransform(BaseModel):
-    """ArrowTableTransform is a pydantic model around Arrow table to:
-    1. perform conversion from supported input format into ArrowTable
-    2. apply transformation schema to filter, rename and cast fields according to the ArrowSchemaTransformModel
-    """
-
-    transform_schema: ArrowSchemaTransformModel = Field(
-        None,
-        description="List of tuples [(input_field, output_field, pyarrow type)]\
-            or dict {'input_field': (output_field, pyarrow type)}",
-    )
-    table: ArrowTable
-
-    @root_validator(pre=False, skip_on_failure=True)
-    def transform_table(cls, values):
-        if values["transform_schema"]:
-            input_fields = values["transform_schema"].input_fields
-            output_fields = values["transform_schema"].output_fields
-            schema = values["transform_schema"].schema
-            tbl = values["table"]
-            tbl = tbl.select(input_fields).rename_columns(output_fields).cast(schema)
-            values["table"] = tbl
-        return values

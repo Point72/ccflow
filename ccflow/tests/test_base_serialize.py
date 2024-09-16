@@ -2,7 +2,7 @@ import unittest
 from typing import ClassVar, Dict, List, Optional, Type, Union
 
 import numpy as np
-import pydantic
+from pydantic import BaseModel as PydanticBaseModel, ConfigDict, ValidationError
 
 from ccflow import BaseModel, NDArray, make_ndarray_orjson_valid
 from ccflow.enums import Enum
@@ -35,10 +35,9 @@ class ArbitraryType:
 class B(A):
     """B implements A and adds a json encoder."""
 
-    x: ArbitraryType
+    model_config = ConfigDict(arbitrary_types_allowed=True)  # To allow z = MyClass, even though there is no validator
 
-    class Config:
-        arbitrary_types_allowed = True
+    x: ArbitraryType
 
 
 class C(BaseModel):
@@ -187,21 +186,19 @@ class TestBaseModelSerialization(unittest.TestCase):
         class B(BaseModel):
             """Override the config. Hopefully the config from our BaseModel doesn't get overridden."""
 
-            class Config:
-                arbitrary_types_allowed = True
+            model_config = ConfigDict(arbitrary_types_allowed=True)
 
-        class C(pydantic.BaseModel):
+        class C(PydanticBaseModel):
             """Override the config on a normal pydantic BaseModel (not our BaseModel)."""
 
-            class Config:
-                arbitrary_types_allowed = True
+            model_config = ConfigDict(arbitrary_types_allowed=True)
 
-        self.assertRaises(pydantic.ValidationError, A, extra_field1=1)
+        self.assertRaises(ValidationError, A, extra_field1=1)
 
         # If configs are not inherited, B should allow extra fields.
-        self.assertRaises(pydantic.ValidationError, B, extra_field1=1)
+        self.assertRaises(ValidationError, B, extra_field1=1)
 
-        # C implements the normal pydantic BaseModel which should allow extra fields.
+        # C implements the normal pydantic BaseModel whichhould allow extra fields.
         _ = C(extra_field1=1)
 
     def test_serialize_as_any(self):

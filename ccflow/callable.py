@@ -17,7 +17,7 @@ from functools import wraps
 from inspect import Signature, isclass, signature
 from typing import Any, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar
 
-from pydantic import BaseModel as PydanticBaseModel, Field, PrivateAttr, TypeAdapter, field_validator, model_validator, root_validator
+from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter, field_validator, model_validator
 from typing_extensions import override
 
 from .base import (
@@ -73,43 +73,47 @@ class _CallableModel(BaseModel, abc.ABC):
     The purpose of this class is to provide type definitions of context_type and return_type.
     """
 
+    model_config = ConfigDict(
+        ignored_types=(property,),
+        # Whether to validate that the decorator has been applied to __call__
+        validate_decorator=True,
+    )
     meta: MetaData = Field(default_factory=MetaData)
 
-    class Config(BaseModel.Config):
-        ignored_types = (property,)
-        # Whether to validate that the decorator has been applied to __call__
-        validate_decorator: bool = True
-
-    @root_validator(skip_on_failure=True)
-    def _check_decorator(cls, values):
-        call = cls.__call__
-        if cls.Config.validate_decorator and not hasattr(call, "__wrapped__") and getattr(call, "__name__", "") != "Flow.call":
+    @model_validator(mode="after")
+    def _check_decorator(self):
+        call = self.__call__
+        if self.model_config["validate_decorator"] and not hasattr(call, "__wrapped__") and getattr(call, "__name__", "") != "Flow.call":
             raise ValueError("__call__ function of CallableModel must be wrapped with the Flow.call decorator")
 
-        if cls.Config.validate_decorator and not hasattr(cls.__deps__, "__wrapped__") and getattr(cls.__deps__, "__name__", "") != "Flow.deps":
+        if (
+            self.model_config["validate_decorator"]
+            and not hasattr(self.__deps__, "__wrapped__")
+            and getattr(self.__deps__, "__name__", "") != "Flow.deps"
+        ):
             raise ValueError("__deps__ function of CallableModel must be wrapped with the Flow.deps decorator")
-        return values
+        return self
 
-    @root_validator(skip_on_failure=True)
-    def _check_signature(cls, values):
-        sig_call = signature(cls.__call__)
-        if len(sig_call.parameters) != 2 or "context" not in sig_call.parameters:  # ("self", "context")
+    @model_validator(mode="after")
+    def _check_signature(self):
+        sig_call = signature(self.__call__)
+        if len(sig_call.parameters) != 1 or "context" not in sig_call.parameters:  # ("self", "context")
             raise ValueError("__call__ method must take a single argument, named 'context'")
 
-        sig_deps = signature(cls.__deps__)
-        if len(sig_deps.parameters) != 2 or "context" not in sig_deps.parameters:
+        sig_deps = signature(self.__deps__)
+        if len(sig_deps.parameters) != 1 or "context" not in sig_deps.parameters:
             raise ValueError("__deps__ method must take a single argument, named 'context'")
 
-        if cls.__deps__ is not CallableModel.__deps__:
-            type_call_arg = signature(cls.__call__).parameters["context"].annotation
-            type_deps_arg = signature(cls.__deps__).parameters["context"].annotation
+        if self.__class__.__deps__ is not CallableModel.__deps__:
+            type_call_arg = signature(self.__call__).parameters["context"].annotation
+            type_deps_arg = signature(self.__deps__).parameters["context"].annotation
             err_msg_type_mismatch = (
                 f"The type of the context accepted by __deps__ {type_deps_arg} " f"must match that accepted by __call__ {type_call_arg}!"
             )
             if type_call_arg is not type_deps_arg:
                 raise ValueError(err_msg_type_mismatch)
 
-        return values
+        return self
 
     @property
     def context_type(self) -> Type[ContextType]:
@@ -286,7 +290,7 @@ class FlowOptionsOverride(BaseModel):
     Do not confuse the name with "Context" from callable.py.
     """
 
-    model_config = {"protected_namespaces": ()}  # Because of model_types field
+    model_config = ConfigDict(protected_namespaces=())  # Because of model_types field
 
     _OPEN_OVERRIDES: ClassVar[Dict] = {}
     options: FlowOptions = Field(description="The options that represent the overrides to apply in this context")
@@ -413,6 +417,8 @@ class EvaluatorBase(_CallableModel, abc.ABC):
     Note that evaluators don't use the Flow decorator on __call__ and __deps__ by design.
     """
 
+    model_config = ConfigDict(validate_decorator=False)
+
     @abc.abstractmethod
     def __call__(self, context: ModelEvaluationContext) -> ResultType:
         pass
@@ -426,9 +432,6 @@ class EvaluatorBase(_CallableModel, abc.ABC):
 
     def __exit__(self):
         pass
-
-    class Config(_CallableModel.Config):
-        validate_decorator = False  # Evaluators don't use the decorator by design.
 
 
 class Evaluator(EvaluatorBase):

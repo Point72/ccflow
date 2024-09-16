@@ -1,6 +1,6 @@
 from typing import Any, Dict
 
-from pydantic import PrivateAttr, model_validator
+from pydantic import ConfigDict, PrivateAttr, model_validator
 from pydantic.fields import Field
 
 from .base import BaseModel
@@ -19,17 +19,17 @@ class ObjectConfig(BaseModel):  # TODO: Generic model version for type checking
     without having to define a custom pydantic wrapper for them.
     """
 
+    model_config = ConfigDict(
+        ignored_types=(property,),
+        extra="allow",
+        frozen=True,  # Because we cache _object
+    )
     object_type: PyObjectPath = Field(
         None,
         description="The type of the object this model wraps.",
     )
     object_kwargs: Dict[str, Any] = {}
     _object: Any = PrivateAttr(None)
-
-    class Config(BaseModel.Config):
-        ignored_types = (property,)
-        extra = "allow"
-        frozen = True  # Because we cache _object
 
     @model_validator(mode="wrap")
     def _kwarg_validator(cls, values, handler, info):

@@ -1,7 +1,7 @@
 from typing import Any, Dict, List
 from unittest import TestCase
 
-from pydantic import ValidationError
+from pydantic import ConfigDict, ValidationError
 
 from ccflow import BaseModel, PyObjectPath
 
@@ -37,12 +37,11 @@ class MyClass:
 
 
 class MyNestedModel(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)  # To allow z = MyClass, even though there is no validator
+
     x: MyTestModel
     y: MyTestModel
     z: MyClass = MyClass()
-
-    class Config:
-        arbitrary_types_allowed = True  # To allow z = MyClass, even though there is no validator
 
 
 class DoubleNestedModel(BaseModel):
@@ -52,9 +51,6 @@ class DoubleNestedModel(BaseModel):
 
 class CopyModel(BaseModel):
     x: str
-
-    class Config:
-        copy_on_validate = "deep"
 
 
 class TestBaseModel(TestCase):
