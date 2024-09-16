@@ -3,6 +3,7 @@
 from typing import Any
 
 import jinja2
+from pydantic import TypeAdapter
 from pydantic_core import core_schema
 
 
@@ -19,7 +20,7 @@ class JinjaTemplate(str):
         return core_schema.no_info_plain_validator_function(cls._validate)
 
     @classmethod
-    def _validate(cls, value) -> Any:
+    def _validate(cls, value: Any) -> "JinjaTemplate":
         if isinstance(value, JinjaTemplate):
             return value
 
@@ -31,3 +32,11 @@ class JinjaTemplate(str):
                 raise ValueError(f"ensure this value contains a valid Jinja2 template string: {e}")
 
         return value
+
+    @classmethod
+    def validate(cls, value: Any) -> "JinjaTemplate":
+        """Try to convert/validate an arbitrary value to a JinjaTemplate."""
+        return _TYPE_ADAPTER.validate_python(value)
+
+
+_TYPE_ADAPTER = TypeAdapter(JinjaTemplate)

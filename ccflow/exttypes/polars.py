@@ -6,6 +6,7 @@ import numpy as np
 import orjson
 import polars as pl
 from packaging import version
+from pydantic import TypeAdapter
 
 __all__ = ("PolarsExpression",)
 
@@ -43,7 +44,7 @@ class PolarsExpression(pl.Expr):
             return orjson.loads(obj.meta.serialize(format="json"))
 
     @classmethod
-    def _validate(cls, value: Any) -> Any:
+    def _validate(cls, value: Any) -> "PolarsExpression":
         if isinstance(value, pl.Expr):
             return value
 
@@ -65,3 +66,11 @@ class PolarsExpression(pl.Expr):
             return expression
 
         raise ValueError(f"Supplied value '{value}' cannot be converted to a Polars expression")
+
+    @classmethod
+    def validate(cls, value: Any) -> "PolarsExpression":
+        """Try to convert/validate an arbitrary value to a PolarsExpression."""
+        return _TYPE_ADAPTER.validate_python(value)
+
+
+_TYPE_ADAPTER = TypeAdapter(PolarsExpression)

@@ -16,6 +16,7 @@ from typing import Any, Union
 import numpy as np
 import orjson
 import pandas as pd
+from pydantic import TypeAdapter
 
 from ..serialization import make_ndarray_orjson_valid, orjson_dumps
 
@@ -23,7 +24,7 @@ from ..serialization import make_ndarray_orjson_valid, orjson_dumps
 class GenericPandasWrapper(ABC):
     @classmethod
     @abstractmethod
-    def validate(cls, val: Any) -> Any: ...
+    def _validate(cls, val: Any) -> Any: ...
 
     @classmethod
     @abstractmethod
@@ -36,7 +37,7 @@ class GenericPandasWrapper(ABC):
         from pydantic_core import core_schema
 
         return core_schema.no_info_before_validator_function(
-            cls.validate,
+            cls._validate,
             core_schema.any_schema(),
             serialization=core_schema.wrap_serializer_function_ser_schema(
                 cls.encode,
@@ -46,10 +47,14 @@ class GenericPandasWrapper(ABC):
             ),
         )
 
+    @classmethod
+    def validate(cls, val: Any) -> Any:
+        return TypeAdapter(cls).validate_python(val)
+
 
 class SeriesWrapper(pd.Series, GenericPandasWrapper):
     @classmethod
-    def validate(cls, v):
+    def _validate(cls, v):
         if isinstance(v, cls):
             return v
 
@@ -92,7 +97,7 @@ class DataFrameWrapper(pd.DataFrame, GenericPandasWrapper):
     """
 
     @classmethod
-    def validate(cls, v):
+    def _validate(cls, v):
         if isinstance(v, cls):
             return v
 

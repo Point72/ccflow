@@ -1,8 +1,6 @@
 import unittest
 from unittest import TestCase
 
-from pydantic import TypeAdapter
-
 from ccflow import BaseModel, ExprTkExpression
 
 
@@ -29,24 +27,24 @@ class TestExprTkExpression(TestCase):
         import cexprtk
 
         symbol_table = cexprtk.Symbol_Table({"a": 1.0, "b": 2.0})
-        ta = TypeAdapter(ExprTkExpression)
+
         # Constant
-        e = ta.validate_python("1.0")
+        e = ExprTkExpression.validate("1.0")
         self.assertAlmostEqual(1.0, e.expression(symbol_table)())
 
         # Valid
-        e = ta.validate_python("1.0 + a * b")
+        e = ExprTkExpression.validate("1.0 + a * b")
         self.assertAlmostEqual(3.0, e.expression(symbol_table)())
 
         # Valid
-        e = ta.validate_python("-a * b")
+        e = ExprTkExpression.validate("-a * b")
         self.assertAlmostEqual(-2.0, e.expression(symbol_table)())
 
         # Invalid
-        self.assertRaisesRegex(ValueError, "Error parsing expression.*", ta.validate_python, "1a++")
+        self.assertRaisesRegex(ValueError, "Error parsing expression.*", ExprTkExpression.validate, "1a++")
 
         # Wrong types
-        self.assertRaisesRegex(ValueError, ".*cannot be converted.*", ta.validate_python, None)
+        self.assertRaisesRegex(ValueError, ".*cannot be converted.*", ExprTkExpression.validate, None)
 
     def test_model(self):
         expression = "1.0 + a"

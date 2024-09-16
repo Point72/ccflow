@@ -2,6 +2,7 @@ from typing import Any, Generic, Type, TypeVar, Union
 
 import pandas as pd
 import pyarrow as pa
+from pydantic import TypeAdapter
 from pydantic_core import core_schema
 from typing_extensions import Literal, get_args
 
@@ -112,3 +113,11 @@ class PyArrowDatatype(str):
             return value
 
         raise ValueError(f"ensure this value contains a valid PyarrowDatatype string: {value}")
+
+    @classmethod
+    def validate(cls, value) -> "PyArrowDatatype":
+        """Try to convert/validate an arbitrary value to a PyArrowDatatype."""
+        return _TYPE_ADAPTER.validate_python(value)
+
+
+_TYPE_ADAPTER = TypeAdapter(PyArrowDatatype)

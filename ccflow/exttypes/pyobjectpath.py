@@ -20,8 +20,6 @@ class PyObjectPath(str):
     #  where T could then by used for type checking in validate.
     #  However, this doesn't work: https://github.com/python/typing/issues/629
 
-    validate_always = True
-
     @cached_property
     def object(self) -> Type:
         """Return the underlying object that the path corresponds to."""
@@ -29,10 +27,10 @@ class PyObjectPath(str):
 
     @classmethod
     def __get_pydantic_core_schema__(cls, source_type, handler):
-        return core_schema.no_info_plain_validator_function(cls.validate)
+        return core_schema.no_info_plain_validator_function(cls._validate)
 
     @classmethod
-    def validate(cls, value: Any) -> Any:
+    def _validate(cls, value: Any) -> "PyObjectPath":
         if isinstance(value, PyObjectPath):
             return value
 
@@ -68,3 +66,11 @@ class PyObjectPath(str):
             raise ValueError(f"ensure this value contains valid import path or importable object: {str(e)}")
 
         return value
+
+    @classmethod
+    def validate(cls, value) -> "PyObjectPath":
+        """Try to convert/validate an arbitrary value to a PyObjectPath."""
+        return _TYPE_ADAPTER.validate_python(value)
+
+
+_TYPE_ADAPTER = TypeAdapter(PyObjectPath)

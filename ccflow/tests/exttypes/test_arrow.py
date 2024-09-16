@@ -4,7 +4,7 @@ import pandas as pd
 import polars as pl
 import pyarrow as pa
 from packaging import version
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ValidationError
 
 from ccflow import BaseModel
 from ccflow.exttypes.arrow import ArrowSchema, ArrowTable, PyArrowDatatype
@@ -174,10 +174,9 @@ class TestArrowTable(TestCase):
 class TestPyArrowDatatype(TestCase):
     def test_validate(self):
         # test validation logic to accpet pa.lib.DataType or a string representation of it
-        ta = TypeAdapter(PyArrowDatatype)
-        self.assertRaises(ValueError, ta.validate_python, True)
-        self.assertRaises(ValueError, ta.validate_python, "foo")
-        self.assertRaises(ValueError, ta.validate_python, 7)
-        self.assertRaises(ValueError, ta.validate_python, "pa.string")
-        self.assertIsInstance(ta.validate_python("pa.string()"), PyArrowDatatype)
-        self.assertIsInstance(ta.validate_python(pa.int32()), pa.lib.DataType)
+        self.assertRaises(ValueError, PyArrowDatatype.validate, True)
+        self.assertRaises(ValueError, PyArrowDatatype.validate, "foo")
+        self.assertRaises(ValueError, PyArrowDatatype.validate, 7)
+        self.assertRaises(ValueError, PyArrowDatatype.validate, "pa.string")
+        self.assertIsInstance(PyArrowDatatype.validate("pa.string()"), PyArrowDatatype)
+        self.assertIsInstance(PyArrowDatatype.validate(pa.int32()), pa.lib.DataType)

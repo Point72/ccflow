@@ -13,38 +13,35 @@ from ccflow.exttypes.polars import PolarsExpression
 class TestPolarsExpression(TestCase):
     def test_expression(self):
         expression = pl.col("Col1") + pl.col("Col2")
-        ta = TypeAdapter(PolarsExpression)
-        self.assertEqual(ta.validate_python(expression).meta.serialize(), expression.meta.serialize())
+        self.assertEqual(PolarsExpression.validate(expression).meta.serialize(), expression.meta.serialize())
 
     def test_expression_deserialization(self):
-        ta = TypeAdapter(PolarsExpression)
-        expression = ta.validate_python("pl.col('Col1') + pl.col('Col2')")
+        expression = PolarsExpression.validate("pl.col('Col1') + pl.col('Col2')")
         expected_result = pl.col("Col1") + pl.col("Col2")
 
         self.assertEqual(expression.meta.serialize(), expected_result.meta.serialize())
 
     def test_expression_complex(self):
-        ta = TypeAdapter(PolarsExpression)
-        expression = ta.validate_python(
+        expression = PolarsExpression.validate(
             "col('Col1') " "+ (sp.linalg.det(numpy.eye(2, dtype=int)) - 1 ) * math.pi * c('Col2') " "+ polars.col('Col2')"
         )
         expected_result = pl.col("Col1") + (scipy.linalg.det(np.eye(2, dtype=int)) - 1) * math.pi * pl.col("Col2") + pl.col("Col2")
 
-        self.assertEqual(
-            ta.validate_python(expression).meta.serialize(),
+        self.assertEquals(
+            PolarsExpression.validate(expression).meta.serialize(),
             expected_result.meta.serialize(),
         )
 
     def test_validation_failure(self):
         with self.assertRaises(ValueError):
-            TypeAdapter(PolarsExpression).validate_python(None)
+            PolarsExpression.validate(None)
 
         with self.assertRaises(ValueError):
-            TypeAdapter(PolarsExpression).validate_python("pl.DataFrame()")
+            PolarsExpression.validate("pl.DataFrame()")
 
     def test_validation_eval_failure(self):
         with self.assertRaises(ValueError):
-            TypeAdapter(PolarsExpression).validate_python("invalid_statement")
+            PolarsExpression.validate("invalid_statement")
 
     def test_json_serialization(self):
         expression = pl.col("Col1") + pl.col("Col2")
