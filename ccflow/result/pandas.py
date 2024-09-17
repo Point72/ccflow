@@ -1,7 +1,3 @@
-"""This module defines re-usable result types for the "Callable Model" framework
-defined in flow.callable.py.
-"""
-
 import pandas as pd
 import pyarrow as pa
 from pydantic import field_validator

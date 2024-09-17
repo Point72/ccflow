@@ -1,8 +1,3 @@
-"""This module defines re-usable result types for the "Callable Model" framework
-defined in flow.callable.py.
-"""
-
-import pandas as pd
 import pyarrow as pa
 from pydantic import Field, field_validator, model_validator
 
@@ -20,9 +15,17 @@ class ArrowResult(ResultBase):
     table: ArrowTable
 
     @field_validator("table", mode="before")
-    def _from_pandas(cls, v):
-        if isinstance(v, pd.DataFrame):
-            return pa.Table.from_pandas(v)
+    def _from_dataframe(cls, v):
+        if not isinstance(v, pa.Table):
+            import polars as pl
+
+            if isinstance(v, pl.DataFrame):
+                return v.to_arrow()
+
+            import pandas as pd
+
+            if isinstance(v, pd.DataFrame):
+                return pa.Table.from_pandas(v)
         return v
 
 
@@ -50,7 +53,7 @@ class ArrowDateRangeResult(ArrowResult):
             raise ValueError("date_col must be a column in table")
         col_type = self.table.schema.field(self.date_col).type
         if not pa.types.is_date(col_type):
-            raise TypeError(f"date_col must be of date type, not {col_type}")
+            raise ValueError(f"date_col must be of date type, not {col_type}")
         dates = self.table[self.date_col]
         if len(dates):
             min_date = pyarrow.compute.min(dates).as_py()
