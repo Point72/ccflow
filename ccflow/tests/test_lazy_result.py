@@ -1,7 +1,8 @@
-from ccflow.base import make_lazy_result, ResultBase
 from typing import ClassVar
 
 from pydantic import model_validator
+
+from ccflow.base import ResultBase, make_lazy_result
 
 
 class MyResult(ResultBase):
