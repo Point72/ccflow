@@ -1,5 +1,8 @@
 from typing import Any
 
+from pydantic import TypeAdapter
+from pydantic_core import core_schema
+
 __all__ = ("ExprTkExpression",)
 
 
@@ -16,11 +19,11 @@ class ExprTkExpression(str):
     """Wrapper around a string that represents an ExprTk expression."""
 
     @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
+    def __get_pydantic_core_schema__(cls, source_type, handler):
+        return core_schema.no_info_plain_validator_function(cls._validate)
 
     @classmethod
-    def validate(cls, value, field=None) -> Any:
+    def _validate(cls, value: Any) -> "ExprTkExpression":
         if isinstance(value, ExprTkExpression):
             return value
 
@@ -35,6 +38,11 @@ class ExprTkExpression(str):
 
         raise ValueError(f"{value} cannot be converted into an ExprTkExpression.")
 
+    @classmethod
+    def validate(cls, value: Any) -> "ExprTkExpression":
+        """Try to convert/validate an arbitrary value to a Frequency."""
+        return _TYPE_ADAPTER.validate_python(value)
+
     def expression(self, symbol_table: Any) -> Any:
         """Make a cexprtk.Expression from a symbol table.
 
@@ -46,3 +54,6 @@ class ExprTkExpression(str):
         """
         cexprtk = _import_cexprtk()
         return cexprtk.Expression(str(self), symbol_table)
+
+
+_TYPE_ADAPTER = TypeAdapter(ExprTkExpression)

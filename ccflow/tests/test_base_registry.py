@@ -6,6 +6,7 @@ from unittest import TestCase
 from hydra.errors import InstantiationException
 from omegaconf import OmegaConf
 from omegaconf.errors import InterpolationKeyError
+from pydantic import ConfigDict
 
 from ccflow import BaseModel, ModelRegistry, RegistryLookupContext, RootModelRegistry, model_alias
 
@@ -28,12 +29,11 @@ class MyClass:
 
 
 class MyNestedModel(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)  # To allow z = MyClass, even though there is no validator
+
     x: MyTestModel
     y: MyTestModel
     z: MyClass = MyClass()
-
-    class Config:
-        arbitrary_types_allowed = True  # To allow z = MyClass, even though there is no validator
 
 
 class DoubleNestedModel(BaseModel):
@@ -106,7 +106,7 @@ class TestRegistry(TestCase):
                 }
             },
         }
-        self.assertDictEqual(r.dict(by_alias=True), target)
+        self.assertDictEqual(r.model_dump(by_alias=True), target)
 
         # Test round-trip
         r2 = ModelRegistry(name="test")
@@ -121,7 +121,7 @@ class TestRegistry(TestCase):
             '"models": {"foo": {"_target_": "ccflow.tests.test_base_registry.MyTestModel", '
             '"a": "test", "b": 0.0, "c": [], "d": {}}}}'
         )
-        self.assertEqual(json.loads(r.json(by_alias=True)), json.loads(target))
+        self.assertEqual(json.loads(r.model_dump_json(by_alias=True)), json.loads(target))
 
     def test_equality(self):
         # Make sure equality doesn't pass just because two registries have the same name
@@ -198,7 +198,7 @@ class TestRegistry(TestCase):
         m = MyTestModel(a="test", b=0.0)
         r = ModelRegistry.root()
         r.add("foo", m)
-        self.assertEqual(BaseModel.validate("foo"), m)
+        self.assertEqual(BaseModel.model_validate("foo"), m)
 
         m2 = MyNestedModel(x="foo", y=MyTestModel(a="test2", b=1.0))
         self.assertEqual(m2.x, m)
@@ -299,7 +299,7 @@ class TestRegistryLoading(TestCase):
         r = ModelRegistry(name="test")
         r.load_config(cfg)
         # Can't do r.dict because of private _models. Need to fix
-        cfg2 = {name: model.dict(by_alias=True) for name, model in r.models.items()}
+        cfg2 = {name: model.model_dump(by_alias=True) for name, model in r.models.items()}
         # print(cfg2)
         # return
         r2 = ModelRegistry(name="test")
@@ -338,7 +338,7 @@ class TestRegistryLoading(TestCase):
         r = ModelRegistry.root()
         r.load_config_from_path(path)
 
-        cfg2 = {name: model.dict(by_alias=True) for name, model in r.models.items()}
+        cfg2 = {name: model.model_dump(by_alias=True) for name, model in r.models.items()}
         r2 = ModelRegistry(name="replica")
         r2.load_config(cfg2)
         self.assertEqual(r.models, r2.models)
@@ -383,7 +383,7 @@ class TestRegistryLoading(TestCase):
         r.load_config_from_path(path)
 
         # cfg2 = {name: model.dict(by_alias=True) for name, model in r.models.items()}
-        cfg2 = r.dict(by_alias=True)
+        cfg2 = r.model_dump(by_alias=True)
         self.assertIn("_target_", cfg2)
         r2 = ModelRegistry(name="replica")
         r2.load_config(cfg2["models"])
@@ -537,29 +537,29 @@ class TestRegistryLookupContext(TestCase):
         r.add("foo", r2)
 
         # Does not work in the base context
-        self.assertRaises((KeyError, ValueError), BaseModel.validate, "baz")
+        self.assertRaises((KeyError, ValueError), BaseModel.model_validate, "baz")
 
         # Add m2 to root
         r.add("baz", m2)
         # All of below work in root context
-        self.assertIs(BaseModel.validate("baz"), m2)
-        self.assertIs(BaseModel.validate("baz"), m2)
-        self.assertIs(BaseModel.validate("./baz"), m2)  # From root
+        self.assertIs(BaseModel.model_validate("baz"), m2)
+        self.assertIs(BaseModel.model_validate("baz"), m2)
+        self.assertIs(BaseModel.model_validate("./baz"), m2)  # From root
 
         # Validation works in the context where "registry" is foo/bar
         with RegistryLookupContext([r3]):
-            self.assertIs(BaseModel.validate("baz"), m)
-            self.assertIs(BaseModel.validate("./baz"), m)
+            self.assertIs(BaseModel.model_validate("baz"), m)
+            self.assertIs(BaseModel.model_validate("./baz"), m)
 
         # Also works in nested contexts
         with RegistryLookupContext([r2, r3]):
-            self.assertIs(BaseModel.validate("baz"), m)
+            self.assertIs(BaseModel.model_validate("baz"), m)
 
         with RegistryLookupContext([r2]):
-            self.assertIs(BaseModel.validate("bar"), r3)
+            self.assertIs(BaseModel.model_validate("bar"), r3)
         with RegistryLookupContext([r2, r3]):
-            self.assertIs(BaseModel.validate("../bar"), r3)
+            self.assertIs(BaseModel.model_validate("../bar"), r3)
         with RegistryLookupContext([r2, r3, r]):
-            self.assertIs(BaseModel.validate("../baz"), m)
-            self.assertIs(BaseModel.validate("foo"), r2)
-            self.assertIs(BaseModel.validate("./foo/bar/baz"), m)
+            self.assertIs(BaseModel.model_validate("../baz"), m)
+            self.assertIs(BaseModel.model_validate("foo"), r2)
+            self.assertIs(BaseModel.model_validate("./foo/bar/baz"), m)

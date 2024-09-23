@@ -3,15 +3,10 @@
 from functools import cached_property
 from typing import Any, Type, get_origin
 
-import pydantic
-from packaging import version
+from pydantic import ImportString, TypeAdapter
+from pydantic_core import core_schema
 
-if version.parse(pydantic.__version__) < version.parse("2"):
-    from pydantic.utils import import_string
-else:
-    from pydantic import ImportString, TypeAdapter
-
-    import_string = TypeAdapter(ImportString).validate_python
+import_string = TypeAdapter(ImportString).validate_python
 
 
 class PyObjectPath(str):
@@ -25,19 +20,17 @@ class PyObjectPath(str):
     #  where T could then by used for type checking in validate.
     #  However, this doesn't work: https://github.com/python/typing/issues/629
 
-    validate_always = True
-
     @cached_property
     def object(self) -> Type:
         """Return the underlying object that the path corresponds to."""
         return import_string(str(self))
 
     @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
+    def __get_pydantic_core_schema__(cls, source_type, handler):
+        return core_schema.no_info_plain_validator_function(cls._validate)
 
     @classmethod
-    def validate(cls, value: Any, field=None) -> Any:
+    def _validate(cls, value: Any) -> "PyObjectPath":
         if isinstance(value, PyObjectPath):
             return value
 
@@ -73,3 +66,11 @@ class PyObjectPath(str):
             raise ValueError(f"ensure this value contains valid import path or importable object: {str(e)}")
 
         return value
+
+    @classmethod
+    def validate(cls, value) -> "PyObjectPath":
+        """Try to convert/validate an arbitrary value to a PyObjectPath."""
+        return _TYPE_ADAPTER.validate_python(value)
+
+
+_TYPE_ADAPTER = TypeAdapter(PyObjectPath)

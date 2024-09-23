@@ -50,7 +50,7 @@ class TestCompositePublishers(TestCase):
             data = {"a": "foo", "b": {"c": "bar", "d": 10.0}}
             p.data = data
             self.assertIsInstance(p, PydanticBaseModel)
-            self.assertEqual(p.data.dict(), data)
+            self.assertEqual(p.data.model_dump(mode="python"), data)
 
     def test_field_publishers(self):
         with tempfile.TemporaryDirectory() as tempdir:
@@ -158,7 +158,7 @@ class TestCompositePublishers(TestCase):
             p.field_publishers["d"] = JSONPublisher(name="custom_d")
             p.field_publishers["e"] = GenericFilePublisher(name="", suffix=".txt")
 
-            p.data = ComplexTestModel().dict()
+            p.data = ComplexTestModel().model_dump(mode="python")
             paths = p()
             target = {
                 "b": Path("test_composite_dict/b.txt"),
