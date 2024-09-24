@@ -46,6 +46,10 @@ class MyCallable(CallableModel):
         return MyResult(x=self.i, y=context.a)
 
 
+class MyCallableChild(MyCallable):
+    pass
+
+
 class MyCallableParent(CallableModel):
     my_callable: MyCallable
 
@@ -185,6 +189,17 @@ class TestContext(TestCase):
 class TestCallableModel(TestCase):
     def test_callable(self):
         m = MyCallable(i=5)
+        self.assertEqual(m(MyContext(a="foo")), MyResult(x=5, y="foo"))
+        self.assertEqual(m.context_type, MyContext)
+        self.assertEqual(m.result_type, MyResult)
+        out = m.model_dump(mode="python")
+        self.assertIn("meta", out)
+        self.assertIn("i", out)
+        self.assertIn("type_", out)
+        self.assertNotIn("context_type", out)
+
+    def test_inheritance(self):
+        m = MyCallableChild(i=5)
         self.assertEqual(m(MyContext(a="foo")), MyResult(x=5, y="foo"))
         self.assertEqual(m.context_type, MyContext)
         self.assertEqual(m.result_type, MyResult)
