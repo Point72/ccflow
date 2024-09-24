@@ -760,8 +760,8 @@ def make_lazy_result(res_type: ResultType, to_copy_fn) -> ResultType:
         object.__setattr__(obj, "__dict__", new_obj.__dict__)
         if hasattr(new_obj, "__pydantic_fields_set__"):
             object.__setattr__(obj, "__pydantic_fields_set__", new_obj.__pydantic_fields_set__)
-        if hasattr(new_obj, "__pydantic_fields_set__"):
-            object.__setattr__(obj, "__pydantic_fields_set__", new_obj.__pydantic_extra__)
+        if hasattr(new_obj, "__pydantic_extra__"):
+            object.__setattr__(obj, "__pydantic_extra__", new_obj.__pydantic_extra__)
         if hasattr(new_obj, "__pydantic_private__"):
             object.__setattr__(obj, "__pydantic_private__", new_obj.__pydantic_private__)
 
