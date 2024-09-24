@@ -10,10 +10,22 @@ import_string = TypeAdapter(ImportString).validate_python
 
 
 class PyObjectPath(str):
-    """Similar to pydantic's PyObject, this class represents the path to the object as a string.
+    """Similar to pydantic's ImportString (formerly PyObject in v1), this class represents the path to the object as a string.
 
-    This is useful because it can be serialized/deserialized (including to json), unlike Pydantic's PyObject,
-    while also providing easy access to the underlying object.
+    In pydantic v1, PyObject could not be serialized to json, whereas in v2, ImportString can.
+    However, the round trip is not always consistent, i.e.
+        >>> ta = TypeAdapter(ImportString)
+        >>> ta.validate_json(ta.dump_json("math.pi"))
+        3.141592653589793
+        >>> ta = TypeAdapter(PyObjectPath)
+        >>> ta.validate_json(ta.dump_json("math.pi"))
+        'math.pi'
+
+    Other differences are that ImportString can contain other arbitrary python values, whereas PyObjectPath is always a string
+        >>> TypeAdapter(ImportString).validate_python(0)
+        0
+        >>> TypeAdapter(PyObjectPath).validate_python(0)
+        raises
     """
 
     # TODO: It would be nice to make this also derive from Generic[T],
@@ -31,16 +43,9 @@ class PyObjectPath(str):
 
     @classmethod
     def _validate(cls, value: Any) -> "PyObjectPath":
-        if isinstance(value, PyObjectPath):
-            return value
-
         if isinstance(value, str):
             value = cls(value)
-            try:
-                value.object
-            except ImportError as e:
-                raise ValueError(f"ensure this value contains valid import path or importable object: {str(e)}")
-        else:
+        else:  # Try to construct a string from the object that can then be used to import the object
             origin = get_origin(value)
             if origin is not None:
                 value = origin
