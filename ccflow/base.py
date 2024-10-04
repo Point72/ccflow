@@ -178,6 +178,7 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
     _registrations: List[Tuple["ModelRegistry", str]] = PrivateAttr(default_factory=list)
 
     model_config = ConfigDict(
+        # Note that validate_assignment only partially works: https://github.com/pydantic/pydantic/issues/7105
         validate_assignment=True,
         populate_by_name=True,
         coerce_numbers_to_str=True,  # New in v2 for backwards compatibility with V1
