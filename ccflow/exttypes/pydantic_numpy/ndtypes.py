@@ -23,11 +23,9 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
-from typing import Any, Dict
+from typing import Any
 
 import numpy as np
-import pydantic
-from packaging import version
 from pydantic import ValidationError
 from typing_extensions import get_args
 
@@ -70,19 +68,11 @@ __all__ = (
 
 
 class _BaseDType:
-    if version.parse(pydantic.__version__) < version.parse("2"):
-
-        @classmethod
-        def __modify_schema__(cls, field_schema: Dict[str, Any]) -> None:
-            field_schema.update({"type": cls.__name__})
-
-    else:
-
-        @classmethod
-        def __get_pydantic_json_schema__(cls, core_schema, handler):
-            json_schema = handler(core_schema)
-            json_schema.update({"type": cls.__name__})
-            return json_schema
+    @classmethod
+    def __get_pydantic_json_schema__(cls, core_schema, handler):
+        json_schema = handler(core_schema)
+        json_schema.update({"type": cls.__name__})
+        return json_schema
 
     @classmethod
     def __get_validators__(cls) -> Any:
@@ -99,7 +89,6 @@ class _BaseDType:
 
     @classmethod
     def __get_pydantic_core_schema__(cls, source_type, handler):
-        """Validation for pydantic v2"""
         from pydantic_core import core_schema
 
         def _validate(val):

@@ -3,10 +3,12 @@
 import warnings
 from datetime import timedelta
 from functools import cached_property
-from typing import Any, Type
+from typing import Type
 
 import pandas as pd
 from pandas.tseries.frequencies import to_offset
+from pydantic import TypeAdapter
+from pydantic_core import core_schema
 
 
 class Frequency(str):
@@ -24,13 +26,13 @@ class Frequency(str):
         return pd.to_timedelta(self.offset).to_pytimedelta()
 
     @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
+    def __get_pydantic_core_schema__(cls, source_type, handler):
+        return core_schema.no_info_plain_validator_function(cls._validate)
 
     @classmethod
-    def validate(cls, value, field=None) -> Any:
+    def _validate(cls, value) -> "Frequency":
         if isinstance(value, cls):
-            return cls.validate(str(value))
+            return cls._validate(str(value))
 
         if isinstance(value, (timedelta, str)):
             try:
@@ -46,3 +48,11 @@ class Frequency(str):
             return cls(f"{value.n}{value.base.freqstr}")
 
         raise ValueError(f"ensure this value can be converted to a pandas offset: {value}")
+
+    @classmethod
+    def validate(cls, value) -> "Frequency":
+        """Try to convert/validate an arbitrary value to a Frequency."""
+        return _TYPE_ADAPTER.validate_python(value)
+
+
+_TYPE_ADAPTER = TypeAdapter(Frequency)

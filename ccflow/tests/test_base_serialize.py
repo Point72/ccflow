@@ -1,11 +1,8 @@
-import platform
 import unittest
 from typing import ClassVar, Dict, List, Optional, Type, Union
 
 import numpy as np
-import pydantic
-import pytest
-from packaging import version
+from pydantic import BaseModel as PydanticBaseModel, ConfigDict, ValidationError
 
 from ccflow import BaseModel, NDArray, make_ndarray_orjson_valid
 from ccflow.enums import Enum
@@ -38,11 +35,9 @@ class ArbitraryType:
 class B(A):
     """B implements A and adds a json encoder."""
 
-    x: ArbitraryType
+    model_config = ConfigDict(arbitrary_types_allowed=True)  # To allow z = MyClass, even though there is no validator
 
-    class Config:
-        arbitrary_types_allowed = True
-        json_encoders = {ArbitraryType: lambda x: x.x}
+    x: ArbitraryType
 
 
 class C(BaseModel):
@@ -108,13 +103,13 @@ class TestBaseModelSerialization(unittest.TestCase):
         if equality_check is None:
             equality_check = self.assertEqual
         # Object serialization
-        serialized = model.dict()
-        deserialized = type(model).parse_obj(serialized)
+        serialized = model.model_dump(mode="python")
+        deserialized = type(model).model_validate(serialized)
         equality_check(model, deserialized)
 
         # JSON serialization
-        serialized = model.json()
-        deserialized = type(model).parse_raw(serialized)
+        serialized = model.model_dump_json()
+        deserialized = type(model).model_validate_json(serialized)
         equality_check(model, deserialized)
 
     def test_make_ndarray_orjson_valid(self):
@@ -153,7 +148,7 @@ class TestBaseModelSerialization(unittest.TestCase):
 
     def test_from_str_serialization(self):
         serialized = '{"_target_": "ccflow.tests.test_base_serialize.ChildModel", ' '"field1": 9, "field2": 4}'
-        deserialized = BaseModel.parse_raw(serialized)
+        deserialized = BaseModel.model_validate_json(serialized)
         self.assertEqual(deserialized, ChildModel(field1=9, field2=4))
 
     def test_numpy_serialize(self):
@@ -191,51 +186,21 @@ class TestBaseModelSerialization(unittest.TestCase):
         class B(BaseModel):
             """Override the config. Hopefully the config from our BaseModel doesn't get overridden."""
 
-            class Config:
-                arbitrary_types_allowed = True
+            model_config = ConfigDict(arbitrary_types_allowed=True)
 
-        class C(pydantic.BaseModel):
+        class C(PydanticBaseModel):
             """Override the config on a normal pydantic BaseModel (not our BaseModel)."""
 
-            class Config:
-                arbitrary_types_allowed = True
+            model_config = ConfigDict(arbitrary_types_allowed=True)
 
-        self.assertRaises(pydantic.ValidationError, A, extra_field1=1)
+        self.assertRaises(ValidationError, A, extra_field1=1)
 
         # If configs are not inherited, B should allow extra fields.
-        self.assertRaises(pydantic.ValidationError, B, extra_field1=1)
+        self.assertRaises(ValidationError, B, extra_field1=1)
 
-        # C implements the normal pydantic BaseModel which should allow extra fields.
+        # C implements the normal pydantic BaseModel whichhould allow extra fields.
         _ = C(extra_field1=1)
 
-    @pytest.mark.skipif(
-        pydantic.__version__.startswith("2"),
-        reason="Fixed in version 2 because serialization handled by the type.",
-    )
-    def test_subclass_json_encoders(self):
-        """Test that json encoders in subclasses of BaseModel gets registered in the BaseModel config."""
-
-        c = C(a=B(x=ArbitraryType(1)))
-
-        # If the json_encoders of B didn't get registered in BaseModel, serializing C should fail.
-        self.assertIsNotNone(c.json())
-
-        # Just to prove that serialization will fail if the json_encoder doesn't get registered in the BaseModel,
-        # we create class D which implements pydantic's vanilla BaseModel which doesn't know to register the
-        # json_encoders of subclasses.
-
-        class D(pydantic.BaseModel):
-            """D is composed of an A, but implements the vanilla pydantic BaseModel instead of the ccflow one."""
-
-            a: A
-
-        d = D(a=B(x=ArbitraryType(1)))
-        self.assertRaises(TypeError, d.json)
-
-    @pytest.mark.skipif(
-        pydantic.__version__.startswith("1"),
-        reason="SerializeAsAny introduced in pydantic 2.",
-    )
     def test_serialize_as_any(self):
         # https://docs.pydantic.dev/latest/concepts/serialization/#serializing-with-duck-typing
         # https://github.com/pydantic/pydantic/issues/6423
@@ -258,10 +223,7 @@ class TestBaseModelSerialization(unittest.TestCase):
             "a5": Type[A],
             "a6": constr(min_length=1),  # Uses Annotation
         }
-        if version.parse(platform.python_version()) < version.parse("3.9"):
-            target["a3"] = Dict[str, Optional[List[SerializeAsAny[A]]]]
-        else:
-            target["a3"] = dict[str, Optional[list[SerializeAsAny[A]]]]
+        target["a3"] = dict[str, Optional[list[SerializeAsAny[A]]]]
         annotations = MyNestedModel.__annotations__
         self.assertEqual(str(annotations["a1"]), str(target["a1"]))
         self.assertEqual(str(annotations["a2"]), str(target["a2"]))

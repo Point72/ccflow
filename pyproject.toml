@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "ccflow"
 description = "TODO"
-version = "0.1.2"
+version = "0.2.0"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.8"
@@ -41,7 +41,7 @@ dependencies = [
     "orjson",
     "pandas",
     "pyarrow",
-    "pydantic",
+    "pydantic>=2.6,<3",
     "smart_open",
     "tenacity",
 ]
@@ -94,7 +94,7 @@ Repository = "https://github.com/point72/ccflow"
 Homepage = "https://github.com/point72/ccflow"
 
 [tool.bumpversion]
-current_version = "0.1.2"
+current_version = "0.2.0"
 commit = true
 tag = false
 commit_args = "-s"
@@ -161,12 +161,16 @@ exclude = [
 [tool.ruff]
 line-length = 150
 
+[tool.ruff.lint]
+extend-select = ["I"]
+
 [tool.ruff.lint.isort]
 combine-as-imports = true
 default-section = "third-party"
 known-first-party = ["ccflow"]
 section-order = [
     "future",
+    "standard-library",
     "third-party",
     "first-party",
     "local-folder",

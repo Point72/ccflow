@@ -10,7 +10,7 @@ from ccflow.exttypes.frequency import Frequency
 IS_PD_22 = parse(pd.__version__) >= parse("2.2")
 
 
-class TestDateOffset(TestCase):
+class TestFrequency(TestCase):
     def test_basic(self):
         f = Frequency("5min")
         self.assertIsInstance(f, str)

@@ -10,11 +10,13 @@ https://pandas.pydata.org/pandas-docs/stable/development/extending.html#extendin
 """
 
 from abc import ABC, abstractmethod
+from io import StringIO
 from typing import Any, Union
 
 import numpy as np
 import orjson
 import pandas as pd
+from pydantic import TypeAdapter
 
 from ..serialization import make_ndarray_orjson_valid, orjson_dumps
 
@@ -22,11 +24,7 @@ from ..serialization import make_ndarray_orjson_valid, orjson_dumps
 class GenericPandasWrapper(ABC):
     @classmethod
     @abstractmethod
-    def validate(cls, val: Any, field) -> Any: ...
-
-    @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
+    def _validate(cls, val: Any) -> Any: ...
 
     @classmethod
     @abstractmethod
@@ -36,36 +34,27 @@ class GenericPandasWrapper(ABC):
 
     @classmethod
     def __get_pydantic_core_schema__(cls, source_type, handler):
-        """Validation for pydantic v2"""
         from pydantic_core import core_schema
 
         return core_schema.no_info_before_validator_function(
-            cls.validate,
+            cls._validate,
             core_schema.any_schema(),
             serialization=core_schema.wrap_serializer_function_ser_schema(
                 cls.encode,
                 info_arg=False,
-                return_schema=core_schema.list_schema(),
+                return_schema=core_schema.str_schema(),
                 when_used="json",
             ),
         )
 
+    @classmethod
+    def validate(cls, val: Any) -> Any:
+        return TypeAdapter(cls).validate_python(val)
+
 
 class SeriesWrapper(pd.Series, GenericPandasWrapper):
-    # @property
-    # def _constructor(self):
-    #     return SeriesWrapper
-
-    # @property
-    # def _constructor_expanddim(self):
-    #     return DataFrameWrapper
-
     @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
-
-    @classmethod
-    def validate(cls, v, field=None):
+    def _validate(cls, v):
         if isinstance(v, cls):
             return v
 
@@ -107,20 +96,8 @@ class DataFrameWrapper(pd.DataFrame, GenericPandasWrapper):
     without needing to enable arbitrary_types_allowed.
     """
 
-    # @property
-    # def _constructor(self):
-    #     return DataFrameWrapper
-
-    # @property
-    # def _constructor_sliced(self):
-    #     return SeriesWrapper
-
     @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
-
-    @classmethod
-    def validate(cls, v, field=None):
+    def _validate(cls, v):
         if isinstance(v, cls):
             return v
 
@@ -142,7 +119,7 @@ class DataFrameWrapper(pd.DataFrame, GenericPandasWrapper):
     @classmethod
     def decode(cls, x: Union[str, dict]) -> "DataFrameWrapper":
         if isinstance(x, str):
-            return cls(pd.read_json(x, orient="table"))
+            return cls(pd.read_json(StringIO(x), orient="table"))
         return cls(pd.DataFrame.from_dict(x))
 
 

@@ -1,10 +1,7 @@
 from typing import Any, Iterable, Set, TypeVar, Union
 
 import pandas as pd
-import pydantic
-from packaging import version
-from pydantic import BaseModel as PydanticBaseModel
-from pydantic import create_model
+from pydantic import BaseModel as PydanticBaseModel, ConfigDict, create_model
 
 __all__ = (
     "PydanticModelType",
@@ -19,16 +16,17 @@ PydanticModelType = TypeVar("ModelType", bound=PydanticBaseModel)
 class PydanticDictOptions(PydanticBaseModel):
     """See https://pydantic-docs.helpmanual.io/usage/exporting_models/#modeldict"""
 
+    model_config = ConfigDict(
+        # Want to validate assignment so that if lists are assigned to include/exclude, they get validated
+        validate_assignment=True
+    )
+
     include: Set[str] = None
     exclude: Set[str] = set()
     by_alias: bool = False
     exclude_unset: bool = False
     exclude_defaults: bool = False
     exclude_none: bool = False
-
-    class Config:
-        # Want to validate assignment so that if lists are assigned to include/exclude, they get validated
-        validate_assignment = True
 
 
 _DEFAULT_OPTIONS = PydanticDictOptions()
@@ -39,14 +37,10 @@ def dict_to_model(cls, v) -> PydanticBaseModel:
     Without it, dict is coerced to PydanticBaseModel, losing all data.
     """
     if isinstance(v, dict):
-
-        class Config:
-            arbitrary_types_allowed = True
-            if version.parse(pydantic.__version__) < version.parse("2"):
-                copy_on_model_validation = "none"
+        config = ConfigDict(arbitrary_types_allowed=True)
 
         fields = {f: (Any, None) for f in v}
-        v = create_model("DynamicDictModel", **fields, __config__=Config)(**v)
+        v = create_model("DynamicDictModel", **fields, __config__=config)(**v)
     return v
 
 
@@ -59,7 +53,7 @@ def models_to_pandas(
     """
     if isinstance(models, PydanticBaseModel):
         models = [models]
-    data = [model.dict(**options.dict()) for model in models]
+    data = [model.model_dump(**options.model_dump(mode="python")) for model in models]
     return pd.json_normalize(data, **kwargs)
 
 

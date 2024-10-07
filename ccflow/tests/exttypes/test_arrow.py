@@ -39,7 +39,6 @@ class TestArrowSchema(TestCase):
 
         # You can't actually construct the schema type (because the schema is on the type, not the instance)
         self.assertRaises(TypeError, SCHEMA_WEAK)
-        self.assertRaises(ValueError, SCHEMA_WEAK.validate, SCHEMA_WEAK.schema)
 
 
 class TestArrowTable(TestCase):

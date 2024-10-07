@@ -1,7 +1,3 @@
-"""This module defines re-usable result types for the "Callable Model" framework
-defined in flow.callable.py.
-"""
-
 from typing import Dict, Generic, TypeVar
 
 from ..base import ResultBase

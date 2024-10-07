@@ -6,6 +6,7 @@ import numpy as np
 import orjson
 import polars as pl
 from packaging import version
+from pydantic import TypeAdapter
 
 __all__ = ("PolarsExpression",)
 
@@ -14,17 +15,12 @@ class PolarsExpression(pl.Expr):
     """Provides a polars expressions from a string"""
 
     @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
-
-    @classmethod
     def __get_pydantic_core_schema__(cls, source_type, handler):
-        """Validation for pydantic v2"""
         from pydantic_core import core_schema
 
         return core_schema.json_or_python_schema(
             json_schema=core_schema.no_info_plain_validator_function(function=cls._decode),
-            python_schema=core_schema.no_info_plain_validator_function(function=cls.validate),
+            python_schema=core_schema.no_info_plain_validator_function(function=cls._validate),
             serialization=core_schema.plain_serializer_function_ser_schema(cls._encode, return_schema=core_schema.dict_schema()),
         )
 
@@ -48,7 +44,7 @@ class PolarsExpression(pl.Expr):
             return orjson.loads(obj.meta.serialize(format="json"))
 
     @classmethod
-    def validate(cls, value: Any, field=None) -> Any:
+    def _validate(cls, value: Any) -> "PolarsExpression":
         if isinstance(value, pl.Expr):
             return value
 
@@ -70,3 +66,11 @@ class PolarsExpression(pl.Expr):
             return expression
 
         raise ValueError(f"Supplied value '{value}' cannot be converted to a Polars expression")
+
+    @classmethod
+    def validate(cls, value: Any) -> "PolarsExpression":
+        """Try to convert/validate an arbitrary value to a PolarsExpression."""
+        return _TYPE_ADAPTER.validate_python(value)
+
+
+_TYPE_ADAPTER = TypeAdapter(PolarsExpression)

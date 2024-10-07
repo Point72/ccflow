@@ -1,9 +1,7 @@
 from typing import Any, Dict, List
 from unittest import TestCase
 
-import pydantic
-import pytest
-from pydantic import ValidationError
+from pydantic import ConfigDict, ValidationError
 
 from ccflow import BaseModel, PyObjectPath
 
@@ -39,12 +37,11 @@ class MyClass:
 
 
 class MyNestedModel(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)  # To allow z = MyClass, even though there is no validator
+
     x: MyTestModel
     y: MyTestModel
     z: MyClass = MyClass()
-
-    class Config:
-        arbitrary_types_allowed = True  # To allow z = MyClass, even though there is no validator
 
 
 class DoubleNestedModel(BaseModel):
@@ -54,9 +51,6 @@ class DoubleNestedModel(BaseModel):
 
 class CopyModel(BaseModel):
     x: str
-
-    class Config:
-        copy_on_validate = "deep"
 
 
 class TestBaseModel(TestCase):
@@ -78,14 +72,14 @@ class TestBaseModel(TestCase):
 
     def test_dict(self):
         m = MyTestModel(a="foo", b=0.0)
-        self.assertEqual(m.parse_obj(m.dict(by_alias=False)), m)
-        self.assertEqual(m.parse_obj(m.dict(by_alias=True)), m)
+        self.assertEqual(m.model_validate(m.model_dump(by_alias=False)), m)
+        self.assertEqual(m.model_validate(m.model_dump(by_alias=True)), m)
 
         # Make sure parsing doesn't impact original dict (i.e. by popping element out of it)
-        d = m.dict(by_alias=False)
-        self.assertEqual(m.parse_obj(d).dict(by_alias=False), d)
-        d = m.dict(by_alias=True)
-        self.assertEqual(m.parse_obj(d).dict(by_alias=True), d)
+        d = m.model_dump(by_alias=False)
+        self.assertEqual(m.model_validate(d).model_dump(by_alias=False), d)
+        d = m.model_dump(by_alias=True)
+        self.assertEqual(m.model_validate(d).model_dump(by_alias=True), d)
 
     def test_coerce_from_other_type(self):
         # This test would have broken when we originally turned on extra field validation,
@@ -93,9 +87,9 @@ class TestBaseModel(TestCase):
         # to take dict(ModelA(x="foo")), which contains the "type_" field, which is considered as
         # an "extra" field due to the aliasing, which then causes a failure.
         # It was fixed by popping this out in the pre-root validation.
-        self.assertEqual(ModelB.validate(ModelA(x="foo")), ModelB(x="foo"))
+        self.assertEqual(ModelB.model_validate(ModelA(x="foo")), ModelB(x="foo"))
 
-        self.assertRaises(ValidationError, ModelA.validate, ModelC(x="foo", y="bar"))
+        self.assertRaises(ValidationError, ModelA.model_validate, ModelC(x="foo", y="bar"))
 
     def test_type_after_assignment(self):
         # This test catches an original bug where the type_ validator didn't originally return
@@ -108,22 +102,12 @@ class TestBaseModel(TestCase):
         self.assertIsInstance(m.type_, PyObjectPath)
         self.assertEqual(m.type_, path)
 
-    @pytest.mark.skipif(
-        pydantic.__version__.startswith("2"),
-        reason="copy_on_validate only relevant in v1",
-    )
-    def test_copy_on_validate(self):
-        # Make sure that this functionality works (and isn't broken by our validation function)
-        m = CopyModel(x="foo")
-        self.assertEqual(CopyModel.validate(m), m)
-        self.assertIsNot(CopyModel.validate(m), m)
-
     def test_validate(self):
-        self.assertEqual(ModelA.validate({"x": "foo"}), ModelA(x="foo"))
+        self.assertEqual(ModelA.model_validate({"x": "foo"}), ModelA(x="foo"))
         type_ = "ccflow.tests.test_base.ModelA"
-        self.assertEqual(ModelA.validate({"_target_": type_, "x": "foo"}), ModelA(x="foo"))
-        self.assertEqual(BaseModel.validate({"_target_": type_, "x": "foo"}), ModelA(x="foo"))
-        self.assertEqual(BaseModel.validate(ModelA(x="foo")), ModelA(x="foo"))
+        self.assertEqual(ModelA.model_validate({"_target_": type_, "x": "foo"}), ModelA(x="foo"))
+        self.assertEqual(BaseModel.model_validate({"_target_": type_, "x": "foo"}), ModelA(x="foo"))
+        self.assertEqual(BaseModel.model_validate(ModelA(x="foo")), ModelA(x="foo"))
 
     def test_widget(self):
         obj = object()

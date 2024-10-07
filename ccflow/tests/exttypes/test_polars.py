@@ -3,10 +3,9 @@ from unittest import TestCase
 
 import numpy as np
 import polars as pl
-import pydantic
-import pytest
 import scipy
 from packaging import version
+from pydantic import TypeAdapter
 
 from ccflow.exttypes.polars import PolarsExpression
 
@@ -28,7 +27,7 @@ class TestPolarsExpression(TestCase):
         )
         expected_result = pl.col("Col1") + (scipy.linalg.det(np.eye(2, dtype=int)) - 1) * math.pi * pl.col("Col2") + pl.col("Col2")
 
-        self.assertEquals(
+        self.assertEqual(
             PolarsExpression.validate(expression).meta.serialize(),
             expected_result.meta.serialize(),
         )
@@ -44,18 +43,14 @@ class TestPolarsExpression(TestCase):
         with self.assertRaises(ValueError):
             PolarsExpression.validate("invalid_statement")
 
-    @pytest.mark.skipif(
-        pydantic.__version__.startswith("1"),
-        reason="JSON serialization for polars expression only supported in pydantic 2.",
-    )
     def test_json_serialization(self):
         expression = pl.col("Col1") + pl.col("Col2")
-        json_result = pydantic.TypeAdapter(PolarsExpression).dump_json(expression)
+        json_result = TypeAdapter(PolarsExpression).dump_json(expression)
         if version.parse(pl.__version__) < version.parse("1.0.0"):
             self.assertEqual(json_result.decode("utf-8"), expression.meta.serialize())
         else:
             # polars serializes into a binary format by default.
             self.assertEqual(json_result.decode("utf-8"), expression.meta.serialize(format="json"))
 
-        expected_result = pydantic.TypeAdapter(PolarsExpression).validate_json(json_result)
+        expected_result = TypeAdapter(PolarsExpression).validate_json(json_result)
         self.assertEqual(expected_result.meta.serialize(), expression.meta.serialize())

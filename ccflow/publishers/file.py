@@ -4,14 +4,13 @@ from typing import IO, Any, Callable, Dict, Generic
 import pandas as pd
 import yaml
 from cloudpathlib import AnyPath
-from pydantic import Field, validator
+from pydantic import Field, field_validator
 from typing_extensions import Literal, override
 
 from ..exttypes import JinjaTemplate
 from ..publisher import BasePublisher
 from ..serialization import orjson_dumps
 from ..utils import PydanticDictOptions, PydanticModelType, dict_to_model
-from ..utils.pydantic1to2 import GenericModel
 
 __all__ = (
     "DictTemplateFilePublisher",
@@ -134,23 +133,23 @@ class DictTemplateFilePublisher(BasePublisher):
         )()
 
 
-class PydanticJSONPublisher(BasePublisher, GenericModel, Generic[PydanticModelType]):
+class PydanticJSONPublisher(BasePublisher, Generic[PydanticModelType]):
     """See https://pydantic-docs.helpmanual.io/usage/exporting_models/#modeljson"""
 
     data: PydanticModelType = None
     options: PydanticDictOptions = Field(default_factory=PydanticDictOptions)
     kwargs: Dict[str, Any] = Field(default_factory=dict)
 
-    _normalize_data = validator("data", pre=True, allow_reuse=True)(dict_to_model)
+    _normalize_data = field_validator("data", mode="before")(dict_to_model)
 
     @classmethod
     def dump(cls, data, file, **kwargs):
-        out = data.json(**kwargs)
+        out = data.model_dump_json(**kwargs)
         file.write(out)
 
     @override
     def __call__(self) -> AnyPath:
-        kwargs = self.options.dict()
+        kwargs = self.options.model_dump(mode="python")
         kwargs.update(self.kwargs)
         return GenericFilePublisher(
             name=self.name,

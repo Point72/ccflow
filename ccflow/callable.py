@@ -17,30 +17,17 @@ from functools import wraps
 from inspect import Signature, isclass, signature
 from typing import Any, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar
 
-import pydantic
-from packaging import version
-from pydantic import BaseModel as PydanticBaseModel
-from pydantic import Field, PrivateAttr, ValidationError, root_validator, validator
+from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter, field_validator, model_validator
 from typing_extensions import override
 
-from ccflow.utils.pydantic1to2 import GenericModel
-
-from .base import ContextType  # noqa: F401
-from .base import BaseModel, ContextBase, ResultBase, ResultType
+from .base import (
+    BaseModel,
+    ContextBase,
+    ContextType,  # noqa: F401
+    ResultBase,
+    ResultType,
+)
 from .validators import str_to_log_level
-
-if version.parse(pydantic.__version__) < version.parse("2"):
-    from pydantic.error_wrappers import ErrorWrapper
-    from pydantic.errors import SubclassError
-
-    IS_PYDANTIC_V2 = False
-else:
-    from pydantic import TypeAdapter, model_validator
-    from pydantic.v1.error_wrappers import ErrorWrapper
-    from pydantic.v1.errors import SubclassError
-
-    IS_PYDANTIC_V2 = True
-
 
 __all__ = (
     "GraphDepType",
@@ -86,55 +73,47 @@ class _CallableModel(BaseModel, abc.ABC):
     The purpose of this class is to provide type definitions of context_type and return_type.
     """
 
+    model_config = ConfigDict(
+        ignored_types=(property,),
+        # Whether to validate that the decorator has been applied to __call__
+        validate_decorator=True,
+    )
     meta: MetaData = Field(default_factory=MetaData)
 
-    if version.parse(pydantic.__version__) < version.parse("2"):
-
-        class Config(BaseModel.Config):
-            keep_untouched = (property,)
-            # Whether to validate that the decorator has been applied to __call__
-            validate_decorator: bool = True
-            if version.parse(pydantic.__version__) < version.parse("2"):
-                # For models, we want to allow for the same model to be re-used downstream by multiple other models
-                copy_on_model_validation: str = "none"
-
-    else:
-
-        class Config(BaseModel.Config):
-            ignored_types = (property,)
-            # Whether to validate that the decorator has been applied to __call__
-            validate_decorator: bool = True
-
-    @root_validator(skip_on_failure=True)
-    def _check_decorator(cls, values):
-        call = cls.__call__
-        if cls.Config.validate_decorator and not hasattr(call, "__wrapped__") and getattr(call, "__name__", "") != "Flow.call":
+    @model_validator(mode="after")
+    def _check_decorator(self):
+        call = self.__call__
+        if self.model_config["validate_decorator"] and not hasattr(call, "__wrapped__") and getattr(call, "__name__", "") != "Flow.call":
             raise ValueError("__call__ function of CallableModel must be wrapped with the Flow.call decorator")
 
-        if cls.Config.validate_decorator and not hasattr(cls.__deps__, "__wrapped__") and getattr(cls.__deps__, "__name__", "") != "Flow.deps":
+        if (
+            self.model_config["validate_decorator"]
+            and not hasattr(self.__deps__, "__wrapped__")
+            and getattr(self.__deps__, "__name__", "") != "Flow.deps"
+        ):
             raise ValueError("__deps__ function of CallableModel must be wrapped with the Flow.deps decorator")
-        return values
+        return self
 
-    @root_validator(skip_on_failure=True)
-    def _check_signature(cls, values):
-        sig_call = signature(cls.__call__)
-        if len(sig_call.parameters) != 2 or "context" not in sig_call.parameters:  # ("self", "context")
+    @model_validator(mode="after")
+    def _check_signature(self):
+        sig_call = signature(self.__call__)
+        if len(sig_call.parameters) != 1 or "context" not in sig_call.parameters:  # ("self", "context")
             raise ValueError("__call__ method must take a single argument, named 'context'")
 
-        sig_deps = signature(cls.__deps__)
-        if len(sig_deps.parameters) != 2 or "context" not in sig_deps.parameters:
+        sig_deps = signature(self.__deps__)
+        if len(sig_deps.parameters) != 1 or "context" not in sig_deps.parameters:
             raise ValueError("__deps__ method must take a single argument, named 'context'")
 
-        if cls.__deps__ is not CallableModel.__deps__:
-            type_call_arg = signature(cls.__call__).parameters["context"].annotation
-            type_deps_arg = signature(cls.__deps__).parameters["context"].annotation
+        if self.__class__.__deps__ is not CallableModel.__deps__:
+            type_call_arg = signature(self.__call__).parameters["context"].annotation
+            type_deps_arg = signature(self.__deps__).parameters["context"].annotation
             err_msg_type_mismatch = (
                 f"The type of the context accepted by __deps__ {type_deps_arg} " f"must match that accepted by __call__ {type_call_arg}!"
             )
             if type_call_arg is not type_deps_arg:
                 raise ValueError(err_msg_type_mismatch)
 
-        return values
+        return self
 
     @property
     def context_type(self) -> Type[ContextType]:
@@ -221,13 +200,7 @@ class FlowOptions(BaseModel):
     )
     evaluator: Optional["EvaluatorBase"] = Field(None, description="A hook to set a custom evaluator")
     _deps: bool = PrivateAttr(False)
-
-    if not IS_PYDANTIC_V2:
-
-        class Config(BaseModel.Config):
-            copy_on_model_validation = "none"
-
-    _parse_log_level = validator("log_level", allow_reuse=True, pre=True)(str_to_log_level)
+    _parse_log_level = field_validator("log_level", mode="before")(str_to_log_level)
 
     def get_options(self, model: CallableModelType):
         """Gets the options with overrides applied."""
@@ -261,12 +234,12 @@ class FlowOptions(BaseModel):
                 if context is Signature.empty:
                     raise TypeError(f"{fn.__name__}() missing 1 required positional argument: 'context'")
             # Type coercion on input  TODO: Move to ModelEvaluationContext
-            context = model.context_type.validate(context)
+            context = model.context_type.model_validate(context)
             # Create the evaluation context.
             # Record the options that are used, in case the evaluators want to use it,
             # but exclude the evaluator itself to avoid potential circular dependencies
             # or other difficulties with serialization/caching of the options
-            options = FlowOptionsOverride.get_options(model, self).dict(exclude={"evaluator"}, exclude_unset=True)
+            options = FlowOptionsOverride.get_options(model, self).model_dump(mode="python", exclude={"evaluator"}, exclude_unset=True)
             if fn != getattr(model.__class__, fn.__name__).__wrapped__:
                 # This happens when super().__call__ is used when implementing a CallableModel that derives from another one.
                 # In this case, we don't apply the decorator again, we just call the function on the model and context.
@@ -280,14 +253,13 @@ class FlowOptions(BaseModel):
                 if self._deps:
                     if fn.__name__ != "__deps__":
                         raise ValueError("Can only apply Flow.deps decorator to __deps__")
-                    if IS_PYDANTIC_V2:
-                        result = TypeAdapter(GraphDepList).validate_python(result)
+                    result = TypeAdapter(GraphDepList).validate_python(result)
                 # If we validate a delayed result, we will force evaluation.
                 # Instead, we can flag that validation is requested, and have it done after evaluation
                 elif hasattr(result, "_lazy_is_delayed"):
                     object.__setattr__(result, "_lazy_validation_requested", True)
                 else:
-                    result = model.result_type.validate(result)
+                    result = model.result_type.model_validate(result)
             return result
 
         wrap = wraps(fn)(wrapper)
@@ -297,7 +269,7 @@ class FlowOptions(BaseModel):
         # Used for building a graph of model evaluation contexts without evaluating
         def get_evaluation_context(model: CallableModelType, context: ContextType):
             # TODO: This logic is duplicative of the logic in wrapper - combine into a single place
-            options = FlowOptionsOverride.get_options(model, self).dict(exclude={"evaluator"}, exclude_unset=True)
+            options = FlowOptionsOverride.get_options(model, self).model_dump(mode="python", exclude={"evaluator"}, exclude_unset=True)
             evaluation_context = ModelEvaluationContext(model=model, context=context, fn=fn.__name__, options=options)
             evaluator = self.get_evaluator(model)
             return ModelEvaluationContext(model=evaluator, context=evaluation_context)
@@ -318,7 +290,7 @@ class FlowOptionsOverride(BaseModel):
     Do not confuse the name with "Context" from callable.py.
     """
 
-    model_config = {"protected_namespaces": ()}  # Because of model_types field
+    model_config = ConfigDict(protected_namespaces=())  # Because of model_types field
 
     _OPEN_OVERRIDES: ClassVar[Dict] = {}
     options: FlowOptions = Field(description="The options that represent the overrides to apply in this context")
@@ -327,12 +299,7 @@ class FlowOptionsOverride(BaseModel):
 
     @classmethod
     def _apply_options(cls, old: FlowOptions, new: FlowOptions) -> FlowOptions:
-        return old.copy(update=dict(new._iter(to_dict=False, exclude_unset=True)))
-        # new = old.copy(update=dict(new._iter(to_dict=False, exclude_unset=True)))
-        # from .evaluators import combine_evaluators
-        #
-        # new.evaluator = combine_evaluators(new.evaluator, old.evaluator)
-        # return new
+        return old.model_copy(update={f: v for f, v in new if f in new.model_fields_set})
 
     @classmethod
     def get_options(cls, model: CallableModelType, model_options: Optional[FlowOptions] = None) -> FlowOptions:
@@ -407,81 +374,41 @@ class Flow(PydanticBaseModel):
 # the underlying model and context
 # ******************************************************************************
 
-if not IS_PYDANTIC_V2:
 
-    class ModelAndContext(ContextBase, GenericModel, Generic[CallableModelType, ContextType]):
-        """A context that holds both a model and an underlying context, for higher-order models."""
+class ModelAndContext(ContextBase, Generic[CallableModelType, ContextType]):
+    """A context that holds both a model and an underlying context, for higher-order models."""
 
-        model: CallableModelType
-        context: ContextType
+    model: CallableModelType
+    context: ContextType
 
-    class ModelEvaluationContext(
-        ModelAndContext[CallableModelType, ContextType],
-        Generic[CallableModelType, ContextType],
-    ):
-        """An extension of ModelAndContext which also takes a function "f" to apply to both the model and the context.
 
-        This is used for decorator construction.
-        """
+class ModelEvaluationContext(
+    ModelAndContext[CallableModelType, ContextType],
+    Generic[CallableModelType, ContextType],
+):
+    """An extension of ModelAndContext which also takes a function "f" to apply to both the model and the context.
 
-        fn: str = Field(None, description="The string name of the function on the model to evaluate (without the decorator)")
-        options: Dict[str, Any] = Field(
-            default_factory=dict,
-            description="The set of options to use for evaluation. Typically a dict representation of FlowOptions without the evaluator field",
-        )
+    This is used for decorator construction.
+    """
 
-        @root_validator(allow_reuse=True, skip_on_failure=True)
-        def _set_fn(cls, values):
-            if values["fn"] is None:
-                values["fn"] = "__call__"
-            if not hasattr(values["model"], values["fn"]):
-                raise ValueError(f"Class {type(values['model'])} does not have a function {values['fn']} to call")
-            return values
+    fn: str = Field("__call__", strict=True)
+    options: Dict[str, Any] = Field(default_factory=dict)
 
-        def __call__(self) -> ResultType:
-            """Evaluate the function on the given model and context"""
-            fn = getattr(self.model, self.fn)
-            if hasattr(fn, "__wrapped__"):
-                return fn.__wrapped__(self.model, self.context)
-            else:
-                return fn(self.context)
+    @model_validator(mode="wrap")
+    def _context_validator(cls, values, handler, info):
+        # Override context validator from parent - no funky coercion stuff here,
+        # and no deep copy.
+        context = handler(values)
+        if not hasattr(context.model, context.fn):
+            raise ValueError(f"Class {type(context.model)} does not have a function {context.fn} to call")
+        return context
 
-else:
-    from pydantic import model_validator
-
-    class ModelAndContext(ContextBase, Generic[CallableModelType, ContextType]):
-        """A context that holds both a model and an underlying context, for higher-order models."""
-
-        model: CallableModelType
-        context: ContextType
-
-    class ModelEvaluationContext(
-        ModelAndContext[CallableModelType, ContextType],
-        Generic[CallableModelType, ContextType],
-    ):
-        """An extension of ModelAndContext which also takes a function "f" to apply to both the model and the context.
-
-        This is used for decorator construction.
-        """
-
-        fn: str = Field("__call__", strict=True)
-        options: Dict[str, Any] = Field(default_factory=dict)
-
-        @model_validator(mode="wrap")
-        def _context_validator(cls, values, handler, info):
-            # Override context validator from parent - no funky coercion stuff here,
-            # and no deep copy.
-            context = handler(values)
-            if not hasattr(context.model, context.fn):
-                raise ValueError(f"Class {type(context.model)} does not have a function {context.fn} to call")
-            return context
-
-        def __call__(self) -> ResultType:
-            fn = getattr(self.model, self.fn)
-            if hasattr(fn, "__wrapped__"):
-                return fn.__wrapped__(self.model, self.context)
-            else:
-                return fn(self.context)
+    def __call__(self) -> ResultType:
+        fn = getattr(self.model, self.fn)
+        if hasattr(fn, "__wrapped__"):
+            return fn.__wrapped__(self.model, self.context)
+        else:
+            return fn(self.context)
 
 
 class EvaluatorBase(_CallableModel, abc.ABC):
@@ -489,6 +416,8 @@ class EvaluatorBase(_CallableModel, abc.ABC):
 
     Note that evaluators don't use the Flow decorator on __call__ and __deps__ by design.
     """
+
+    model_config = ConfigDict(validate_decorator=False)
 
     @abc.abstractmethod
     def __call__(self, context: ModelEvaluationContext) -> ResultType:
@@ -504,9 +433,6 @@ class EvaluatorBase(_CallableModel, abc.ABC):
     def __exit__(self):
         pass
 
-    class Config(_CallableModel.Config):
-        validate_decorator = False  # Evaluators don't use the decorator by design.
-
 
 class Evaluator(EvaluatorBase):
     """A higher-order model that evaluates a function on a CallableModel and a Context."""
@@ -517,14 +443,9 @@ class Evaluator(EvaluatorBase):
 
 
 # Sort out all forward ref issues
-if version.parse(pydantic.__version__) < version.parse("2"):
-    FlowOptions.update_forward_refs()
-    FlowOptionsDeps.update_forward_refs()
-    MetaData.update_forward_refs()
-else:
-    FlowOptions.model_rebuild()
-    FlowOptionsDeps.model_rebuild()
-    MetaData.model_rebuild()
+FlowOptions.model_rebuild()
+FlowOptionsDeps.model_rebuild()
+MetaData.model_rebuild()
 
 
 # *****************************************************************************
@@ -550,7 +471,7 @@ class CallableModel(_CallableModel):
         return []
 
 
-class WrapperModel(CallableModel, GenericModel, Generic[CallableModelType], abc.ABC):
+class WrapperModel(CallableModel, Generic[CallableModelType], abc.ABC):
     """Abstract class that represents a wrapper around an underlying model,
     with the same context and return types.
 
@@ -574,44 +495,17 @@ class CallableModelGenericType(CallableModel, Generic[ContextType, ResultType]):
     context and result type will be validated.
     """
 
-    if version.parse(pydantic.__version__) < version.parse("2"):
+    @model_validator(mode="wrap")
+    def _validate_callable_model_generic_type(cls, m, handler, info):
+        from ccflow.base import resolve_str
 
-        @classmethod
-        def __get_validators__(cls):
-            yield cls.validate
-
-        @classmethod
-        def validate(cls, v, field):
-            v = CallableModel.validate(v)
-            if not field.sub_fields:
-                # Generic parameters were not provided so we don't try to validate
-                # them and just return the value as is
-                return v
-            context_type = field.sub_fields[0].type_
-            result_type = field.sub_fields[1].type_
-            errors = []
-            if not issubclass(v.context_type, context_type):
-                errors.append(ErrorWrapper(SubclassError(expected_class=context_type), loc="context_type"))
-            if not issubclass(v.result_type, result_type):
-                errors.append(ErrorWrapper(SubclassError(expected_class=result_type), loc="result_type"))
-            if errors:
-                raise ValidationError(errors, cls)
-            # Validation passed without errors, return the same instance received
-            return v
-
-    else:
-
-        @model_validator(mode="wrap")
-        def _validate_callable_model_generic_type(cls, m, handler, info):
-            from ccflow.base import resolve_str
-
-            if isinstance(m, str):
-                m = resolve_str(m)
-            # Raise ValueError (not TypeError) as per https://docs.pydantic.dev/latest/errors/errors/
-            if not isinstance(m, CallableModel):
-                raise ValueError(f"{m} is not a CallableModel: {type(m)}")
-            subtypes = cls.__pydantic_generic_metadata__["args"]
-            if subtypes:
-                TypeAdapter(Type[subtypes[0]]).validate_python(m.context_type)
-                TypeAdapter(Type[subtypes[1]]).validate_python(m.result_type)
-            return m
+        if isinstance(m, str):
+            m = resolve_str(m)
+        # Raise ValueError (not TypeError) as per https://docs.pydantic.dev/latest/errors/errors/
+        if not isinstance(m, CallableModel):
+            raise ValueError(f"{m} is not a CallableModel: {type(m)}")
+        subtypes = cls.__pydantic_generic_metadata__["args"]
+        if subtypes:
+            TypeAdapter(Type[subtypes[0]]).validate_python(m.context_type)
+            TypeAdapter(Type[subtypes[1]]).validate_python(m.result_type)
+        return m

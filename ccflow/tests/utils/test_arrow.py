@@ -157,7 +157,7 @@ class TestListConversions(TestCase):
             },
         )
         df1 = pd.DataFrame(
-            [["foo", "bar"], [np.nan, np.nan], ["baz", "qux"]],
+            [["foo", "bar"], [], ["baz", "qux"]],
             columns=["a", "b"],
         )
         fields = ["list_float", "list_str"]
