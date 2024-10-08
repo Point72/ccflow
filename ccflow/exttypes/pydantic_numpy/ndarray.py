@@ -54,9 +54,13 @@ class NDArray(Generic[T], nd_array_type):
         def _validate(v):
             subtypes = get_args(source_type)
             dtype = subtypes[0] if subtypes and subtypes[0] != Any else None
-            if dtype is not None:
-                return np.asarray(v, dtype=dtype)
-            return np.asarray(v)
+            try:
+                if dtype is not None:
+                    return np.asarray(v, dtype=dtype)
+                return np.asarray(v)
+
+            except TypeError:
+                raise ValueError(f"Unable to convert {v} to an array.")
 
         return core_schema.no_info_before_validator_function(
             _validate,
