@@ -23,7 +23,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 
 import numpy as np
 from numpy.testing import assert_allclose
@@ -110,3 +110,23 @@ def test_default_value():
 
     model_field = MyModelField()
     np.testing.assert_array_equal(model_field.K, np.array([1.0, 2.0]))
+
+
+class MyDictArrayModel(BaseModel):
+    x: Union[NDArray[float32], Dict[int, NDArray[float32]]]
+
+
+def test_union_field():
+    # Array
+    model = MyDictArrayModel(x=[0, 1, 2])
+    json = model.json()
+    model2 = MyDictArrayModel.parse_raw(json)
+    np.testing.assert_array_equal(model2.x, np.array([0.0, 1.0, 2.0]))
+
+    # Dictionary
+    model = MyDictArrayModel(x={0: [0, 1, 2]})
+    json = model.json()
+    model2 = MyDictArrayModel.parse_raw(json)
+    assert 0 in model2.x
+    assert len(model2.x) == 1
+    np.testing.assert_array_equal(model2.x[0], np.array([0.0, 1.0, 2.0]))
