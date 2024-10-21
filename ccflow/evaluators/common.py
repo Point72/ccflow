@@ -1,11 +1,10 @@
 import logging
 import time
-from datetime import time as dt_time, timedelta
+from datetime import timedelta
 from types import MappingProxyType
 from typing import Callable, Dict, List, Optional, Set, Union
 
 import dask.base
-from dask.base import normalize_token
 from pydantic import PrivateAttr
 from typing_extensions import override
 
@@ -99,13 +98,6 @@ class LoggingEvaluator(EvaluatorBase):
                 context.context,
                 timedelta(seconds=end - start),
             )
-
-
-@normalize_token.register(dt_time)
-def tokenize_bar(t):
-    """Custom tokenization of time"""
-    # TODO: Remove after this is merged: https://github.com/dask/dask/pull/9528
-    return hash(t)
 
 
 def cache_key(flow_obj: Union[ModelEvaluationContext, ContextBase, CallableModel]) -> bytes:

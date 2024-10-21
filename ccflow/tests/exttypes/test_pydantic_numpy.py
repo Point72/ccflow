@@ -119,14 +119,14 @@ class MyDictArrayModel(BaseModel):
 def test_union_field():
     # Array
     model = MyDictArrayModel(x=[0, 1, 2])
-    json = model.json()
-    model2 = MyDictArrayModel.parse_raw(json)
+    json = model.model_dump_json()
+    model2 = MyDictArrayModel.model_validate_json(json)
     np.testing.assert_array_equal(model2.x, np.array([0.0, 1.0, 2.0]))
 
     # Dictionary
     model = MyDictArrayModel(x={0: [0, 1, 2]})
-    json = model.json()
-    model2 = MyDictArrayModel.parse_raw(json)
+    json = model.model_dump_json()
+    model2 = MyDictArrayModel.model_validate_json(json)
     assert 0 in model2.x
     assert len(model2.x) == 1
     np.testing.assert_array_equal(model2.x[0], np.array([0.0, 1.0, 2.0]))
