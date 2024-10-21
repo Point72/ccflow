@@ -101,13 +101,6 @@ class LoggingEvaluator(EvaluatorBase):
             )
 
 
-@normalize_token.register(dt_time)
-def tokenize_bar(t):
-    """Custom tokenization of time"""
-    # TODO: Remove after this is merged: https://github.com/dask/dask/pull/9528
-    return hash(t)
-
-
 def cache_key(flow_obj: Union[ModelEvaluationContext, ContextBase, CallableModel]) -> bytes:
     """Returns a key suitable for use in caching"""
     if isinstance(flow_obj, (ModelEvaluationContext, ContextBase, CallableModel)):
