@@ -55,7 +55,7 @@ class NDArray(Generic[T], nd_array_type):
             subtypes = get_args(source_type)
             dtype = subtypes[0] if subtypes and subtypes[0] != Any else None
             try:
-                if dtype is not None:
+                if dtype:
                     return np.asarray(v, dtype=dtype)
                 return np.asarray(v)
 

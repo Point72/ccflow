@@ -1,10 +1,10 @@
-from typing import Any, Generic, Type, TypeVar, Union
+from typing import Generic, Type, TypeVar, Union
 
 import pandas as pd
 import pyarrow as pa
 from pydantic import TypeAdapter
 from pydantic_core import core_schema
-from typing_extensions import Literal, get_args
+from typing_extensions import Literal, Self, get_args
 
 
 class ArrowSchema(type):
@@ -16,7 +16,7 @@ class ArrowSchema(type):
         schema: pa.Schema,
         strict: Union[bool, Literal["filter"]] = "filter",
         clsname: str = "_ArrowSchema",
-    ):
+    ) -> Self:
         """Take the schema and a strict flag to define the type.
         The strict flag follows the same conventions as used by pandera.
         Schemas are order-dependent.
@@ -103,7 +103,7 @@ class PyArrowDatatype(str):
         return core_schema.no_info_plain_validator_function(cls._validate)
 
     @classmethod
-    def _validate(cls, value) -> Any:
+    def _validate(cls, value) -> Self:
         if isinstance(value, pa.lib.DataType):
             return value
 
@@ -115,7 +115,7 @@ class PyArrowDatatype(str):
         raise ValueError(f"ensure this value contains a valid PyarrowDatatype string: {value}")
 
     @classmethod
-    def validate(cls, value) -> "PyArrowDatatype":
+    def validate(cls, value) -> Self:
         """Try to convert/validate an arbitrary value to a PyArrowDatatype."""
         return _TYPE_ADAPTER.validate_python(value)
 

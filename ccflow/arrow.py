@@ -4,11 +4,10 @@ Note that arrow related extension types are in exttypes.arrow.
 
 import abc
 from datetime import date, datetime, time
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 import pyarrow as pa
 from pydantic import Field, model_validator
-from typing_extensions import Literal  # For pydantic 1 compatibility on python 3.9
 
 from .base import BaseModel
 from .exttypes import JinjaTemplate, PyArrowDatatype, PyObjectPath
@@ -90,23 +89,21 @@ class ArrowFileSystem(ObjectConfig, abc.ABC):
     """
 
 
-_LOCAL_FILE_SYSTEM = PyObjectPath("pyarrow.fs.LocalFileSystem")
-
-
 class ArrowLocalFileSystem(ArrowFileSystem):
     """Wrapping of pyarrow.fs.LocalFilesystem.
     See https://arrow.apache.org/docs/python/generated/pyarrow.fs.LocalFileSystem.html
     """
 
+    _LOCAL_FILE_SYSTEM = PyObjectPath("pyarrow.fs.LocalFileSystem")
+
     object_type: Literal[_LOCAL_FILE_SYSTEM] = _LOCAL_FILE_SYSTEM
-
-
-_S3_FILE_SYSTEM = PyObjectPath("pyarrow.fs.S3FileSystem")
 
 
 class ArrowS3FileSystem(ArrowFileSystem):
     """Wrapping of pyarrow.fs.S3FileSystem.
     See https://arrow.apache.org/docs/python/generated/pyarrow.fs.S3FileSystem.html"""
+
+    _S3_FILE_SYSTEM = PyObjectPath("pyarrow.fs.S3FileSystem")
 
     object_type: Literal[_S3_FILE_SYSTEM] = _S3_FILE_SYSTEM
 
@@ -174,9 +171,9 @@ class ArrowPartitioning(BaseModel):
 
     def get_partition_columns(self) -> List[str]:
         """Return the list of partition columns"""
-        if self.arrow_schema is not None:
+        if self.arrow_schema:
             return self.arrow_schema.object.names
-        elif self.field_names is not None:
+        elif self.field_names:
             return self.field_names
         else:
             return []

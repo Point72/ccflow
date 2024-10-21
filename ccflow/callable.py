@@ -211,7 +211,7 @@ class FlowOptions(BaseModel):
         # We need to make sure this gets called from inside each wrapper,
         # otherwise, global changes to Flow.options will not be picked up.
         options = FlowOptionsOverride.get_options(model, self)
-        if options.evaluator is not None:
+        if options.evaluator:
             return options.evaluator
         from .evaluators import LoggingEvaluator
 
@@ -318,7 +318,7 @@ class FlowOptionsOverride(BaseModel):
         if model_options:
             current_options = cls._apply_options(current_options, model_options)
         # Then apply the model meta-provided options
-        if model.meta.options is not None:
+        if model.meta.options:
             current_options = model.meta.options
         # Then apply all model-specific overrides
         for override in cls._OPEN_OVERRIDES.values():

@@ -8,7 +8,7 @@ ENV := dev
 ###############
 # Build Tools #
 ###############
-.PHONY: build develop install cubist-sdlc
+.PHONY: build requirements develop install cubist-sdlc
 
 build:  ## build python
 	python -m build .
@@ -42,7 +42,7 @@ coverage: test
 ###########
 # Linting #
 ###########
-.PHONY: lint fix format
+.PHONY: lint lints fix format
 
 lint:  ## lint python with ruff
 	python -m ruff check ccflow
@@ -71,7 +71,7 @@ check-manifest:  ## run manifest checker for sdist
 ##############################
 # Packaging and Distribution #
 ##############################
-.PHONY: conda dist dist-sdist dist-bdist dist-check publish-conda-dev publish-conda-prod publish-pypi-dev publish-pypi-prod
+.PHONY: conda setup-conda dist dist-sdist dist-bdist dist-check publish-conda-dev publish-conda-prod publish-pypi-dev publish-pypi-prod
 
 conda:	## build the conda package
 	mkdir -p dist/conda

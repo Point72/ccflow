@@ -5,6 +5,7 @@ from typing import Any
 import jinja2
 from pydantic import TypeAdapter
 from pydantic_core import core_schema
+from typing_extensions import Self
 
 
 class JinjaTemplate(str):
@@ -20,7 +21,7 @@ class JinjaTemplate(str):
         return core_schema.no_info_plain_validator_function(cls._validate)
 
     @classmethod
-    def _validate(cls, value: Any) -> "JinjaTemplate":
+    def _validate(cls, value: Any) -> Self:
         if isinstance(value, JinjaTemplate):
             return value
 
@@ -34,7 +35,7 @@ class JinjaTemplate(str):
         return value
 
     @classmethod
-    def validate(cls, value: Any) -> "JinjaTemplate":
+    def validate(cls, value: Any) -> Self:
         """Try to convert/validate an arbitrary value to a JinjaTemplate."""
         return _TYPE_ADAPTER.validate_python(value)
 

@@ -8,7 +8,7 @@ import dask.base
 from pydantic import PrivateAttr
 from typing_extensions import override
 
-from ..base import BaseModel
+from ..base import BaseModel, make_lazy_result
 from ..callable import CallableModel, ContextBase, EvaluatorBase, ModelEvaluationContext, ResultType
 
 __all__ = [
@@ -28,9 +28,9 @@ log = logging.getLogger(__name__)
 
 def combine_evaluators(first: Optional[EvaluatorBase], second: Optional[EvaluatorBase]) -> EvaluatorBase:
     """Helper function to combine evaluators into a new evaluator."""
-    if first is None:
+    if not first:
         return second
-    elif second is None:
+    elif not second:
         return first
     elif isinstance(first, MultiEvaluator):
         if isinstance(second, MultiEvaluator):
@@ -56,14 +56,12 @@ class MultiEvaluator(EvaluatorBase):
 
 
 class LazyEvaluator(EvaluatorBase):
-    """Evaluator that only actually runs the callable once an attribute of the result is queried (by hooking __getattribute__)"""
+    """Evaluator that only actually runs the callable once an attribute of the result is queried (by hooking into __getattribute__)"""
 
     additional_callback: Callable = lambda: None
 
     @override
     def __call__(self, context: ModelEvaluationContext) -> ResultType:
-        from ccflow.base import make_lazy_result
-
         def make_result():
             self.additional_callback()
             return context()
@@ -72,7 +70,7 @@ class LazyEvaluator(EvaluatorBase):
 
 
 class LoggingEvaluator(EvaluatorBase):
-    """Evaluator that logs information about evaluating the callable (e.g. context the model was called with)."""
+    """Evaluator that logs information about evaluating the callable (e.g. the context the model was called with)."""
 
     log_level: int = logging.DEBUG
     verbose: bool = True
@@ -171,9 +169,7 @@ def _build_dependency_graph(evaluation_context: ModelEvaluationContext, graph: C
                 _build_dependency_graph(sub_evaluation_context, graph, parent_key=key)
 
 
-def get_dependency_graph(
-    evaluation_context: ModelEvaluationContext,
-) -> CallableModelGraph:
+def get_dependency_graph(evaluation_context: ModelEvaluationContext) -> CallableModelGraph:
     """Get a dependency graph for a model and context."""
     root_key = cache_key(evaluation_context)
     graph = CallableModelGraph(ids={}, graph={}, root_id=root_key)

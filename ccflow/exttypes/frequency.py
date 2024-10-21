@@ -1,5 +1,3 @@
-"""This module contains a frequency extension type for pydantic."""
-
 import warnings
 from datetime import timedelta
 from functools import cached_property

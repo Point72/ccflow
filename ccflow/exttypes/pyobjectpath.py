@@ -5,6 +5,7 @@ from typing import Any, Type, get_origin
 
 from pydantic import ImportString, TypeAdapter
 from pydantic_core import core_schema
+from typing_extensions import Self
 
 import_string = TypeAdapter(ImportString).validate_python
 
@@ -42,12 +43,12 @@ class PyObjectPath(str):
         return core_schema.no_info_plain_validator_function(cls._validate)
 
     @classmethod
-    def _validate(cls, value: Any) -> "PyObjectPath":
+    def _validate(cls, value: Any):
         if isinstance(value, str):
             value = cls(value)
         else:  # Try to construct a string from the object that can then be used to import the object
             origin = get_origin(value)
-            if origin is not None:
+            if origin:
                 value = origin
             if hasattr(value, "__module__") and hasattr(value, "__qualname__"):
                 if value.__module__ == "__builtin__":
@@ -59,7 +60,7 @@ class PyObjectPath(str):
                     # This happens with Generic types in pydantic. We strip out the info for now.
                     # TODO: Find a way of capturing the underlying type info
                     qualname = qualname.split("[", 1)[0]
-                if module is None:
+                if not module:
                     value = cls(qualname)
                 else:
                     value = cls(module + "." + qualname)
@@ -73,7 +74,7 @@ class PyObjectPath(str):
         return value
 
     @classmethod
-    def validate(cls, value) -> "PyObjectPath":
+    def validate(cls, value) -> Self:
         """Try to convert/validate an arbitrary value to a PyObjectPath."""
         return _TYPE_ADAPTER.validate_python(value)
 

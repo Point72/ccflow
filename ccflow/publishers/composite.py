@@ -49,7 +49,7 @@ class CompositePublisher(BasePublisher, Generic[PydanticModelType]):
             full_name = self.sep.join((self.name, field)) if self.name else field
             publisher = self.field_publishers.get(field, None)
 
-            if publisher is None:
+            if not publisher:
                 for try_publisher in self.default_publishers:
                     try:
                         try_publisher.data = value

@@ -12,8 +12,8 @@ from ccflow.serialization import orjson_dumps
 def convert_large_types(table: pa.Table) -> pa.Table:
     """Converts the large types to their regular counterparts in pyarrow.
 
-    This is necessary because polars always using large list, but pyarrow
-    recommends using the regular one, as it is more accepted (i.e. by csp)
+    This is necessary because polars always uses large list, but pyarrow
+    recommends using the regular one, as it is more accepted (e.g. by csp)
     https://arrow.apache.org/docs/python/generated/pyarrow.large_list.html
     """
     fields = []
@@ -61,7 +61,7 @@ def pandas_dict_to_arrow_lists(dfs: Dict[str, pd.DataFrame], index_name: Optiona
     """
     if not dfs:
         raise ValueError("Input dictionary must be non-empty")
-    # Need to make sure the index in the same for all frames
+    # Need to make sure the index is the same for all frames
     all_dfs = list(dfs.values())
     for df in all_dfs[1:]:
         if not all_dfs[0].index.equals(df.index):

@@ -100,7 +100,7 @@ class TestBaseModelSerialization(unittest.TestCase):
             raise AssertionError
 
     def _check_serialization(self, model: BaseModel, equality_check=None):
-        if equality_check is None:
+        if not equality_check:
             equality_check = self.assertEqual
         # Object serialization
         serialized = model.model_dump(mode="python")

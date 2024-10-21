@@ -7,6 +7,7 @@ import orjson
 import polars as pl
 from packaging import version
 from pydantic import TypeAdapter
+from typing_extensions import Self
 
 __all__ = ("PolarsExpression",)
 
@@ -24,8 +25,8 @@ class PolarsExpression(pl.Expr):
             serialization=core_schema.plain_serializer_function_ser_schema(cls._encode, return_schema=core_schema.dict_schema()),
         )
 
-    @classmethod
-    def _decode(cls, obj):
+    @staticmethod
+    def _decode(obj):
         # We embed polars expressions as a dict, so we need to convert to a full json string first
         json_str = orjson.dumps(obj).decode("utf-8", "ignore")
         if version.parse(pl.__version__) < version.parse("1.0.0"):
@@ -34,8 +35,8 @@ class PolarsExpression(pl.Expr):
             # polars deserializes from a binary format by default.
             return pl.Expr.deserialize(StringIO(json_str), format="json")
 
-    @classmethod
-    def _encode(cls, obj, info=None):
+    @staticmethod
+    def _encode(obj, info=None):
         # obj.meta.serialize produces a string containing a dict, but we just want to return the dict.
         if version.parse(pl.__version__) < version.parse("1.0.0"):
             return orjson.loads(obj.meta.serialize())
@@ -44,7 +45,7 @@ class PolarsExpression(pl.Expr):
             return orjson.loads(obj.meta.serialize(format="json"))
 
     @classmethod
-    def _validate(cls, value: Any) -> "PolarsExpression":
+    def _validate(cls, value: Any) -> Self:
         if isinstance(value, pl.Expr):
             return value
 
@@ -68,7 +69,7 @@ class PolarsExpression(pl.Expr):
         raise ValueError(f"Supplied value '{value}' cannot be converted to a Polars expression")
 
     @classmethod
-    def validate(cls, value: Any) -> "PolarsExpression":
+    def validate(cls, value: Any) -> Self:
         """Try to convert/validate an arbitrary value to a PolarsExpression."""
         return _TYPE_ADAPTER.validate_python(value)
 

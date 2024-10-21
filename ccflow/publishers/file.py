@@ -22,21 +22,21 @@ __all__ = (
     "YAMLPublisher",
 )
 
-DEFAULT_SEPARATOR = "/"
-
 
 def _write_to_io(data: Any, f: IO, **kwargs):
     """Default write function that converts data to string and writes to IO"""
     return f.write(str(data))
 
 
-def _orjson_file_dump(data, file, **kw):
-    default = kw.pop("default", None)
+def _orjson_file_dump(data: Any, file: IO, **kwargs):
+    default = kwargs.pop("default", None)
     orjson_serialized_obj = orjson_dumps(data, default=default)
     file.write(orjson_serialized_obj)
 
 
 class GenericFilePublisher(BasePublisher):
+    """Publish data using a generic "dump" Callable."""
+
     dump: Callable[[Any, IO, Any], Any] = _write_to_io
     suffix: str
     mode: str = "w"
@@ -61,7 +61,7 @@ class GenericFilePublisher(BasePublisher):
 
 
 class JSONPublisher(BasePublisher):
-    """Publish results to file in JSON format."""
+    """Publish data to file in JSON format."""
 
     kwargs: Dict[str, Any] = Field(default_factory=dict)
 
@@ -78,7 +78,7 @@ class JSONPublisher(BasePublisher):
 
 
 class YAMLPublisher(BasePublisher):
-    """Publish results to file in YAML format."""
+    """Publish data to file in YAML format."""
 
     kwargs: Dict[str, Any] = Field(default_factory=dict)
 
@@ -95,7 +95,7 @@ class YAMLPublisher(BasePublisher):
 
 
 class PicklePublisher(BasePublisher):
-    """Pickle results to file."""
+    """Publish data to a pickle file."""
 
     protocol: int = -1
     kwargs: Dict[str, Any] = Field(default_factory=dict)
@@ -116,7 +116,7 @@ class PicklePublisher(BasePublisher):
 
 
 class DictTemplateFilePublisher(BasePublisher):
-    """Write a dictionary of data to a JinjaTemplate"""
+    """Publish data to a file after populating a Jinja template."""
 
     data: Dict = None
     suffix: str
@@ -134,7 +134,10 @@ class DictTemplateFilePublisher(BasePublisher):
 
 
 class PydanticJSONPublisher(BasePublisher, Generic[PydanticModelType]):
-    """See https://pydantic-docs.helpmanual.io/usage/exporting_models/#modeljson"""
+    """Publish a pydantic model to a json file.
+
+    See https://pydantic-docs.helpmanual.io/usage/exporting_models/#modeljson
+    """
 
     data: PydanticModelType = None
     options: PydanticDictOptions = Field(default_factory=PydanticDictOptions)
@@ -162,7 +165,7 @@ class PydanticJSONPublisher(BasePublisher, Generic[PydanticModelType]):
 
 
 class PandasFilePublisher(BasePublisher):
-    """Generic way of publishing a pandas DataFrame to a file.
+    """Publish a pandas data frame to a file using an appropriate method on pd.DataFrame.
 
     For large-scale exporting (using parquet), see .parquet.PandasParquetPublisher.
     """

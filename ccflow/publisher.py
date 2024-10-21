@@ -33,7 +33,7 @@ class BasePublisher(BaseModel, abc.ABC):
 
     def get_name(self):
         """Get the name with the template parameters filled in."""
-        if self.name is None:
+        if not self.name:
             raise ValueError("Name must be set")
         return self.name.template.render(**self.name_params)
 

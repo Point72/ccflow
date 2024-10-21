@@ -242,7 +242,7 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
                 v = v.copy()
                 type_ = v.pop("type_")
 
-            if type_ is not None:
+            if type_:
                 type_cls = PyObjectPath(type_).object
                 if cls != type_cls:
                     return type_cls.model_validate(v)
