@@ -117,7 +117,7 @@ class _CallableModel(BaseModel, abc.ABC):
 
     @property
     def context_type(self) -> Type[ContextType]:
-        """This property returns the context type for the model.
+        """Return the context type for the model.
 
         By default, it reads the value from the function signature (if a concrete value is provided),
         otherwise the implementation needs to be overridden.
@@ -132,7 +132,7 @@ class _CallableModel(BaseModel, abc.ABC):
 
     @property
     def result_type(self) -> Type[ResultType]:
-        """This property returns the result type for the model.
+        """Return the result type for the model.
 
         By default, it reads the value from the function signature (if a concrete value is provided),
         otherwise the implementation needs to be overridden.
@@ -303,7 +303,19 @@ class FlowOptionsOverride(BaseModel):
 
     @classmethod
     def get_options(cls, model: CallableModelType, model_options: Optional[FlowOptions] = None) -> FlowOptions:
-        """Return a set of options with overrides applied."""
+        """Return a set of options with overrides applied.
+
+        Options are applied in the following order:
+            Defaults of FlowOptions
+            Globally-scoped option overrides from FlowOptionsOverride
+            Overrides from 'model_options' input
+            Overrides specified on model MetaData (i.e. model.meta)
+            Model and model type scopes option overrides from FlowOptionsOverride
+
+        Args:
+            model: The model to apply options from/to
+            model_options: Additional options to inject in the overrides
+        """
         current_options = FlowOptions()
         for override in cls._OPEN_OVERRIDES.values():  # noqa: F402
             # Apply global options first
@@ -472,21 +484,21 @@ class CallableModel(_CallableModel):
 
 
 class WrapperModel(CallableModel, Generic[CallableModelType], abc.ABC):
-    """Abstract class that represents a wrapper around an underlying model,
-    with the same context and return types.
+    """Abstract class that represents a wrapper around an underlying model, with the same context and return types.
 
-    It reduces the amount of boilerplate required.
-    Multi-model composites require their own implementation.
+    It reduces the amount of boilerplate required. Multi-model composites require their own implementation.
     """
 
     model: CallableModelType
 
     @property
     def context_type(self) -> Type[ContextType]:
+        """Return the context type of the underlying model."""
         return self.model.context_type
 
     @property
     def result_type(self) -> Type[ResultType]:
+        """Return the result type of the underlying model."""
         return self.model.result_type
 
 

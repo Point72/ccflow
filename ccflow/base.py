@@ -8,7 +8,7 @@ import pathlib
 import platform
 import typing
 from types import MappingProxyType
-from typing import Any, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar, get_args, get_origin
+from typing import Any, Callable, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar, get_args, get_origin
 
 import typing_extensions
 from omegaconf import DictConfig
@@ -26,6 +26,7 @@ from pydantic import (
     model_validator,
 )
 from pydantic.fields import Field
+from typing_extensions import Self
 
 from .exttypes.pyobjectpath import PyObjectPath
 
@@ -50,7 +51,10 @@ __all__ = (
 REGISTRY_SEPARATOR = "/"
 
 
-class RegistryKeyError(KeyError): ...
+class RegistryKeyError(KeyError):
+    """Subclass for KeyError specific to Registry lookup errors."""
+
+    ...
 
 
 class _RegistryMixin:
@@ -74,7 +78,9 @@ class _RegistryMixin:
     def get_registry_dependencies(self, types: Optional[Tuple["ModelType"]] = None) -> List[List[str]]:
         """Return the set of registered models that are contained by this model.
         It only returns names that are relative to the root registry.
-        It types is specified, will only specify dependencies of the given model sub-types.
+
+        Args:
+            types: If specified, will only return dependencies of the given model sub-types.
         """
         deps = []
         for _field_name, value in self:
@@ -91,6 +97,7 @@ class _RegistryMixin:
 # https://github.com/pydantic/pydantic/issues/6423
 # https://github.com/pydantic/pydantic-core/pull/740
 # See https://github.com/pydantic/pydantic/issues/6381 for inspiration on implementation
+# NOTE: For this logic to be removed, require https://github.com/pydantic/pydantic-core/pull/1478
 from pydantic._internal._model_construction import ModelMetaclass  # noqa: E402
 
 # Required for py38 compatibility
@@ -160,7 +167,7 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
 
     This gives us a way to add functionality to the framework, including
         - Type of object is part of serialization/deserialization
-        - Registration by name, and coercion from string name
+        - Registration by name, and coercion from string name to allow for object re-use from the configs
     """
 
     @computed_field(
@@ -172,6 +179,7 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
     )
     @property
     def type_(self) -> PyObjectPath:
+        """The path to the object type"""
         return PyObjectPath.validate(type(self))
 
     # We want to track under what names a model has been registered
@@ -210,7 +218,12 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
         json_kwargs: Optional[Dict[str, Any]] = None,
         widget_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        """Get an IPython widget to view the object."""
+        """Get an IPython widget to view the object.
+
+        Args:
+            json_kwargs: The kwargs to pass to the pydantic serializer
+            widget_kwargs: The kwargs to pass to the JSON IPython widget
+        """
         from IPython.display import JSON
 
         kwargs = {"fallback": str, "mode": "json"}
@@ -303,9 +316,13 @@ def _is_config_subregistry(value):
 def model_alias(model_name: str) -> BaseModel:
     """Function to alias a BaseModel by name in the root registry.
 
-    Useful for configs in hydra where we want a config object to point directly to another config object, using
-    _target_: ccflow.alias
-    model_name: foo
+    Useful for configs in hydra where we want a config object to point directly to another config object.
+
+    Args:
+        model_name: The name of the underlying model to point to in the registry
+    Example:
+        _target_: ccflow.model_alias
+        model_name: foo
     """
     return BaseModel.model_validate(model_name)
 
@@ -316,7 +333,7 @@ ModelType = TypeVar("ModelType", bound=BaseModel)
 class ModelRegistry(BaseModel):
     """ModelRegistry represents a named collection of models.
 
-    Because we want to be careful about how models are added and removed, the dict structure is not public.
+    Because we want to control how models are added and removed, the dict structure is not public.
     """
 
     name: str = Field(
@@ -364,11 +381,11 @@ class ModelRegistry(BaseModel):
         return MappingProxyType(self._models)
 
     @classmethod
-    def root(cls) -> "ModelRegistry":
+    def root(cls) -> Self:
         """Return a static instance of the root registry."""
         return _REGISTRY_ROOT
 
-    def clear(self) -> "ModelRegistry":
+    def clear(self) -> Self:
         """Clear the registry (and remove any dependencies)."""
         names = list(self._models.keys())
         for name in names:
@@ -376,7 +393,11 @@ class ModelRegistry(BaseModel):
         return self
 
     def remove(self, name: str) -> None:
-        """Preferred API for removing model from the registry."""
+        """Remove a model from the registry.
+
+        Args:
+            name: The name of the model to remove
+        """
         if name not in self._models:
             raise ValueError(f"Cannot remove '{name}' from '{self._debug_name}' as it does not exist there!")
         # Adjust registrations
@@ -386,7 +407,13 @@ class ModelRegistry(BaseModel):
         log.debug("Removed '%s' from registry '%s'", name, self._debug_name)
 
     def add(self, name: str, model: ModelType, overwrite: bool = False) -> ModelType:
-        """Preferred API for adding new models to registry."""
+        """Add a new model to the registry.
+
+        Args:
+            name: The name of the model to add
+            model: The model to add
+            overwrite: Whether to overwrite an existing model in the registry
+        """
         if name in self._models and not overwrite:
             raise ValueError(f"Cannot add '{name}' to '{self._debug_name}' as it already exists!")
         if REGISTRY_SEPARATOR in name:
@@ -405,21 +432,24 @@ class ModelRegistry(BaseModel):
         log.debug("Added '%s' to registry '%s': %s", name, self._debug_name, model)
         return model
 
-    def get(self, name: str, default=None):
+    def get(self, name: str, default=None) -> Optional[ModelType]:
         """Accessor for models by name with default value.
 
         See __getitem__ for how this is different from calling get on self.models.
+
+        Args:
+            name: The name of the model to get from the registry
+            default: The default value to return if the model does not exist in the registry
         """
         try:
             return self.__getitem__(name)
         except KeyError:
             return default
 
-    def __getitem__(self, item):
+    def __getitem__(self, item) -> ModelType:
         """Accessor for models by name.
 
-        Differs from accessing the models dict directly because it parses
-        names from nexted registries containing "/",
+        Differs from accessing the models dict directly because it parses names from nexted registries containing "/",
         i.e. "foo/bar" is object "bar" from the sub-registry "foo" of the current registry
         and "/foo/bar" is object "bar" from the sub-registry "foo" of the root registry
         Note that "." and ".." are not allowed.
@@ -449,8 +479,14 @@ class ModelRegistry(BaseModel):
         cfg: DictConfig,
         overwrite: bool = False,
         skip_exceptions: bool = False,
-    ) -> "ModelRegistry":
-        """Load from OmegaConf DictConfig that follows hydra conventions."""
+    ) -> Self:
+        """Load from OmegaConf DictConfig that follows hydra conventions.
+
+        Args:
+            cfg: An OmegaConf DictConfig
+            overwrite: Whether to allow overwriting of names that already exist
+            skip_exceptions: Whether to skip any exceptions that are thrown when validating and registering models
+        """
         loader = _ModelRegistryLoader(overwrite=overwrite)
         return loader.load_config(cfg, self, skip_exceptions=skip_exceptions)
 
@@ -487,7 +523,7 @@ class ModelRegistry(BaseModel):
         overrides: Optional[List[str]] = None,
         overwrite: bool = False,
         version_base: Optional[str] = None,
-    ) -> "ModelRegistry":
+    ) -> Self:
         """Create the config from the path, and then load that data into the registry.
 
         Args:
@@ -625,7 +661,7 @@ class RegistryLookupContext:
         RegistryLookupContext._REGISTRIES = self._previous_registries
 
 
-def resolve_str(v: str) -> BaseModel:
+def resolve_str(v: str) -> ModelType:
     """Resolve a string value from the RootModelRegistry."""
     search_registries = RegistryLookupContext.registry_search_paths()
     idx = -1
@@ -672,7 +708,7 @@ class ResultBase(BaseModel):
     def __getattribute__(self, attr):
         """Call _onaccess_callback before allowing attribute access.
 
-        Necessary to alow features like delayed evaluation.
+        Necessary to allow features like delayed evaluation.
         """
         if not attr.startswith("_lazy"):
             super().__getattribute__("_onaccess_callback")(self)
@@ -722,8 +758,10 @@ def _make_lazy_stub(res_type: ResultType, initializer_fn, *args, **kwargs) -> Re
     """
     Makes a result stub without calling __init__, but instead initializer_fn on access
 
-    initializer_fn is called with the stub as first argument.
-    Additional arguments are forwarded to initializer_fn.
+    Args:
+        result_type: The template ResultType to use for the lazy result stub
+        initializer_fn: A Callable that is called with the stub as first argument.
+            Additional arguments are forwarded to initializer_fn.
     """
     if not issubclass(res_type, ResultBase):
         raise TypeError("Can only create delayed ResultBase-derived instances")
@@ -743,11 +781,14 @@ def _make_lazy_stub(res_type: ResultType, initializer_fn, *args, **kwargs) -> Re
     return new_instance
 
 
-def make_lazy_result(res_type: ResultType, to_copy_fn) -> ResultType:
-    """Creates a delayed result which will use the result of to_copy_fn to initialize itself
+def make_lazy_result(res_type: ResultType, to_copy_fn: Callable[[], ResultType]) -> ResultType:
+    """Creates a new ResultType based on the passed ResultType, but which will instantiate itself lazily on attribute access.
 
-    __dict__ will be copied from the result, as well as extra pydantic attributes if present
-    The copy mechanism is similar to that used in pydantic's model_construct
+    Args:
+        res_type: The original ResultType to model the lazy ResultType after
+        to_copy_fn: The function which will be called to initialize instances of the return type when attributes are accessed.
+            __dict__ will be copied from the result, as well as extra pydantic attributes if present.
+            The copy mechanism is similar to that used in pydantic's model_construct.
     """
 
     def initializer(obj, validate=False, *args, **kwargs):

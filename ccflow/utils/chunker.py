@@ -21,15 +21,14 @@ def dates_to_chunks(start: date, end: date, chunk_size: str = "M", trim: bool = 
     Chunks a date range in a consistent way (i.e. the same middle chunks will always be generated for overlapping
     ranges).
 
-    :param start: The start date of the time interval to convert to chunks
-    :type start: date
-    :param end: The end date of the time interval to convert to chunks
-    :type end: date
-    :param chunk_size: Any valid Pandas frequency string (with no multiplier). i.e. 'W', 'D', 'M' but not '2W'.
-    :type chunk_size: str
-    :param trim: Whether to trim the ends to match start and end date exactly
-    :type trim: bool
-    :return: generator that produces tuples: (start date, end date)
+    Args:
+        start: The start date of the time interval to convert to chunks
+        end: The end date of the time interval to convert to chunks
+        chunk_size: Any valid Pandas frequency string. i.e. 'D', '2W', 'M'.
+        trim: Whether to trim the ends to match start and end date exactly (versus standard-sized chunks that cover the interval)
+
+    Returns:
+        List of tuples of (start date, end date) for each of the chunks
     """
     offset = pd.tseries.frequencies.to_offset(chunk_size)
     if offset.n == 1:

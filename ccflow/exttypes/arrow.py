@@ -8,7 +8,7 @@ from typing_extensions import Literal, Self, get_args
 
 
 class ArrowSchema(type):
-    """A metaclass for creating Arrow schema-specific types that can be used in Generic"""
+    """A metaclass for creating Arrow schema-specific types that can be used with Generic classes"""
 
     @classmethod
     def make(

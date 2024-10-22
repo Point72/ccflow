@@ -1,6 +1,4 @@
-"""This module defines re-usable contexts for the "Callable Model" framework
-defined in flow.callable.py.
-"""
+"""This module defines re-usable contexts for the "Callable Model" framework defined in flow.callable.py."""
 
 from datetime import date, datetime
 from typing import Optional
@@ -165,8 +163,6 @@ class ModelDateRangeContext(DateRangeContext, ModelContext):
 
 
 class ModelDateRangeSourceContext(SourceContext, ModelDateRangeContext):
-    # The inheritance is in this order so that you can coerce from both "USE4S,2000-01-01,2000-01-02,barra" and
-    # "USE4S,2000-01-01,2000-01-02" (i.e. missing source).
     pass
 
 

@@ -35,12 +35,15 @@ def _orjson_file_dump(data: Any, file: IO, **kwargs):
 
 
 class GenericFilePublisher(BasePublisher):
-    """Publish data using a generic "dump" Callable."""
+    """Publish data using a generic "dump" Callable.
+
+    Uses `smart_open` under the hood so that local and cloud paths are supported.
+    """
 
     dump: Callable[[Any, IO, Any], Any] = _write_to_io
-    suffix: str
-    mode: str = "w"
-    kwargs: Dict[str, Any] = Field(default_factory=dict)
+    suffix: Field(str, description="The file suffix to use for the output")
+    mode: str = Field("w", description="The mode to open the file")
+    kwargs: Dict[str, Any] = Field({}, description="The kwargs to pass to the dump function")
 
     @override
     def __call__(self) -> AnyPath:
@@ -136,7 +139,7 @@ class DictTemplateFilePublisher(BasePublisher):
 class PydanticJSONPublisher(BasePublisher, Generic[PydanticModelType]):
     """Publish a pydantic model to a json file.
 
-    See https://pydantic-docs.helpmanual.io/usage/exporting_models/#modeljson
+    See https://docs.pydantic.dev/latest/concepts/serialization/#modeljson
     """
 
     data: PydanticModelType = None

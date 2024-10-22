@@ -1,11 +1,10 @@
 """
-This module contains pydantic wrappers over pandas objects for pydantic validation.
+This module contains pydantic wrappers over pandas objects for pydantic validation and serialization.
+
+We do not validate dtypes.
 
 Pandera (https://pandera.readthedocs.io/en/stable/) offers this ability, but it is currently not a requirement for ccflow
 and importing the package provides significant overhead (as of Oct 2024).
-
-Based on:
-https://pandas.pydata.org/pandas-docs/stable/development/extending.html#extending-subclassing-pandas
 """
 
 from abc import ABC, abstractmethod
@@ -53,6 +52,8 @@ class GenericPandasWrapper(ABC):
 
 
 class SeriesWrapper(pd.Series, GenericPandasWrapper):
+    """Wrapper around a pandas Series that can be validated with pydantic."""
+
     @classmethod
     def _validate(cls, v):
         if isinstance(v, cls):
@@ -92,9 +93,7 @@ class SeriesWrapper(pd.Series, GenericPandasWrapper):
 
 
 class DataFrameWrapper(pd.DataFrame, GenericPandasWrapper):
-    """Wrapper around a dataframe that can be used as a field in a pydantic model
-    without needing to enable arbitrary_types_allowed.
-    """
+    """Wrapper around a pandas DataFrame that can be validated with pydantic."""
 
     @classmethod
     def _validate(cls, v):

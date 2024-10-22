@@ -14,7 +14,8 @@ def _remove_dict_enums(obj: Any) -> Dict:
     return obj
 
 
-def orjson_dumps(v, default=None, *a, **kw) -> str:
+def orjson_dumps(v, default=None, *arga, **kwargs) -> str:
+    """Robust wrapping of orjson dumps to help implement serialization."""
     # orjson.dumps returns bytes, to match standard json.dumps we need to decode
     # The default passed to orjson seems to be a partial function
     # with the json_encoders as the first argument. We try to perform the
@@ -29,7 +30,7 @@ def orjson_dumps(v, default=None, *a, **kw) -> str:
     except orjson.JSONEncodeError:
         # if we fail, we try to remove the enums because
         # orjson serialization fails when csp enums are
-        # used as dict keys
+        # used as dict keys. See https://github.com/ijl/orjson/issues/445
         return orjson.dumps(
             _remove_dict_enums(v),
             default=default,
@@ -38,6 +39,7 @@ def orjson_dumps(v, default=None, *a, **kw) -> str:
 
 
 def make_ndarray_orjson_valid(arr: np.ndarray) -> Union[List[Any], np.ndarray]:
+    """Returns a numpy array or list that is compatible with orjson serialization."""
     if not isinstance(arr, np.ndarray):
         raise TypeError(f"Expected np.ndarray instance, got {type(arr)}")
     # orjson supports these types:
