@@ -224,7 +224,7 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
             json_kwargs: The kwargs to pass to the pydantic serializer
             widget_kwargs: The kwargs to pass to the JSON IPython widget
         """
-        from IPython.display import JSON
+        from IPython.display import JSON  # Heavy import, only import if used.
 
         kwargs = {"fallback": str, "mode": "json"}
         kwargs.update(json_kwargs or {})
@@ -506,7 +506,7 @@ class ModelRegistry(BaseModel):
         Returns:
             The instance of the model registry, with the configs loaded.
         """
-        import hydra
+        import hydra  # Heavy import, only import if used.
 
         overrides = overrides or []
         path = pathlib.Path(path).absolute()  # Hydra requires absolute paths

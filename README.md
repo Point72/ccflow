@@ -7,6 +7,7 @@
 
 ## Features
 
+[More information is available in our wiki](https://github.com/Point72/ccflow/wiki)
 
 ## Installation
 

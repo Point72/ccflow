@@ -213,15 +213,12 @@ class FlowOptions(BaseModel):
         options = FlowOptionsOverride.get_options(model, self)
         if options.evaluator:
             return options.evaluator
-        from .evaluators import LoggingEvaluator
+        from .evaluators import LoggingEvaluator  # Import locally to prevent circular dependency
 
         return LoggingEvaluator(log_level=options.log_level)
 
     def __call__(self, fn):
         def wrapper(model, context=Signature.empty):
-            from .callable import CallableModel
-            from .evaluator import ModelEvaluationContext
-
             # TODO: Let ModelEvaluationContext handle this type checking
             if not isinstance(model, CallableModel):
                 raise TypeError("Can only decorate methods on CallableModels with the flow decorator")

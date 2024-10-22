@@ -71,14 +71,11 @@ check-manifest:  ## run manifest checker for sdist
 ##############################
 # Packaging and Distribution #
 ##############################
-.PHONY: conda setup-conda dist dist-sdist dist-bdist dist-check publish-conda-dev publish-conda-prod publish-pypi-dev publish-pypi-prod
+.PHONY: conda dist dist-sdist dist-bdist dist-check publish-conda-dev publish-conda-prod publish-pypi-dev publish-pypi-prod
 
 conda:	## build the conda package
 	mkdir -p dist/conda
 	conda mambabuild --python $(PYTHON_VERSION) --no-anaconda-upload conda-recipe/ --output-folder ./dist/conda/
-
-setup-conda:  ## install conda build environment
-	micromamba create -n cubist-reports-env python=3.9 boa conda-build mamba
 
 dist: dist-sdist dist-bdist dist-check  ## build the pypi/pip installable package
 

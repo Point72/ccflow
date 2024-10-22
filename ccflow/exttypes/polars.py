@@ -53,7 +53,7 @@ class PolarsExpression(pl.Expr):
             try:
                 local_vars = {"col": pl.col, "c": pl.col, "np": np, "numpy": np, "pl": pl, "polars": pl, "math": math}
                 try:
-                    import scipy as sp
+                    import scipy as sp  # Optional dependency.
 
                     local_vars.update({"scipy": sp, "sp": sp, "sc": sp})
                 except ImportError:
