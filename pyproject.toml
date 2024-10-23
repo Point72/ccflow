@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ccflow"
-description = "TODO"
+description = "Composable Configuration Flow"
 version = "0.2.1"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -49,6 +49,7 @@ dependencies = [
 
 [project.optional-dependencies]
 full = [
+    "cexprtk",
     "pandas",
     "pandera",
     "plotly",
@@ -67,6 +68,7 @@ develop = [
     "twine",
     "wheel",
     # Full deps
+    "cexprtk",
     "csp>=0.0.4,<0.1",
     "pandas",
     "pandera",

@@ -14,7 +14,6 @@ class BasePublisher(BaseModel, abc.ABC):
     """A publisher is a configurable object (flow base model) that knows how to "publish" typed python objects.
 
     We use pydantic's type declarations to define the "type" of data that the publisher knows how to publish.
-    Some examples of publishing destinations include: file (local or cloud), email, database, Rest API, Kafka, etc
     The naming convention for publishers is WhatWherePublisher or just WherePublisher if Any type is supported.
     """
 
@@ -24,16 +23,13 @@ class BasePublisher(BaseModel, abc.ABC):
         # Many publishers will require arbitrary types set on data
         arbitrary_types_allowed=True,
     )
-    # The "name" by which to publish that data element
-    name: JinjaTemplate = None
-    # The parameters for the name template
-    name_params: Dict[str, Any] = Field(default_factory=dict)
-    # The data is a field on the publisher model so that we can use pydantic validation/coercion on it
-    data: Any = None
+    name: JinjaTemplate = Field(None, description="The 'name' by which to publish that data element")
+    name_params: Dict[str, Any] = Field(default_factory=dict, description="The parameters for the name template")
+    data: Any = Field(None, description="The data we are going to publish")
 
     def get_name(self):
         """Get the name with the template parameters filled in."""
-        if self.name is None:
+        if not self.name:
             raise ValueError("Name must be set")
         return self.name.template.render(**self.name_params)
 

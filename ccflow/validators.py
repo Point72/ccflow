@@ -2,6 +2,7 @@
 
 import logging
 from datetime import date
+from typing import Any, Dict, Optional
 
 import pandas as pd
 from pydantic import ValidationError
@@ -9,7 +10,7 @@ from pydantic import ValidationError
 from .exttypes import PyObjectPath
 
 
-def normalize_date(v):
+def normalize_date(v: Any) -> Any:
     """Validator that will convert string offsets to date based on today."""
     if isinstance(v, str):  # Check case where it's an offset
         try:
@@ -20,7 +21,7 @@ def normalize_date(v):
     return v
 
 
-def load_object(v):
+def load_object(v: Any) -> Any:
     """Validator that loads an object from path if a string is provided"""
     if isinstance(v, str):
         try:
@@ -30,7 +31,7 @@ def load_object(v):
     return v
 
 
-def eval_or_load_object(v, values=None):
+def eval_or_load_object(v: Any, values: Optional[Dict[str, Any]] = None) -> Any:
     """Validator that evaluates or loads an object from path if a string is provided.
 
     Useful for fields that could be either lambda functions or callables.
@@ -44,14 +45,7 @@ def eval_or_load_object(v, values=None):
     return v
 
 
-def str_to_enum(v, field):
-    """Validator for enum fields that will try to convert a string value to the enum type."""
-    if isinstance(v, str):
-        return field.type_[v]
-    return v
-
-
-def str_to_log_level(v):
+def str_to_log_level(v: Any) -> Any:
     """Validator to convert string to a log level."""
     if isinstance(v, str):
         return getattr(logging, v.upper())

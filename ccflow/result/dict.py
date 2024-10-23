@@ -10,6 +10,4 @@ V = TypeVar("V")
 
 
 class DictResult(ResultBase, Generic[K, V]):
-    """Holds a Dict."""
-
     value: Dict[K, V]

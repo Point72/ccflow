@@ -81,7 +81,7 @@ class LazyObjectConfig(ObjectConfig):
     @property
     def object(self):
         """Returns the lazily-constructed object corresponding to the config."""
-        if self._object is None:
+        if not self._object:
             self._object = self.object_type.object(**self.object_kwargs)
         return self._object
 

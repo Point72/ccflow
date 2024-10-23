@@ -8,7 +8,7 @@ ENV := dev
 ###############
 # Build Tools #
 ###############
-.PHONY: build develop install cubist-sdlc
+.PHONY: build requirements develop install cubist-sdlc
 
 build:  ## build python
 	python -m build .
@@ -42,7 +42,7 @@ coverage: test
 ###########
 # Linting #
 ###########
-.PHONY: lint fix format
+.PHONY: lint lints fix format
 
 lint:  ## lint python with ruff
 	python -m ruff check ccflow
@@ -76,9 +76,6 @@ check-manifest:  ## run manifest checker for sdist
 conda:	## build the conda package
 	mkdir -p dist/conda
 	conda mambabuild --python $(PYTHON_VERSION) --no-anaconda-upload conda-recipe/ --output-folder ./dist/conda/
-
-setup-conda:  ## install conda build environment
-	micromamba create -n cubist-reports-env python=3.9 boa conda-build mamba
 
 dist: dist-sdist dist-bdist dist-check  ## build the pypi/pip installable package
 

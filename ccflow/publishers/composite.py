@@ -1,7 +1,7 @@
 import logging
 from typing import Dict, Generic, List, Optional
 
-from pydantic import ValidationError, field_validator
+from pydantic import Field, ValidationError, field_validator
 from typing_extensions import override
 
 from ..publisher import BasePublisher
@@ -16,21 +16,28 @@ ROOT_KEY = "__root__"  # Used even outside the context of pydantic version 1
 
 class CompositePublisher(BasePublisher, Generic[PydanticModelType]):
     """Highly configurable, publisher that decomposes a pydantic BaseModel or a dictionary into pieces
-    and publishes each piece separately."""
+    and publishes each piece separately.
 
-    data: PydanticModelType = None
-    sep: str = "/"
-    # Map of field names to publisher
-    field_publishers: Dict[str, BasePublisher] = {}
-    # List of publishers that will be tried in order based on validation against "data" type
-    default_publishers: List[BasePublisher] = []
-    # Publisher for any remaining fields not covered by the above.
-    root_publisher: Optional[BasePublisher] = None
+    Any exceptions raised during publishing will be caught and re-raised at the end (to ensure all fields have a chance
+    of being published).
+    """
 
-    # Whether to expand fields that contain pydantic models into dictionaries.
-    models_as_dict: bool = True
-    # Options for iterating through the pydantic model.
-    options: PydanticDictOptions = PydanticDictOptions()
+    data: PydanticModelType = Field(None, description="The pydantic model containing data to be published")
+    sep: str = Field(
+        "/", description="The separator between the name of the publisher and the field names when forming the full path for each output"
+    )
+    field_publishers: Dict[str, BasePublisher] = Field({}, description="Map of field names to a publisher to use")
+    default_publishers: List[BasePublisher] = Field(
+        [],
+        description="List of publishers that will be tried in order based on validation against `data` type. "
+        "Can be used instead of or in addition to field_publishers",
+    )
+    root_publisher: Optional[BasePublisher] = Field(
+        None, description="Publisher for any remaining fields not covered by `field_publishers` or `default_publishers`."
+    )
+
+    models_as_dict: bool = Field(True, description="Whether to expand fields that contain pydantic models into dictionaries.")
+    options: PydanticDictOptions = Field(PydanticDictOptions(), dscription="Options for iterating through the pydantic model.")
 
     _normalize_data = field_validator("data", mode="before")(dict_to_model)
 
@@ -49,7 +56,7 @@ class CompositePublisher(BasePublisher, Generic[PydanticModelType]):
             full_name = self.sep.join((self.name, field)) if self.name else field
             publisher = self.field_publishers.get(field, None)
 
-            if publisher is None:
+            if not publisher:
                 for try_publisher in self.default_publishers:
                     try:
                         try_publisher.data = value
