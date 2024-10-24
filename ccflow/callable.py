@@ -13,7 +13,7 @@ which all need to be defined together so that pydantic (especially V1) can resol
 
 import abc
 import logging
-from functools import wraps
+from functools import lru_cache, wraps
 from inspect import Signature, isclass, signature
 from typing import Any, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar
 
@@ -59,6 +59,11 @@ GraphDepType = Tuple["CallableModelType", List[ContextType]]  # noqa: F405
 GraphDepList = List[GraphDepType]
 
 
+@lru_cache
+def cached_signature(callable):
+    return signature(callable)
+
+
 class MetaData(BaseModel):
     """Class to represent metadata for all callable models"""
 
@@ -96,17 +101,17 @@ class _CallableModel(BaseModel, abc.ABC):
 
     @model_validator(mode="after")
     def _check_signature(self):
-        sig_call = signature(self.__call__)
+        sig_call = cached_signature(self.__call__)
         if len(sig_call.parameters) != 1 or "context" not in sig_call.parameters:  # ("self", "context")
             raise ValueError("__call__ method must take a single argument, named 'context'")
 
-        sig_deps = signature(self.__deps__)
+        sig_deps = cached_signature(self.__deps__)
         if len(sig_deps.parameters) != 1 or "context" not in sig_deps.parameters:
             raise ValueError("__deps__ method must take a single argument, named 'context'")
 
         if self.__class__.__deps__ is not CallableModel.__deps__:
-            type_call_arg = signature(self.__call__).parameters["context"].annotation
-            type_deps_arg = signature(self.__deps__).parameters["context"].annotation
+            type_call_arg = cached_signature(self.__call__).parameters["context"].annotation
+            type_deps_arg = cached_signature(self.__deps__).parameters["context"].annotation
             err_msg_type_mismatch = (
                 f"The type of the context accepted by __deps__ {type_deps_arg} " f"must match that accepted by __call__ {type_call_arg}!"
             )
@@ -171,6 +176,13 @@ CallableModelType = TypeVar("CallableModelType", bound=_CallableModel)
 # *****************************************************************************
 
 
+@lru_cache
+def get_logging_evaluator(log_level):
+    from .evaluators import LoggingEvaluator  # Import locally to prevent circular dependency
+
+    return LoggingEvaluator(log_level=log_level)
+
+
 class FlowOptions(BaseModel):
     """Options for Flow evaluation.
 
@@ -213,9 +225,8 @@ class FlowOptions(BaseModel):
         options = FlowOptionsOverride.get_options(model, self)
         if options.evaluator:
             return options.evaluator
-        from .evaluators import LoggingEvaluator  # Import locally to prevent circular dependency
 
-        return LoggingEvaluator(log_level=options.log_level)
+        return get_logging_evaluator(log_level=options.log_level)
 
     def __call__(self, fn):
         def wrapper(model, context=Signature.empty):
@@ -227,7 +238,7 @@ class FlowOptions(BaseModel):
             if not isclass(model.result_type) or not issubclass(model.result_type, ResultBase):
                 raise TypeError(f"Result type {model.result_type} must be a subclass of ResultBase")
             if context is Signature.empty:
-                context = signature(fn).parameters["context"].default
+                context = cached_signature(fn).parameters["context"].default
                 if context is Signature.empty:
                     raise TypeError(f"{fn.__name__}() missing 1 required positional argument: 'context'")
             # Type coercion on input  TODO: Move to ModelEvaluationContext
