@@ -18,6 +18,8 @@ from inspect import Signature, isclass, signature
 from typing import Any, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar
 
 from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter, field_validator, model_validator
+from pydantic_core import SchemaValidator
+from pydantic_core.core_schema import is_instance_schema, list_schema, tuple_positional_schema
 from typing_extensions import override
 
 from .base import (
@@ -165,7 +167,11 @@ class _CallableModel(BaseModel, abc.ABC):
 
 
 CallableModelType = TypeVar("CallableModelType", bound=_CallableModel)
-
+GraphDepListSchema = list_schema(
+    items_schema=tuple_positional_schema(
+        items_schema=[is_instance_schema(cls=_CallableModel), list_schema(items_schema=is_instance_schema(cls=ContextBase))]
+    )
+)
 # *****************************************************************************
 # Define the "Flow" framework, including the decorator and its options
 # *****************************************************************************
@@ -250,7 +256,7 @@ class FlowOptions(BaseModel):
                 if self._deps:
                     if fn.__name__ != "__deps__":
                         raise ValueError("Can only apply Flow.deps decorator to __deps__")
-                    result = TypeAdapter(GraphDepList).validate_python(result)
+                    result = SchemaValidator(GraphDepListSchema).validate_python(result)
                 # If we validate a delayed result, we will force evaluation.
                 # Instead, we can flag that validation is requested, and have it done after evaluation
                 elif hasattr(result, "_lazy_is_delayed"):
