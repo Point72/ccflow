@@ -41,7 +41,7 @@ class GenericFilePublisher(BasePublisher):
     """
 
     dump: Callable[[Any, IO, Any], Any] = _write_to_io
-    suffix: Field(str, description="The file suffix to use for the output")
+    suffix: str = Field("", description="The file suffix to use for the output")
     mode: str = Field("w", description="The mode to open the file")
     kwargs: Dict[str, Any] = Field({}, description="The kwargs to pass to the dump function")
 
