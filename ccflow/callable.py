@@ -403,7 +403,7 @@ class ModelEvaluationContext(
 
     fn: str = Field("__call__", strict=True)
     options: Dict[str, Any] = Field(default_factory=dict)
-    model: InstanceOf[_CallableModel] # this avoids re-running the validators for the model and context since this is a temporary object
+    model: InstanceOf[_CallableModel]  # this avoids re-running the validators for the model and context since this is a temporary object
     context: InstanceOf[ContextBase]
 
     @model_validator(mode="wrap")
