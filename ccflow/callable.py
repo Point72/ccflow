@@ -17,7 +17,7 @@ from functools import wraps
 from inspect import Signature, isclass, signature
 from typing import Any, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar
 
-from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter, field_validator, model_validator
+from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field, InstanceOf, PrivateAttr, TypeAdapter, field_validator, model_validator
 from typing_extensions import override
 
 from .base import (
@@ -107,10 +107,10 @@ class _CallableModel(BaseModel, abc.ABC):
         if self.__class__.__deps__ is not CallableModel.__deps__:
             type_call_arg = signature(self.__call__).parameters["context"].annotation
             type_deps_arg = signature(self.__deps__).parameters["context"].annotation
-            err_msg_type_mismatch = (
-                f"The type of the context accepted by __deps__ {type_deps_arg} " f"must match that accepted by __call__ {type_call_arg}!"
-            )
             if type_call_arg is not type_deps_arg:
+                err_msg_type_mismatch = (
+                    f"The type of the context accepted by __deps__ {type_deps_arg} " f"must match that accepted by __call__ {type_call_arg}!"
+                )
                 raise ValueError(err_msg_type_mismatch)
 
         return self
@@ -231,7 +231,8 @@ class FlowOptions(BaseModel):
                 if context is Signature.empty:
                     raise TypeError(f"{fn.__name__}() missing 1 required positional argument: 'context'")
             # Type coercion on input  TODO: Move to ModelEvaluationContext
-            context = model.context_type.model_validate(context)
+            if not isinstance(context, model.context_type):
+                context = model.context_type.model_validate(context)
             # Create the evaluation context.
             # Record the options that are used, in case the evaluators want to use it,
             # but exclude the evaluator itself to avoid potential circular dependencies
@@ -402,6 +403,8 @@ class ModelEvaluationContext(
 
     fn: str = Field("__call__", strict=True)
     options: Dict[str, Any] = Field(default_factory=dict)
+    model: InstanceOf[_CallableModel] # this avoids re-running the validators for the model and context since this is a temporary object
+    context: InstanceOf[ContextBase]
 
     @model_validator(mode="wrap")
     def _context_validator(cls, values, handler, info):
