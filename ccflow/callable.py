@@ -167,11 +167,12 @@ class _CallableModel(BaseModel, abc.ABC):
 
 
 CallableModelType = TypeVar("CallableModelType", bound=_CallableModel)
-GraphDepListSchema = list_schema(
+_GraphDepListSchema = list_schema(
     items_schema=tuple_positional_schema(
         items_schema=[is_instance_schema(cls=_CallableModel), list_schema(items_schema=is_instance_schema(cls=ContextBase))]
     )
 )
+_GraphDepListValidator = SchemaValidator(schema=_GraphDepListSchema)
 # *****************************************************************************
 # Define the "Flow" framework, including the decorator and its options
 # *****************************************************************************
@@ -256,7 +257,7 @@ class FlowOptions(BaseModel):
                 if self._deps:
                     if fn.__name__ != "__deps__":
                         raise ValueError("Can only apply Flow.deps decorator to __deps__")
-                    result = SchemaValidator(GraphDepListSchema).validate_python(result)
+                    result = _GraphDepListValidator.validate_python(result)
                 # If we validate a delayed result, we will force evaluation.
                 # Instead, we can flag that validation is requested, and have it done after evaluation
                 elif hasattr(result, "_lazy_is_delayed"):
