@@ -163,7 +163,9 @@ class _SerializeAsAnyMeta(ModelMetaclass):
         return super().__new__(self, name, bases, namespaces, **kwargs)
 
 
-_make_pyobjectpath_to_type = lru_cache()(PyObjectPath.validate)
+@lru_cache
+def _make_pyobjectpath_to_type(input_type):
+    return PyObjectPath.validate(input_type)
 
 
 class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta):

@@ -58,6 +58,7 @@ log = logging.getLogger(__name__)
 GraphDepType = Tuple["CallableModelType", List[ContextType]]  # noqa: F405
 GraphDepList = List[GraphDepType]
 
+
 @lru_cache
 def _cached_signature(fn):
     return signature(fn)
