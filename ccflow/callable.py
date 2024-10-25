@@ -17,9 +17,7 @@ from functools import wraps
 from inspect import Signature, isclass, signature
 from typing import Any, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar
 
-from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field, PrivateAttr, TypeAdapter, field_validator, model_validator
-from pydantic_core import SchemaValidator
-from pydantic_core.core_schema import is_instance_schema, list_schema, tuple_positional_schema
+from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field, InstanceOf, PrivateAttr, TypeAdapter, field_validator, model_validator
 from typing_extensions import override
 
 from .base import (
@@ -55,10 +53,6 @@ log = logging.getLogger(__name__)
 # Base CallableModel definitions, before introducing the Flow decorator or
 # any evaluators
 # *****************************************************************************
-
-# TODO: Revisit these types, align with ModelAndContext and CallableModelGraph
-GraphDepType = Tuple["CallableModelType", List[ContextType]]  # noqa: F405
-GraphDepList = List[GraphDepType]
 
 
 class MetaData(BaseModel):
@@ -154,7 +148,7 @@ class _CallableModel(BaseModel, abc.ABC):
     def __deps__(
         self,
         context: ContextType,
-    ) -> GraphDepList:
+    ) -> "GraphDepList":
         """
         Overwrite this method to specify dependencies of this `CallableModel` that can then be used for parallelization
         of the implicit `CallableModel` graph. The 'call graph' of a `CallableModel` is implicitly defined by the calls
@@ -167,12 +161,11 @@ class _CallableModel(BaseModel, abc.ABC):
 
 
 CallableModelType = TypeVar("CallableModelType", bound=_CallableModel)
-_GraphDepListSchema = list_schema(
-    items_schema=tuple_positional_schema(
-        items_schema=[is_instance_schema(cls=_CallableModel), list_schema(items_schema=is_instance_schema(cls=ContextBase))]
-    )
-)
-_GraphDepListValidator = SchemaValidator(schema=_GraphDepListSchema)
+
+# Since we only want to check the types, not revalidate the models, we use InstanceOf here
+GraphDepType = Tuple[InstanceOf[_CallableModel], List[InstanceOf[ContextBase]]]  # noqa: F405
+GraphDepList = List[GraphDepType]
+
 # *****************************************************************************
 # Define the "Flow" framework, including the decorator and its options
 # *****************************************************************************
@@ -257,7 +250,7 @@ class FlowOptions(BaseModel):
                 if self._deps:
                     if fn.__name__ != "__deps__":
                         raise ValueError("Can only apply Flow.deps decorator to __deps__")
-                    result = _GraphDepListValidator.validate_python(result)
+                    result = _GraphDepListAdapter.validate_python(result)
                 # If we validate a delayed result, we will force evaluation.
                 # Instead, we can flag that validation is requested, and have it done after evaluation
                 elif hasattr(result, "_lazy_is_delayed"):
@@ -458,6 +451,7 @@ class Evaluator(EvaluatorBase):
         return context()
 
 
+_GraphDepListAdapter = TypeAdapter(GraphDepList)
 # Sort out all forward ref issues
 FlowOptions.model_rebuild()
 FlowOptionsDeps.model_rebuild()
