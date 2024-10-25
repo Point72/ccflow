@@ -163,9 +163,7 @@ class _SerializeAsAnyMeta(ModelMetaclass):
         return super().__new__(self, name, bases, namespaces, **kwargs)
 
 
-@lru_cache
-def make_pyobjectpath_to_type(input_type):
-    return PyObjectPath.validate(input_type)
+_make_pyobjectpath_to_type = lru_cache()(PyObjectPath.validate)
 
 
 class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta):
@@ -186,7 +184,7 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
     @property
     def type_(self) -> PyObjectPath:
         """The path to the object type"""
-        return make_pyobjectpath_to_type(type(self))
+        return _make_pyobjectpath_to_type(type(self))
 
     # We want to track under what names a model has been registered
     _registrations: List[Tuple["ModelRegistry", str]] = PrivateAttr(default_factory=list)
