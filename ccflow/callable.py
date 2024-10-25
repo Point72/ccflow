@@ -418,6 +418,7 @@ class ModelEvaluationContext(
     context: InstanceOf[ContextBase]
     # Using InstanceOf instead of the actual type will limit Pydantic's validation of the field to instance checking
     # Otherwise, the validation will re-run fully despite the models already being validated on construction
+    # TODO: Make the instance check compatible with the generic types instead of the base type
 
     @model_validator(mode="wrap")
     def _context_validator(cls, values, handler, info):
