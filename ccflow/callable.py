@@ -403,8 +403,10 @@ class ModelEvaluationContext(
 
     fn: str = Field("__call__", strict=True)
     options: Dict[str, Any] = Field(default_factory=dict)
-    model: InstanceOf[_CallableModel]  # Using InstanceOf instead of the actual type will limit Pydantic's validation of the field to instance checking
-    context: InstanceOf[ContextBase] # Otherwise, the validation will re-run fully despite the models already being validated on construction
+    model: InstanceOf[_CallableModel]
+    context: InstanceOf[ContextBase]
+    # Using InstanceOf instead of the actual type will limit Pydantic's validation of the field to instance checking
+    # Otherwise, the validation will re-run fully despite the models already being validated on construction
 
     @model_validator(mode="wrap")
     def _context_validator(cls, values, handler, info):
