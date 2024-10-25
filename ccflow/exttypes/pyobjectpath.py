@@ -1,13 +1,18 @@
 """This module contains extension types for pydantic."""
 
-from functools import cached_property
+from functools import cached_property, lru_cache
 from typing import Any, Type, get_origin
 
 from pydantic import ImportString, TypeAdapter
 from pydantic_core import core_schema
 from typing_extensions import Self
 
-import_string = TypeAdapter(ImportString).validate_python
+_import_string_adapter = TypeAdapter(ImportString)
+
+
+@lru_cache
+def import_string(input_string):
+    return _import_string_adapter.validate_python(input_string)
 
 
 class PyObjectPath(str):
