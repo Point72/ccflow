@@ -7,6 +7,7 @@ import logging
 import pathlib
 import platform
 import typing
+from functools import lru_cache
 from types import MappingProxyType
 from typing import Any, Callable, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar, get_args, get_origin
 
@@ -162,6 +163,11 @@ class _SerializeAsAnyMeta(ModelMetaclass):
         return super().__new__(self, name, bases, namespaces, **kwargs)
 
 
+@lru_cache
+def _make_pyobjectpath_to_type(input_type):
+    return PyObjectPath.validate(input_type)
+
+
 class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta):
     """BaseModel is a base class for all pydantic models within the cubist flow framework.
 
@@ -180,7 +186,7 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
     @property
     def type_(self) -> PyObjectPath:
         """The path to the object type"""
-        return PyObjectPath.validate(type(self))
+        return _make_pyobjectpath_to_type(type(self))
 
     # We want to track under what names a model has been registered
     _registrations: List[Tuple["ModelRegistry", str]] = PrivateAttr(default_factory=list)

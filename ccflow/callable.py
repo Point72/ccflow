@@ -13,7 +13,7 @@ which all need to be defined together so that pydantic (especially V1) can resol
 
 import abc
 import logging
-from functools import wraps
+from functools import lru_cache, wraps
 from inspect import Signature, isclass, signature
 from typing import Any, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar
 
@@ -54,9 +54,10 @@ log = logging.getLogger(__name__)
 # any evaluators
 # *****************************************************************************
 
-# TODO: Revisit these types, align with ModelAndContext and CallableModelGraph
-GraphDepType = Tuple["CallableModelType", List[ContextType]]  # noqa: F405
-GraphDepList = List[GraphDepType]
+
+@lru_cache
+def _cached_signature(fn):
+    return signature(fn)
 
 
 class MetaData(BaseModel):
@@ -96,17 +97,17 @@ class _CallableModel(BaseModel, abc.ABC):
 
     @model_validator(mode="after")
     def _check_signature(self):
-        sig_call = signature(self.__call__)
-        if len(sig_call.parameters) != 1 or "context" not in sig_call.parameters:  # ("self", "context")
+        sig_call = _cached_signature(self.__class__.__call__)
+        if len(sig_call.parameters) != 2 or "context" not in sig_call.parameters:  # ("self", "context")
             raise ValueError("__call__ method must take a single argument, named 'context'")
 
-        sig_deps = signature(self.__deps__)
-        if len(sig_deps.parameters) != 1 or "context" not in sig_deps.parameters:
+        sig_deps = _cached_signature(self.__class__.__deps__)
+        if len(sig_deps.parameters) != 2 or "context" not in sig_deps.parameters:
             raise ValueError("__deps__ method must take a single argument, named 'context'")
 
         if self.__class__.__deps__ is not CallableModel.__deps__:
-            type_call_arg = signature(self.__call__).parameters["context"].annotation
-            type_deps_arg = signature(self.__deps__).parameters["context"].annotation
+            type_call_arg = _cached_signature(self.__class__.__call__).parameters["context"].annotation
+            type_deps_arg = _cached_signature(self.__class__.__deps__).parameters["context"].annotation
             if type_call_arg is not type_deps_arg:
                 err_msg_type_mismatch = (
                     f"The type of the context accepted by __deps__ {type_deps_arg} " f"must match that accepted by __call__ {type_call_arg}!"
@@ -122,7 +123,7 @@ class _CallableModel(BaseModel, abc.ABC):
         By default, it reads the value from the function signature (if a concrete value is provided),
         otherwise the implementation needs to be overridden.
         """
-        typ = signature(self).parameters["context"].annotation
+        typ = _cached_signature(self.__class__.__call__).parameters["context"].annotation
         if typ is Signature.empty:
             raise TypeError("Must either define a type annotation for context on __call__ or implement 'context_type'")
         if not issubclass(typ, ContextBase):
@@ -137,7 +138,7 @@ class _CallableModel(BaseModel, abc.ABC):
         By default, it reads the value from the function signature (if a concrete value is provided),
         otherwise the implementation needs to be overridden.
         """
-        typ = signature(self).return_annotation
+        typ = _cached_signature(self.__class__.__call__).return_annotation
         if typ is Signature.empty:
             raise TypeError("Must either define a return type annotation on __call__ or implement 'result_type'")
         if not issubclass(typ, ResultBase):
@@ -152,7 +153,7 @@ class _CallableModel(BaseModel, abc.ABC):
     def __deps__(
         self,
         context: ContextType,
-    ) -> GraphDepList:
+    ) -> "GraphDepList":
         """
         Overwrite this method to specify dependencies of this `CallableModel` that can then be used for parallelization
         of the implicit `CallableModel` graph. The 'call graph' of a `CallableModel` is implicitly defined by the calls
@@ -166,9 +167,20 @@ class _CallableModel(BaseModel, abc.ABC):
 
 CallableModelType = TypeVar("CallableModelType", bound=_CallableModel)
 
+# Since we only want to check the types, not revalidate the models, we use InstanceOf here
+GraphDepType = Tuple[InstanceOf[_CallableModel], List[InstanceOf[ContextBase]]]  # noqa: F405
+GraphDepList = List[GraphDepType]
+
 # *****************************************************************************
 # Define the "Flow" framework, including the decorator and its options
 # *****************************************************************************
+
+
+@lru_cache
+def _get_logging_evaluator(log_level):
+    from .evaluators import LoggingEvaluator  # Import locally to prevent circular dependency
+
+    return LoggingEvaluator(log_level=log_level)
 
 
 class FlowOptions(BaseModel):
@@ -213,9 +225,8 @@ class FlowOptions(BaseModel):
         options = FlowOptionsOverride.get_options(model, self)
         if options.evaluator:
             return options.evaluator
-        from .evaluators import LoggingEvaluator  # Import locally to prevent circular dependency
 
-        return LoggingEvaluator(log_level=options.log_level)
+        return _get_logging_evaluator(log_level=options.log_level)
 
     def __call__(self, fn):
         def wrapper(model, context=Signature.empty):
@@ -227,7 +238,7 @@ class FlowOptions(BaseModel):
             if not isclass(model.result_type) or not issubclass(model.result_type, ResultBase):
                 raise TypeError(f"Result type {model.result_type} must be a subclass of ResultBase")
             if context is Signature.empty:
-                context = signature(fn).parameters["context"].default
+                context = _cached_signature(fn).parameters["context"].default
                 if context is Signature.empty:
                     raise TypeError(f"{fn.__name__}() missing 1 required positional argument: 'context'")
             # Type coercion on input  TODO: Move to ModelEvaluationContext
@@ -251,7 +262,7 @@ class FlowOptions(BaseModel):
                 if self._deps:
                     if fn.__name__ != "__deps__":
                         raise ValueError("Can only apply Flow.deps decorator to __deps__")
-                    result = TypeAdapter(GraphDepList).validate_python(result)
+                    result = _GraphDepListAdapter.validate_python(result)
                 # If we validate a delayed result, we will force evaluation.
                 # Instead, we can flag that validation is requested, and have it done after evaluation
                 elif hasattr(result, "_lazy_is_delayed"):
@@ -456,6 +467,7 @@ class Evaluator(EvaluatorBase):
         return context()
 
 
+_GraphDepListAdapter = TypeAdapter(GraphDepList)
 # Sort out all forward ref issues
 FlowOptions.model_rebuild()
 FlowOptionsDeps.model_rebuild()

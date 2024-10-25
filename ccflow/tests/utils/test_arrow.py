@@ -1,12 +1,12 @@
+from decimal import Decimal
 from unittest import TestCase
 
-import numpy as np
 import pandas as pd
 import polars as pl
 import pyarrow as pa
 from packaging import version
 
-from ccflow.utils.arrow import add_field_metadata, arrow_lists_to_pandas_dict, convert_large_types, get_field_metadata, pandas_dict_to_arrow_lists
+from ccflow.utils.arrow import add_field_metadata, convert_decimal_types_to_float, convert_large_types, get_field_metadata
 
 
 class TestArrowUtil(TestCase):
@@ -62,9 +62,22 @@ class TestArrowUtil(TestCase):
         target_schema = pa.schema([pa.field("a", pa.large_list(pa.int64()))])
         self.assertEqual(t.schema, target_schema)
 
+    def test_convert_decimal_types_to_float(self):
+        table = pa.Table.from_pydict(
+            {"sym": ["A", "B", "C"], "price": [Decimal(2.0), Decimal(3.0), Decimal(50.0)]},
+            pa.schema([pa.field("sym", pa.string()), pa.field("price", pa.decimal128(8, 3))]),
+        )
+
+        converted_table = convert_decimal_types_to_float(table, pa.float64())
+        target_schema = pa.schema([pa.field("sym", pa.string()), pa.field("price", pa.float64())])
+        target_df = pd.DataFrame({"sym": ["A", "B", "C"], "price": [2.0, 3.0, 50.0]})
+
+        self.assertEqual(converted_table.schema, target_schema)
+        pd.testing.assert_frame_equal(target_df, converted_table.to_pandas())
+
 
 class TestMetaData(TestCase):
-    def test_metadata(self):
+    def test_add_field_metadata(self):
         t = pa.Table.from_pydict(
             {
                 "int": [1, 2],
@@ -82,87 +95,3 @@ class TestMetaData(TestCase):
 
         # Get it back in "normal" form
         self.assertDictEqual(get_field_metadata(t2), metadata)
-
-
-class TestListConversions(TestCase):
-    def setUp(self) -> None:
-        self.df1 = pd.DataFrame([["foo", "bar"], ["baz", "qux"]], columns=["a", "b"], index=[1, 2])
-        self.df2 = pd.DataFrame([[1.0, 2.0], [3.0, 4.0]], columns=["A", "B"], index=[1, 2])
-        self.t = pa.Table.from_pydict(
-            {
-                "int": [1, 2],
-                "str": ["foo", "bar"],
-                "list_float": [[1.0, 2.0], [3.0, 4.0]],
-                "list_str": [["foo", "bar"], ["baz", "qux"]],
-            },
-        )
-
-    def test_arrow_lists_to_pandas_dict(self):
-        fields = ["list_float", "list_str"]
-        dfs = arrow_lists_to_pandas_dict(self.t, columns=["a", "b"])
-        self.assertEqual(list(dfs.keys()), fields)
-        pd.testing.assert_frame_equal(dfs["list_str"], self.df1.reset_index(drop=True))
-        df2 = pd.DataFrame([[1.0, 2.0], [3.0, 4.0]], columns=["a", "b"])
-        pd.testing.assert_frame_equal(dfs["list_float"], df2)
-
-    def test_arrow_lists_to_pandas_dict_fields(self):
-        fields = ["list_str"]
-        dfs = arrow_lists_to_pandas_dict(self.t, fields=fields, columns=["a", "b"])
-        self.assertEqual(list(dfs.keys()), fields)
-        pd.testing.assert_frame_equal(dfs["list_str"], self.df1.reset_index(drop=True))
-
-    def test_arrow_lists_to_pandas_dict_index(self):
-        dfs = arrow_lists_to_pandas_dict(self.t, columns=["a", "b"], index_name="int")
-        pd.testing.assert_frame_equal(
-            dfs["list_str"],
-            pd.DataFrame([["foo", "bar"], ["baz", "qux"]], columns=["a", "b"], index=[1, 2]),
-        )
-        pd.testing.assert_frame_equal(
-            dfs["list_float"],
-            pd.DataFrame([[1.0, 2.0], [3.0, 4.0]], columns=["a", "b"], index=[1, 2]),
-        )
-
-    def test_pandas_dict_to_arrow_lists(self):
-        t = pandas_dict_to_arrow_lists({"list_str": self.df1, "list_float": self.df2})
-        self.assertEqual(t, t.select(["list_str", "list_float"]))
-
-        t = pandas_dict_to_arrow_lists({"list_str": self.df1, "list_float": self.df2}, index_name="int")
-        self.assertEqual(t, t.select(["int", "list_str", "list_float"]))
-
-        metadata = get_field_metadata(t)
-        self.assertDictEqual(
-            metadata,
-            {
-                "list_str": {"columns": ["a", "b"]},
-                "list_float": {"columns": ["A", "B"]},
-            },
-        )
-
-        self.assertRaises(ValueError, pandas_dict_to_arrow_lists, {})
-
-    def test_pandas_dict_to_arrow_lists_roundtrip(self):
-        # Test round-trip! This includes embedding the column information in the metadata
-        t = pandas_dict_to_arrow_lists({"list_str": self.df1, "list_float": self.df2}, index_name="int")
-        dfs = arrow_lists_to_pandas_dict(t, index_name="int")
-        pd.testing.assert_frame_equal(dfs["list_str"], self.df1)
-        pd.testing.assert_frame_equal(dfs["list_float"], self.df2)
-
-    def test_nulls(self):
-        t = pa.Table.from_pydict(
-            {
-                "int": [1, 2, 3],
-                "str": ["foo", "bar", "baz"],
-                "list_float": [[1.0, 2.0], None, [3.0, 4.0]],
-                "list_str": [["foo", "bar"], None, ["baz", "qux"]],
-            },
-        )
-        df1 = pd.DataFrame(
-            [["foo", "bar"], [], ["baz", "qux"]],
-            columns=["a", "b"],
-        )
-        fields = ["list_float", "list_str"]
-        dfs = arrow_lists_to_pandas_dict(t, columns=["a", "b"])
-        self.assertEqual(list(dfs.keys()), fields)
-        pd.testing.assert_frame_equal(dfs["list_str"], df1)
-        df2 = pd.DataFrame([[1.0, 2.0], [np.nan, np.nan], [3.0, 4.0]], columns=["a", "b"])
-        pd.testing.assert_frame_equal(dfs["list_float"], df2)
