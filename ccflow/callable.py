@@ -58,8 +58,9 @@ log = logging.getLogger(__name__)
 GraphDepType = Tuple["CallableModelType", List[ContextType]]  # noqa: F405
 GraphDepList = List[GraphDepType]
 
-
-_cached_signature = lru_cache()(signature)
+@lru_cache
+def _cached_signature(fn):
+    return signature(fn)
 
 
 class MetaData(BaseModel):
@@ -99,17 +100,17 @@ class _CallableModel(BaseModel, abc.ABC):
 
     @model_validator(mode="after")
     def _check_signature(self):
-        sig_call = _cached_signature(self.__call__)
-        if len(sig_call.parameters) != 1 or "context" not in sig_call.parameters:  # ("self", "context")
+        sig_call = _cached_signature(self.__class__.__call__)
+        if len(sig_call.parameters) != 2 or "context" not in sig_call.parameters:  # ("self", "context")
             raise ValueError("__call__ method must take a single argument, named 'context'")
 
-        sig_deps = _cached_signature(self.__deps__)
-        if len(sig_deps.parameters) != 1 or "context" not in sig_deps.parameters:
+        sig_deps = _cached_signature(self.__class__.__deps__)
+        if len(sig_deps.parameters) != 2 or "context" not in sig_deps.parameters:
             raise ValueError("__deps__ method must take a single argument, named 'context'")
 
         if self.__class__.__deps__ is not CallableModel.__deps__:
-            type_call_arg = _cached_signature(self.__call__).parameters["context"].annotation
-            type_deps_arg = _cached_signature(self.__deps__).parameters["context"].annotation
+            type_call_arg = _cached_signature(self.__class__.__call__).parameters["context"].annotation
+            type_deps_arg = _cached_signature(self.__class__.__deps__).parameters["context"].annotation
             err_msg_type_mismatch = (
                 f"The type of the context accepted by __deps__ {type_deps_arg} " f"must match that accepted by __call__ {type_call_arg}!"
             )
@@ -125,7 +126,7 @@ class _CallableModel(BaseModel, abc.ABC):
         By default, it reads the value from the function signature (if a concrete value is provided),
         otherwise the implementation needs to be overridden.
         """
-        typ = signature(self).parameters["context"].annotation
+        typ = _cached_signature(self.__class__.__call__).parameters["context"].annotation
         if typ is Signature.empty:
             raise TypeError("Must either define a type annotation for context on __call__ or implement 'context_type'")
         if not issubclass(typ, ContextBase):
@@ -140,7 +141,7 @@ class _CallableModel(BaseModel, abc.ABC):
         By default, it reads the value from the function signature (if a concrete value is provided),
         otherwise the implementation needs to be overridden.
         """
-        typ = signature(self).return_annotation
+        typ = _cached_signature(self.__class__.__call__).return_annotation
         if typ is Signature.empty:
             raise TypeError("Must either define a return type annotation on __call__ or implement 'result_type'")
         if not issubclass(typ, ResultBase):
