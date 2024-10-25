@@ -108,10 +108,10 @@ class _CallableModel(BaseModel, abc.ABC):
         if self.__class__.__deps__ is not CallableModel.__deps__:
             type_call_arg = _cached_signature(self.__class__.__call__).parameters["context"].annotation
             type_deps_arg = _cached_signature(self.__class__.__deps__).parameters["context"].annotation
-            err_msg_type_mismatch = (
-                f"The type of the context accepted by __deps__ {type_deps_arg} " f"must match that accepted by __call__ {type_call_arg}!"
-            )
             if type_call_arg is not type_deps_arg:
+                err_msg_type_mismatch = (
+                    f"The type of the context accepted by __deps__ {type_deps_arg} " f"must match that accepted by __call__ {type_call_arg}!"
+                )
                 raise ValueError(err_msg_type_mismatch)
 
         return self
@@ -242,7 +242,8 @@ class FlowOptions(BaseModel):
                 if context is Signature.empty:
                     raise TypeError(f"{fn.__name__}() missing 1 required positional argument: 'context'")
             # Type coercion on input  TODO: Move to ModelEvaluationContext
-            context = model.context_type.model_validate(context)
+            if not isinstance(context, model.context_type):
+                context = model.context_type.model_validate(context)
             # Create the evaluation context.
             # Record the options that are used, in case the evaluators want to use it,
             # but exclude the evaluator itself to avoid potential circular dependencies
@@ -413,6 +414,11 @@ class ModelEvaluationContext(
 
     fn: str = Field("__call__", strict=True)
     options: Dict[str, Any] = Field(default_factory=dict)
+    model: InstanceOf[_CallableModel]
+    context: InstanceOf[ContextBase]
+    # Using InstanceOf instead of the actual type will limit Pydantic's validation of the field to instance checking
+    # Otherwise, the validation will re-run fully despite the models already being validated on construction
+    # TODO: Make the instance check compatible with the generic types instead of the base type
 
     @model_validator(mode="wrap")
     def _context_validator(cls, values, handler, info):
