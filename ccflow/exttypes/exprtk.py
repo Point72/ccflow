@@ -2,6 +2,7 @@ from typing import Any
 
 from pydantic import TypeAdapter
 from pydantic_core import core_schema
+from typing_extensions import Self
 
 __all__ = ("ExprTkExpression",)
 
@@ -23,7 +24,7 @@ class ExprTkExpression(str):
         return core_schema.no_info_plain_validator_function(cls._validate)
 
     @classmethod
-    def _validate(cls, value: Any) -> "ExprTkExpression":
+    def _validate(cls, value: Any) -> Self:
         if isinstance(value, ExprTkExpression):
             return value
 
@@ -39,7 +40,7 @@ class ExprTkExpression(str):
         raise ValueError(f"{value} cannot be converted into an ExprTkExpression.")
 
     @classmethod
-    def validate(cls, value: Any) -> "ExprTkExpression":
+    def validate(cls, value: Any) -> Self:
         """Try to convert/validate an arbitrary value to a Frequency."""
         return _TYPE_ADAPTER.validate_python(value)
 

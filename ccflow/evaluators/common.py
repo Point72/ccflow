@@ -1,15 +1,14 @@
 import logging
 import time
-from datetime import time as dt_time, timedelta
+from datetime import timedelta
 from types import MappingProxyType
 from typing import Callable, Dict, List, Optional, Set, Union
 
 import dask.base
-from dask.base import normalize_token
-from pydantic import PrivateAttr
+from pydantic import Field, PrivateAttr
 from typing_extensions import override
 
-from ..base import BaseModel
+from ..base import BaseModel, make_lazy_result
 from ..callable import CallableModel, ContextBase, EvaluatorBase, ModelEvaluationContext, ResultType
 
 __all__ = [
@@ -28,10 +27,15 @@ log = logging.getLogger(__name__)
 
 
 def combine_evaluators(first: Optional[EvaluatorBase], second: Optional[EvaluatorBase]) -> EvaluatorBase:
-    """Helper function to combine evaluators into a new evaluator."""
-    if first is None:
+    """Helper function to combine evaluators into a new evaluator.
+
+    Args:
+        first: The first evaluator to combine.
+        second: The second evaluator to combine.
+    """
+    if not first:
         return second
-    elif second is None:
+    elif not second:
         return first
     elif isinstance(first, MultiEvaluator):
         if isinstance(second, MultiEvaluator):
@@ -47,7 +51,9 @@ def combine_evaluators(first: Optional[EvaluatorBase], second: Optional[Evaluato
 class MultiEvaluator(EvaluatorBase):
     """An evaluator that combines multiple evaluators."""
 
-    evaluators: List[EvaluatorBase]
+    evaluators: List[EvaluatorBase] = Field(
+        description="The list of evaluators to combine. The first evaluator in the list will be called first during evaluation."
+    )
 
     @override
     def __call__(self, context: ModelEvaluationContext) -> ResultType:
@@ -57,14 +63,12 @@ class MultiEvaluator(EvaluatorBase):
 
 
 class LazyEvaluator(EvaluatorBase):
-    """Evaluator that only actually runs the callable once an attribute of the result is queried (by hooking __getattribute__)"""
+    """Evaluator that only actually runs the callable once an attribute of the result is queried (by hooking into __getattribute__)"""
 
-    additional_callback: Callable = lambda: None
+    additional_callback: Callable = Field(lambda: None, description="An additional callback that will be invoked before the evaluation takes place.")
 
     @override
     def __call__(self, context: ModelEvaluationContext) -> ResultType:
-        from ccflow.base import make_lazy_result
-
         def make_result():
             self.additional_callback()
             return context()
@@ -73,10 +77,12 @@ class LazyEvaluator(EvaluatorBase):
 
 
 class LoggingEvaluator(EvaluatorBase):
-    """Evaluator that logs information about evaluating the callable (e.g. context the model was called with)."""
+    """Evaluator that logs information about evaluating the callable.
 
-    log_level: int = logging.DEBUG
-    verbose: bool = True
+    It logs start and end times, the model name, and the context."""
+
+    log_level: int = Field(logging.DEBUG, description="The log level for start/end of evaluation")
+    verbose: bool = Field(True, description="Whether to output the model defintion as part of logging")
 
     @override
     def __call__(self, context: ModelEvaluationContext) -> ResultType:
@@ -101,15 +107,12 @@ class LoggingEvaluator(EvaluatorBase):
             )
 
 
-@normalize_token.register(dt_time)
-def tokenize_bar(t):
-    """Custom tokenization of time"""
-    # TODO: Remove after this is merged: https://github.com/dask/dask/pull/9528
-    return hash(t)
-
-
 def cache_key(flow_obj: Union[ModelEvaluationContext, ContextBase, CallableModel]) -> bytes:
-    """Returns a key suitable for use in caching"""
+    """Returns a key suitable for use in caching.
+
+    Args:
+        flow_obj: The object to be tokenized to form the cache key.
+    """
     if isinstance(flow_obj, (ModelEvaluationContext, ContextBase, CallableModel)):
         return dask.base.tokenize(flow_obj.model_dump(mode="python")).encode("utf-8")
     else:
@@ -179,10 +182,12 @@ def _build_dependency_graph(evaluation_context: ModelEvaluationContext, graph: C
                 _build_dependency_graph(sub_evaluation_context, graph, parent_key=key)
 
 
-def get_dependency_graph(
-    evaluation_context: ModelEvaluationContext,
-) -> CallableModelGraph:
-    """Get a dependency graph for a model and context."""
+def get_dependency_graph(evaluation_context: ModelEvaluationContext) -> CallableModelGraph:
+    """Get a dependency graph for a model and context based on recursive evaluation of __deps__.
+
+    Args:
+        evaluation_context: The model and context to build the graph for.
+    """
     root_key = cache_key(evaluation_context)
     graph = CallableModelGraph(ids={}, graph={}, root_id=root_key)
     _build_dependency_graph(evaluation_context, graph)
@@ -190,9 +195,12 @@ def get_dependency_graph(
 
 
 class GraphEvaluator(EvaluatorBase):
-    """Evaluator that evaluates the dependency graph of callable models first."""
+    """Evaluator that evaluates the dependency graph of callable models in topologically sorted order.
 
-    is_evaluating: bool = False
+    It is suggested to combine it with a caching evaluator.
+    """
+
+    _is_evaluating: bool = PrivateAttr(False)
 
     @override
     def __call__(self, context: ModelEvaluationContext) -> ResultType:
@@ -200,9 +208,9 @@ class GraphEvaluator(EvaluatorBase):
 
         # If we are evaluating deps, or if we have already started using the graph evaluator further up the call tree,
         # no not apply it any further
-        if self.is_evaluating:
+        if self._is_evaluating:
             return context()
-        self.is_evaluating = True
+        self._is_evaluating = True
         try:
             graph = get_dependency_graph(context)
             ts = graphlib.TopologicalSorter(graph.graph)
@@ -210,4 +218,4 @@ class GraphEvaluator(EvaluatorBase):
                 evaluation_context = graph.ids[key]
                 evaluation_context()
         finally:
-            self.is_evaluating = False
+            self._is_evaluating = False

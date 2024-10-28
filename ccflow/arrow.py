@@ -4,11 +4,10 @@ Note that arrow related extension types are in exttypes.arrow.
 
 import abc
 from datetime import date, datetime, time
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import pyarrow as pa
 from pydantic import Field, model_validator
-from typing_extensions import Literal  # For pydantic 1 compatibility on python 3.9
 
 from .base import BaseModel
 from .exttypes import JinjaTemplate, PyArrowDatatype, PyObjectPath
@@ -30,15 +29,16 @@ __all__ = (
 
 
 class ArrowFilter(BaseModel):
-    """A custom model to help represent the filters to read parquet datasets.
-    Allows for better typing for non-basic types in configs.
+    """Wrapping of pyarrow filter tuples as a ccflow BaseModel.
+
+    Allows for better typing of filters in configs for pyarrow file reads.
     """
 
     key: str
     op: str
     value: Any
 
-    def tuple(self):
+    def tuple(self) -> Tuple:
         """Convert the filter back to a tuple"""
         return self.key, self.op, self.value
 
@@ -51,18 +51,26 @@ class ArrowFilter(BaseModel):
 
 
 class ArrowDateFilter(ArrowFilter):
+    """An ArrowFilter where value is validated as a date"""
+
     value: date
 
 
 class ArrowDatetimeFilter(ArrowFilter):
+    """An ArrowFilter where value is validated as a datetime"""
+
     value: datetime
 
 
 class ArrowTimeFilter(ArrowFilter):
+    """An ArrowFilter where value is validated as a time"""
+
     value: time
 
 
 class ArrowTemplateFilter(ArrowFilter):
+    """An ArrowFilter where value is validated as a Jinja template"""
+
     value: JinjaTemplate
 
 
@@ -74,10 +82,15 @@ def _render_filter(f, template_args):
 
 
 def render_filters(
-    filters: Optional[Union[List[ArrowFilter], List[List[ArrowFilter]]]] = None,
-    template_args: Dict[str, Any] = None,
-):
-    """Fill in template arguments in a list of filters, and return the standard Arrow form."""
+    filters: Union[List[ArrowFilter], List[List[ArrowFilter]]],
+    template_args: Dict[str, Any],
+) -> Union[List[ArrowFilter], List[List[ArrowFilter]]]:
+    """Fill in template arguments in a list of filters, and return the standard Arrow form.
+
+    Args:
+        filters: The collection of filters to render.
+        template_args: The template arguments for the filters
+    """
     if isinstance(filters[0], ArrowFilter):
         return [_render_filter(f, template_args) for f in filters]
     else:
@@ -85,34 +98,35 @@ def render_filters(
 
 
 class ArrowFileSystem(ObjectConfig, abc.ABC):
-    """ArrowFilesystem is a wrapping of pyarrow.fs.Filesystem.
+    """Wrapping of pyarrow.fs.Filesystem as a generic ObjectConfig.
+
     See https://arrow.apache.org/docs/python/filesystems.html
     """
 
 
-_LOCAL_FILE_SYSTEM = PyObjectPath("pyarrow.fs.LocalFileSystem")
-
-
 class ArrowLocalFileSystem(ArrowFileSystem):
-    """Wrapping of pyarrow.fs.LocalFilesystem.
+    """Wrapping of pyarrow.fs.LocalFilesystem as a generic ObjectConfig.
+
     See https://arrow.apache.org/docs/python/generated/pyarrow.fs.LocalFileSystem.html
     """
+
+    _LOCAL_FILE_SYSTEM = PyObjectPath("pyarrow.fs.LocalFileSystem")
 
     object_type: Literal[_LOCAL_FILE_SYSTEM] = _LOCAL_FILE_SYSTEM
 
 
-_S3_FILE_SYSTEM = PyObjectPath("pyarrow.fs.S3FileSystem")
-
-
 class ArrowS3FileSystem(ArrowFileSystem):
-    """Wrapping of pyarrow.fs.S3FileSystem.
+    """Wrapping of pyarrow.fs.S3FileSystem as a generic ObjectConfig.
+
     See https://arrow.apache.org/docs/python/generated/pyarrow.fs.S3FileSystem.html"""
+
+    _S3_FILE_SYSTEM = PyObjectPath("pyarrow.fs.S3FileSystem")
 
     object_type: Literal[_S3_FILE_SYSTEM] = _S3_FILE_SYSTEM
 
 
 class ArrowSchemaModel(BaseModel):
-    """ArrowSchemaModel is a pydantic model of pyarrow schema"""
+    """Wrapping of pyarrow.Schema as a ccflow BaseModel."""
 
     fields: Dict[str, PyArrowDatatype]
     metadata: Optional[Dict[bytes, bytes]] = None
@@ -152,7 +166,8 @@ class ArrowSchemaModel(BaseModel):
 
 
 class ArrowPartitioning(BaseModel):
-    """ArrowPartitioning is a pydantic wrapping of pyarrow.dataset.Partitioning
+    """Wrapping of pyarrow.dataset.Partitioning as a ccflow BaseModel.
+
     See https://arrow.apache.org/docs/python/generated/pyarrow.dataset.partitioning.html
     """
 
@@ -163,6 +178,7 @@ class ArrowPartitioning(BaseModel):
 
     @property
     def object(self):  # -> Union[ds.Partitioning, ds.PartitioningFactory]:
+        """Return the underlying pyarrow dataset Partitioning object"""
         import pyarrow.dataset as ds  # Heavy import, only import if used.
 
         return ds.partitioning(
@@ -174,9 +190,9 @@ class ArrowPartitioning(BaseModel):
 
     def get_partition_columns(self) -> List[str]:
         """Return the list of partition columns"""
-        if self.arrow_schema is not None:
+        if self.arrow_schema:
             return self.arrow_schema.object.names
-        elif self.field_names is not None:
+        elif self.field_names:
             return self.field_names
         else:
             return []

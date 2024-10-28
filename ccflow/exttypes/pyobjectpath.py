@@ -1,12 +1,19 @@
 """This module contains extension types for pydantic."""
 
-from functools import cached_property
+from functools import cached_property, lru_cache
+from types import FunctionType, MethodType, ModuleType
 from typing import Any, Type, get_origin
 
 from pydantic import ImportString, TypeAdapter
 from pydantic_core import core_schema
+from typing_extensions import Self
 
-import_string = TypeAdapter(ImportString).validate_python
+_import_string_adapter = TypeAdapter(ImportString)
+
+
+@lru_cache(maxsize=None)
+def import_string(input_string: str):
+    return _import_string_adapter.validate_python(input_string)
 
 
 class PyObjectPath(str):
@@ -42,12 +49,12 @@ class PyObjectPath(str):
         return core_schema.no_info_plain_validator_function(cls._validate)
 
     @classmethod
-    def _validate(cls, value: Any) -> "PyObjectPath":
+    def _validate(cls, value: Any):
         if isinstance(value, str):
             value = cls(value)
         else:  # Try to construct a string from the object that can then be used to import the object
             origin = get_origin(value)
-            if origin is not None:
+            if origin:
                 value = origin
             if hasattr(value, "__module__") and hasattr(value, "__qualname__"):
                 if value.__module__ == "__builtin__":
@@ -59,7 +66,7 @@ class PyObjectPath(str):
                     # This happens with Generic types in pydantic. We strip out the info for now.
                     # TODO: Find a way of capturing the underlying type info
                     qualname = qualname.split("[", 1)[0]
-                if module is None:
+                if not module:
                     value = cls(qualname)
                 else:
                     value = cls(module + "." + qualname)
@@ -73,8 +80,17 @@ class PyObjectPath(str):
         return value
 
     @classmethod
-    def validate(cls, value) -> "PyObjectPath":
+    @lru_cache(maxsize=None)
+    def _validate_cached(cls, value: str) -> Self:
+        return _TYPE_ADAPTER.validate_python(value)
+
+    @classmethod
+    def validate(cls, value) -> Self:
         """Try to convert/validate an arbitrary value to a PyObjectPath."""
+        if isinstance(
+            value, (str, type, FunctionType, ModuleType, MethodType)
+        ):  # If the value is trivial, we cache it here to avoid the overhead of validation
+            return cls._validate_cached(value)
         return _TYPE_ADAPTER.validate_python(value)
 
 

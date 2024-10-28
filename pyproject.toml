@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ccflow"
-description = "TODO"
-version = "0.2.1"
+description = "Composable Configuration Flow"
+version = "0.2.2"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.8"
@@ -34,6 +34,7 @@ classifiers = [
 dependencies = [
     "cloudpathlib",
     "cloudpickle",
+    "dask",
     "hydra-core",
     "IPython",
     "jinja2",
@@ -48,7 +49,7 @@ dependencies = [
 
 [project.optional-dependencies]
 full = [
-    "dask",
+    "cexprtk",
     "pandas",
     "pandera",
     "plotly",
@@ -67,8 +68,8 @@ develop = [
     "twine",
     "wheel",
     # Full deps
+    "cexprtk",
     "csp>=0.0.4,<0.1",
-    "dask",
     "pandas",
     "pandera",
     "plotly",
@@ -94,7 +95,7 @@ Repository = "https://github.com/point72/ccflow"
 Homepage = "https://github.com/point72/ccflow"
 
 [tool.bumpversion]
-current_version = "0.2.1"
+current_version = "0.2.2"
 commit = true
 tag = false
 commit_args = "-s"

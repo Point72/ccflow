@@ -23,8 +23,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
-from typing import Any
-
 import numpy as np
 from pydantic import ValidationError
 from typing_extensions import get_args
@@ -73,19 +71,6 @@ class _BaseDType:
         json_schema = handler(core_schema)
         json_schema.update({"type": cls.__name__})
         return json_schema
-
-    @classmethod
-    def __get_validators__(cls) -> Any:
-        yield cls.validate
-
-    @classmethod
-    def validate(cls, val: Any, field) -> "_BaseDType":
-        if field.sub_fields:
-            msg = f"{cls.__name__} has no subfields"
-            raise ValidationError(msg)
-        if not isinstance(val, cls):
-            return cls(val)
-        return val
 
     @classmethod
     def __get_pydantic_core_schema__(cls, source_type, handler):

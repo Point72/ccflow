@@ -1,3 +1,4 @@
+import pickle
 from typing import Generic, TypeVar
 from unittest import TestCase
 
@@ -52,3 +53,12 @@ class TestPyObjectPath(TestCase):
         self.assertEqual(PyObjectPath.validate(B[float]), p)
         # Re-creating the object from the path loses the type information at the moment
         self.assertEqual(PyObjectPath.validate(B[float]).object, B)
+
+    def test_pickle(self):
+        p = PyObjectPath("ccflow.tests.exttypes.test_pyobjectpath.A")
+        self.assertEqual(p, pickle.loads(pickle.dumps(p)))
+        p = PyObjectPath.validate("ccflow.tests.exttypes.test_pyobjectpath.A")
+        self.assertEqual(p, pickle.loads(pickle.dumps(p)))
+        self.assertIsNotNone(p.object)
+        self.assertEqual(p, pickle.loads(pickle.dumps(p)))
+        self.assertEqual(p.object, pickle.loads(pickle.dumps(p.object)))

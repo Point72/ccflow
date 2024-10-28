@@ -1,12 +1,10 @@
 """
-We include this file as wrappers over pandas objects for pydantic validation.
+This module contains pydantic wrappers over pandas objects for pydantic validation and serialization.
 
-Pandera offers this ability but it is currently not a requirement for ccflow
-and importing the package provides overhead
-(it is for ccflow)
+We do not validate dtypes.
 
-Based on:
-https://pandas.pydata.org/pandas-docs/stable/development/extending.html#extending-subclassing-pandas
+Pandera (https://pandera.readthedocs.io/en/stable/) offers this ability, but it is currently not a requirement for ccflow
+and importing the package provides significant overhead (as of Oct 2024).
 """
 
 from abc import ABC, abstractmethod
@@ -17,6 +15,7 @@ import numpy as np
 import orjson
 import pandas as pd
 from pydantic import TypeAdapter
+from typing_extensions import Self
 
 from ..serialization import make_ndarray_orjson_valid, orjson_dumps
 
@@ -53,6 +52,8 @@ class GenericPandasWrapper(ABC):
 
 
 class SeriesWrapper(pd.Series, GenericPandasWrapper):
+    """Wrapper around a pandas Series that can be validated with pydantic."""
+
     @classmethod
     def _validate(cls, v):
         if isinstance(v, cls):
@@ -70,7 +71,7 @@ class SeriesWrapper(pd.Series, GenericPandasWrapper):
         raise ValueError(f"Unable to validate {v}")
 
     @classmethod
-    def encode(cls, x: "SeriesWrapper", info=None) -> str:
+    def encode(cls, x: Self, info=None) -> str:
         series_dict = {
             "name": x.name,
             "index": make_ndarray_orjson_valid(x.index.to_numpy()),
@@ -80,7 +81,7 @@ class SeriesWrapper(pd.Series, GenericPandasWrapper):
         return orjson_dumps(series_dict)
 
     @classmethod
-    def decode(cls, x: Union[str, dict]) -> "SeriesWrapper":
+    def decode(cls, x: Union[str, dict]) -> Self:
         if isinstance(x, str):
             x = orjson.loads(x)
             index = x["index"]
@@ -92,9 +93,7 @@ class SeriesWrapper(pd.Series, GenericPandasWrapper):
 
 
 class DataFrameWrapper(pd.DataFrame, GenericPandasWrapper):
-    """Wrapper around a dataframe that can be used as a field in a pydantic model
-    without needing to enable arbitrary_types_allowed.
-    """
+    """Wrapper around a pandas DataFrame that can be validated with pydantic."""
 
     @classmethod
     def _validate(cls, v):
@@ -113,11 +112,11 @@ class DataFrameWrapper(pd.DataFrame, GenericPandasWrapper):
         raise ValueError(f"Unable to validate {v}")
 
     @classmethod
-    def encode(cls, x: "DataFrameWrapper", info=None) -> str:
+    def encode(cls, x: Self, info=None) -> str:
         return x.to_json(orient="table")
 
     @classmethod
-    def decode(cls, x: Union[str, dict]) -> "DataFrameWrapper":
+    def decode(cls, x: Union[str, dict]) -> Self:
         if isinstance(x, str):
             return cls(pd.read_json(StringIO(x), orient="table"))
         return cls(pd.DataFrame.from_dict(x))
@@ -135,7 +134,7 @@ class SparseNumericDataFrame(DataFrameWrapper):
         return [(i, j, v) for i, j, v in zip(self.index[data_i], self.columns[data_j], data_v)]
 
     @classmethod
-    def encode(cls, x: "SparseNumericDataFrame", info=None) -> str:
+    def encode(cls, x: Self, info=None) -> str:
         data_i, data_j = np.nonzero(x.values)
         data_v = x.values[data_i, data_j]
         index_vals = x.index.to_numpy()
@@ -150,7 +149,7 @@ class SparseNumericDataFrame(DataFrameWrapper):
         return orjson_dumps(output)
 
     @classmethod
-    def decode(cls, x: Union[str, dict]) -> "SparseNumericDataFrame":
+    def decode(cls, x: Union[str, dict]) -> Self:
         if isinstance(x, str):
             x = orjson.loads(x)
 
