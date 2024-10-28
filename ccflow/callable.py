@@ -280,7 +280,6 @@ class FlowOptions(BaseModel):
         wrap = wraps(fn)(wrapper)
         wrap.get_evaluator = self.get_evaluator
         wrap.get_options = self.get_options
-        wrap._get_evaluator_from_options = self._get_evaluator_from_options
 
         # Used for building a graph of model evaluation contexts without evaluating
         def get_evaluation_context(model: CallableModelType, context: ContextType):
@@ -292,15 +291,6 @@ class FlowOptions(BaseModel):
 
         wrap.get_evaluation_context = get_evaluation_context
         return wrap
-
-
-@lru_cache
-def _empty_flowoptions_inner():
-    return FlowOptions()
-
-
-def _empty_flowoptions():
-    return _empty_flowoptions_inner().model_copy()
 
 
 class FlowOptionsDeps(FlowOptions):
@@ -341,7 +331,7 @@ class FlowOptionsOverride(BaseModel):
             model: The model to apply options from/to
             model_options: Additional options to inject in the overrides
         """
-        current_options = _empty_flowoptions()
+        current_options = _FLOW_OPTIONS.model_copy()
         for override in cls._OPEN_OVERRIDES.values():  # noqa: F402
             # Apply global options first
             if not override.models and not override.model_types:
@@ -489,7 +479,8 @@ _GraphDepListAdapter = TypeAdapter(GraphDepList)
 FlowOptions.model_rebuild()
 FlowOptionsDeps.model_rebuild()
 MetaData.model_rebuild()
-
+# Define default FlowOptions prototype
+_FLOW_OPTIONS = FlowOptions()
 
 # *****************************************************************************
 # Define actual CallableModel and associated types
