@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "ccflow"
 description = "Composable Configuration Flow"
-version = "0.2.1"
+version = "0.2.2"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.8"
@@ -95,7 +95,7 @@ Repository = "https://github.com/point72/ccflow"
 Homepage = "https://github.com/point72/ccflow"
 
 [tool.bumpversion]
-current_version = "0.2.1"
+current_version = "0.2.2"
 commit = true
 tag = false
 commit_args = "-s"
