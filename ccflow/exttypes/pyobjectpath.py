@@ -79,6 +79,7 @@ class PyObjectPath(str):
         return value
 
     @classmethod
+    @lru_cache
     def validate(cls, value) -> Self:
         """Try to convert/validate an arbitrary value to a PyObjectPath."""
         return _TYPE_ADAPTER.validate_python(value)
