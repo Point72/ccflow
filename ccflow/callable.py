@@ -190,6 +190,7 @@ class FlowOptions(BaseModel):
     explicitly passed by the user will be used for overriding. This allows default behavior to be separately defined
     (i.e. by an evaluator) if the user has not explicitly specified a field.
     """
+
     model_config: ConfigDict = {"frozen": True}
 
     log_level: int = Field(
@@ -218,12 +219,12 @@ class FlowOptions(BaseModel):
     def get_options(self, model: CallableModelType):
         """Gets the options with overrides applied."""
         return FlowOptionsOverride.get_options(model, self)
-    
+
     def _get_evaluator_from_options(self, options: "FlowOptions") -> "EvaluatorBase":
         if options.evaluator:
             return options.evaluator
 
-        return _get_logging_evaluator(log_level=options.log_level) 
+        return _get_logging_evaluator(log_level=options.log_level)
 
     def get_evaluator(self, model: CallableModelType) -> "EvaluatorBase":
         """Gets the implementation of the evaluator."""
@@ -292,12 +293,15 @@ class FlowOptions(BaseModel):
         wrap.get_evaluation_context = get_evaluation_context
         return wrap
 
+
 @lru_cache
 def _empty_flowoptions_inner():
     return FlowOptions()
 
+
 def _empty_flowoptions():
     return _empty_flowoptions_inner().model_copy()
+
 
 class FlowOptionsDeps(FlowOptions):
     """Flow options for dependency evaluation"""
