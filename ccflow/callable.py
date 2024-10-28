@@ -191,6 +191,8 @@ class FlowOptions(BaseModel):
     (i.e. by an evaluator) if the user has not explicitly specified a field.
     """
 
+    model_config: ConfigDict = {"frozen": True}
+
     log_level: int = Field(
         logging.DEBUG,
         description="If no 'evaluator' is set, will use a LoggingEvaluator with this log level",
@@ -210,7 +212,7 @@ class FlowOptions(BaseModel):
     cacheable: bool = Field(
         False, description="Whether the model results should be cached if possible. This is False by default so that caching is opt-in"
     )
-    evaluator: Optional["EvaluatorBase"] = Field(None, description="A hook to set a custom evaluator")
+    evaluator: Optional[InstanceOf["EvaluatorBase"]] = Field(None, description="A hook to set a custom evaluator")
     _deps: bool = PrivateAttr(False)
     _parse_log_level = field_validator("log_level", mode="before")(str_to_log_level)
 
@@ -218,15 +220,18 @@ class FlowOptions(BaseModel):
         """Gets the options with overrides applied."""
         return FlowOptionsOverride.get_options(model, self)
 
+    def _get_evaluator_from_options(self, options: "FlowOptions") -> "EvaluatorBase":
+        if options.evaluator:
+            return options.evaluator
+
+        return _get_logging_evaluator(log_level=options.log_level)
+
     def get_evaluator(self, model: CallableModelType) -> "EvaluatorBase":
         """Gets the implementation of the evaluator."""
         # We need to make sure this gets called from inside each wrapper,
         # otherwise, global changes to Flow.options will not be picked up.
         options = FlowOptionsOverride.get_options(model, self)
-        if options.evaluator:
-            return options.evaluator
-
-        return _get_logging_evaluator(log_level=options.log_level)
+        return self._get_evaluator_from_options(options)
 
     def __call__(self, fn):
         def wrapper(model, context=Signature.empty):
@@ -248,13 +253,14 @@ class FlowOptions(BaseModel):
             # Record the options that are used, in case the evaluators want to use it,
             # but exclude the evaluator itself to avoid potential circular dependencies
             # or other difficulties with serialization/caching of the options
-            options = FlowOptionsOverride.get_options(model, self).model_dump(mode="python", exclude={"evaluator"}, exclude_unset=True)
+            options = FlowOptionsOverride.get_options(model, self)
+            evaluator = self._get_evaluator_from_options(options)
+            options = options.model_dump(mode="python", exclude={"evaluator"}, exclude_unset=True)
             if fn != getattr(model.__class__, fn.__name__).__wrapped__:
                 # This happens when super().__call__ is used when implementing a CallableModel that derives from another one.
                 # In this case, we don't apply the decorator again, we just call the function on the model and context.
                 return fn(model, context)
             evaluation_context = ModelEvaluationContext(model=model, context=context, fn=fn.__name__, options=options)
-            evaluator = self.get_evaluator(model)
             result = evaluator(evaluation_context)
 
             # TODO: Move into the __call__ function of ModelEvaluationContext
@@ -308,7 +314,7 @@ class FlowOptionsOverride(BaseModel):
 
     @classmethod
     def _apply_options(cls, old: FlowOptions, new: FlowOptions) -> FlowOptions:
-        return old.model_copy(update={f: v for f, v in new if f in new.model_fields_set})
+        return old.model_copy(update={f: getattr(new, f) for f in new.model_fields_set})
 
     @classmethod
     def get_options(cls, model: CallableModelType, model_options: Optional[FlowOptions] = None) -> FlowOptions:
@@ -325,7 +331,7 @@ class FlowOptionsOverride(BaseModel):
             model: The model to apply options from/to
             model_options: Additional options to inject in the overrides
         """
-        current_options = FlowOptions()
+        current_options = _FLOW_OPTIONS.model_copy()
         for override in cls._OPEN_OVERRIDES.values():  # noqa: F402
             # Apply global options first
             if not override.models and not override.model_types:
@@ -473,7 +479,8 @@ _GraphDepListAdapter = TypeAdapter(GraphDepList)
 FlowOptions.model_rebuild()
 FlowOptionsDeps.model_rebuild()
 MetaData.model_rebuild()
-
+# Define default FlowOptions prototype
+_FLOW_OPTIONS = FlowOptions()
 
 # *****************************************************************************
 # Define actual CallableModel and associated types

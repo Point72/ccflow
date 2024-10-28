@@ -1,6 +1,7 @@
 """This module contains extension types for pydantic."""
 
 from functools import cached_property, lru_cache
+from types import FunctionType, MethodType, ModuleType
 from typing import Any, Type, get_origin
 
 from pydantic import ImportString, TypeAdapter
@@ -10,8 +11,8 @@ from typing_extensions import Self
 _import_string_adapter = TypeAdapter(ImportString)
 
 
-@lru_cache
-def import_string(input_string):
+@lru_cache(maxsize=None)
+def import_string(input_string: str):
     return _import_string_adapter.validate_python(input_string)
 
 
@@ -79,8 +80,17 @@ class PyObjectPath(str):
         return value
 
     @classmethod
+    @lru_cache(maxsize=None)
+    def _validate_cached(cls, value: str) -> Self:
+        return _TYPE_ADAPTER.validate_python(value)
+
+    @classmethod
     def validate(cls, value) -> Self:
         """Try to convert/validate an arbitrary value to a PyObjectPath."""
+        if isinstance(
+            value, (str, type, FunctionType, ModuleType, MethodType)
+        ):  # If the value is trivial, we cache it here to avoid the overhead of validation
+            return cls._validate_cached(value)
         return _TYPE_ADAPTER.validate_python(value)
 
 

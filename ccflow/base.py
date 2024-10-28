@@ -256,7 +256,10 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
                 type_ = v.pop("type_")
 
             if type_:
-                type_cls = PyObjectPath(type_).object
+                if isinstance(type_, PyObjectPath):  # if we already have a PyObjectPath, we can use it directly and avoid expensive validation
+                    type_cls = type_.object
+                else:
+                    type_cls = PyObjectPath(type_).object
                 if cls != type_cls:
                     return type_cls.model_validate(v)
 
