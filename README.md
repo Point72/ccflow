@@ -3,7 +3,7 @@
 [![Build Status](https://github.com/Point72/ccflow/actions/workflows/build.yml/badge.svg?branch=main&event=push)](https://github.com/Point72/ccflow/actions/workflows/build.yml)
 [![PyPI Version](https://img.shields.io/pypi/v/ccflow.svg)](https://pypi.python.org/pypi/ccflow)
 [![License](https://img.shields.io/pypi/l/ccflow.svg)](https://github.com/Point72/ccflow/blob/main/LICENSE)
-[![Python Versions](https://img.shields.io/badge/python-3.8_%7C_3.9_%7C_3.10_%7C_3.11-blue)](https://github.com/Point72/ccflow/blob/main/pyproject.toml)
+[![Python Versions](https://img.shields.io/badge/python-3.8_%7C_3.9_%7C_3.10_%7C_3.11%7C_3.12-blue)](https://github.com/Point72/ccflow/blob/main/pyproject.toml)
 
 ## Features
 

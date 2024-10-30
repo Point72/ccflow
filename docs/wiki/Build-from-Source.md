@@ -4,6 +4,7 @@
 
 - [Table of Contents](#table-of-contents)
 - [Make commands](#make-commands)
+- [Prerequisites](#prerequisites)
 - [Clone](#clone)
 - [Install Python dependencies](#install-python-dependencies)
 - [Build](#build)
@@ -24,6 +25,10 @@ install                        install library
 lint                           run lints
 test                           run the tests
 ```
+
+## Prerequisites
+
+`ccflow` has a few system-level dependencies which you can install from your machine package manager. Other package managers like `conda`, `nix`, etc, should also work fine.
 
 ## Clone
 
@@ -56,33 +61,45 @@ make build
 
 `ccflow` has linting and auto formatting.
 
-| Language   | Linter      | Autoformatter | Description |
-| :--------- | :---------- | :------------ | :---------- |
-| Python     | `ruff`      | `ruff`        | Style       |
-| Markdown   | `mdformat`  | `mdformat`    | Style       |
-| Markdown   | `codespell` |               | Spelling    |
+| Language | Linter      | Autoformatter | Description |
+| :------- | :---------- | :------------ | :---------- |
+| Python   | `ruff`      | `ruff`        | Style       |
+| Markdown | `mdformat`  | `mdformat`    | Style       |
+| Markdown | `codespell` |               | Spelling    |
 
-**Linting**
+**Python Linting**
 
 ```bash
-make lint
+make lint-py
 ```
 
-**Autoformatting**
+**Python Autoformatting**
 
 ```bash
-make fix
+make fix-py
+```
+
+**Documentation Linting**
+
+```bash
+make lint-docs
+```
+
+**Documentation Autoformatting**
+
+```bash
+make fix-docs
 ```
 
 ## Testing
 
-`ccflow` has extensive Python unit tests, which can be run via `pytest`. First, install the Python development dependencies with
+`ccflow` has extensive Python tests. The tests can be run via `pytest`. First, install the Python development dependencies with
 
 ```bash
 make develop
 ```
 
-The run the tests with:
+**Python**
 
 ```bash
 make test

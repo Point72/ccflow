@@ -124,11 +124,18 @@ ignore = [
     "*.ipynb",
 ]
 
-[tool.cubist.sdlc.artifactory]
-pypi = "https://artifacts.prod.devops.point72.com/artifactory/dept-ccrt-pypi-builds-local"
-pypi-prod = "https://artifacts.prod.devops.point72.com/artifactory/dept-ccrt-pypi-published-local"
-conda = "https://artifacts.prod.devops.point72.com/artifactory/dept-ccrt-conda-builds-local"
-conda-prod = "https://artifacts.prod.devops.point72.com/artifactory/dept-ccrt-conda-published-local"
+[tool.coverage.run]
+branch = true
+omit = []
+
+[tool.coverage.report]
+exclude_also = [
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "@(abc\\.)?abstractmethod",
+]
+ignore_errors = true
+fail_under = 75
 
 [tool.hatch.build]
 artifacts = []
@@ -158,6 +165,11 @@ exclude = [
     "/pyproject.toml",
     "/docs",
 ]
+
+[tool.pytest.ini_options]
+addopts = ["-vvv", "--junitxml=junit.xml"]
+asyncio_mode = "strict"
+testpaths = "ccflow/tests"
 
 [tool.ruff]
 line-length = 150
