@@ -63,7 +63,7 @@ develop = [
     "bump-my-version",
     "check-manifest",
     "hatchling",
-    "ruff>=0.3,<0.5",
+    "ruff>=0.3,<0.8",
     "toml",
     "twine",
     "wheel",
