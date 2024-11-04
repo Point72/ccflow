@@ -1,0 +1,30 @@
+subregistry1:
+    foo:
+        _target_: ccflow.tests.test_base_registry.MyTestModel
+        a: test
+        b: 0.0
+        c:
+            - i
+            - j
+        d:
+            k: 2.0
+    bar:
+        _target_: ccflow.tests.test_base_registry.MyNestedModel
+        x: foo
+        y:  # Note that when type is defined on parent model, no need to specify _target_
+            a: test2
+            b: 2.0
+
+subregistry2:
+    baz:
+        _target_: ccflow.tests.test_base_registry.MyNestedModel
+        x: /subregistry1/foo
+        y:
+            # We can still use _target_ to override the definition from the parent (i.e. subclass)
+            _target_: ccflow.tests.test_base_registry.MyTestModelSubclass
+            a: test3
+            b: 3.0
+        z:
+            _target_: ccflow.tests.test_base_registry.MyClass
+            p: pp
+            q: 100.

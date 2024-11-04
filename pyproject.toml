@@ -1,0 +1,195 @@
+[build-system]
+requires = ["hatchling>=1.22.4,<1.23"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ccflow"
+description = "Composable Configuration Flow"
+version = "0.0.1"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.8"
+authors = [
+    { name = "Point72", email = "OpenSource@Point72.com" },
+]
+keywords = [
+    "configuration",
+    "flow",
+    "dag",
+    "hydra",
+    "pydantic",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: Apache Software License",
+]
+
+dependencies = [
+    "cloudpathlib",
+    "cloudpickle",
+    "dask",
+    "hydra-core",
+    "IPython",
+    "jinja2",
+    "numpy<2",
+    "orjson",
+    "pandas",
+    "pyarrow",
+    "pydantic>=2.6,<3",
+    "smart_open",
+    "tenacity",
+]
+
+[project.optional-dependencies]
+full = [
+    "cexprtk",
+    "pandas",
+    "pandera",
+    "plotly",
+    "polars",
+    "ray",
+    "scipy",
+    "xarray"
+]
+develop = [
+    "build",
+    "bump-my-version",
+    "check-manifest",
+    "codespell>=2.3,<2.4",
+    "hatchling",
+    "mdformat>=0.7.18,<0.8",
+    "ruff>=0.6,<0.7",
+    "toml",
+    "twine",
+    "wheel",
+    # Full deps
+    "cexprtk",
+    "csp>=0.0.4,<0.1",
+    "pandas",
+    "pandera",
+    "plotly",
+    "polars",
+    "ray",
+    "scipy",
+    "xarray",
+    # Test deps
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "pytest-sugar",
+]
+test = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "pytest-sugar",
+]
+
+[project.urls]
+Repository = "https://github.com/point72/ccflow"
+Homepage = "https://github.com/point72/ccflow"
+
+[tool.bumpversion]
+current_version = "0.0.1"
+commit = true
+tag = false
+commit_args = "-s"
+
+[[tool.bumpversion.files]]
+filename = "pyproject.toml"
+search = 'version = "{current_version}"'
+replace = 'version = "{new_version}"'
+
+[[tool.bumpversion.files]]
+filename = "ccflow/__init__.py"
+search = '__version__ = "{current_version}"'
+replace = '__version__ = "{new_version}"'
+
+[[tool.bumpversion.files]]
+filename = "conda-recipe/meta.yaml"
+search = "version: {current_version}"
+replace = "version: {new_version}"
+
+[tool.check-manifest]
+ignore = [
+    "docs/**",
+    "conda-recipe/**",
+    "Makefile",
+    "setup.py",
+    "*.ipynb",
+]
+
+[tool.coverage.run]
+branch = true
+omit = []
+
+[tool.coverage.report]
+exclude_also = [
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "@(abc\\.)?abstractmethod",
+]
+ignore_errors = true
+fail_under = 75
+
+[tool.hatch.build]
+artifacts = []
+
+[tool.hatch.build.sources]
+src = "/"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/ccflow",
+    "LICENSE",
+    "README.md",
+]
+exclude = [
+    "/.github",
+    "/.gitignore",
+    "/docs",
+]
+
+[tool.hatch.build.targets.wheel]
+include = [
+    "/ccflow",
+]
+exclude = [
+    "/.github",
+    "/.gitignore",
+    "/pyproject.toml",
+    "/docs",
+]
+
+[tool.pytest.ini_options]
+addopts = ["-vvv", "--junitxml=junit.xml"]
+asyncio_mode = "strict"
+testpaths = "ccflow/tests"
+
+[tool.ruff]
+line-length = 150
+
+[tool.ruff.lint]
+extend-select = ["I"]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+default-section = "third-party"
+known-first-party = ["ccflow"]
+section-order = [
+    "future",
+    "standard-library",
+    "third-party",
+    "first-party",
+    "local-folder",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401", "F403"]
