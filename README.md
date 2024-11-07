@@ -1,9 +1,8 @@
-<br />
-<a href="https://github.com/point72/ccflow#gh-light-mode-only">
-  <img src="https://github.com/point72/ccflow/raw/main/docs/img/light.png?raw=true#gh-light-mode-only" alt="ccflow logo, spells 'ccflow' in color" width="400"></a>
-</a>
-<a href="https://github.com/point72/ccflow#gh-dark-mode-only">
-  <img src="https://github.com/point72/ccflow/raw/main/docs/img/dark.png?raw=true#gh-dark-mode-only" alt="ccflow logo, spells 'ccflow' in color" width="400"></a>
+<a href="https://github.com/point72/ccflow">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://github.com/point72/ccflow/raw/main/docs/img/dark.png?raw=true">
+    <img alt="ccflow logo, 'ccflow' with letters in color" src="https://github.com/point72/ccflow/raw/main/docs/img/light.png?raw=true" width="400">
+  </picture>
 </a>
 
 <br/>
