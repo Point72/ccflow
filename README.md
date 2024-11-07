@@ -1,4 +1,13 @@
-# ccflow
+<br />
+<a href="https://github.com/point72/ccflow#gh-light-mode-only">
+  <img src="https://github.com/point72/ccflow/raw/tkp/logo/docs/img/light.png?raw=true#gh-light-mode-only" alt="ccflow logo, spells 'ccflow' in color" width="400"></a>
+</a>
+<a href="https://github.com/point72/ccflow#gh-dark-mode-only">
+  <img src="https://github.com/point72/ccflow/raw/tkp/logo/docs/img/dark.png?raw=true#gh-dark-mode-only" alt="ccflow logo, spells 'ccflow' in color" width="400"></a>
+</a>
+
+<br/>
+<br/>
 
 [![Build Status](https://github.com/Point72/ccflow/actions/workflows/build.yml/badge.svg?branch=main&event=push)](https://github.com/Point72/ccflow/actions/workflows/build.yml)
 [![GitHub issues](https://img.shields.io/github/issues/point72/ccflow.svg)](https://github.com/point72/ccflow/issues)
