@@ -122,11 +122,13 @@ _PY38_ORIGIN_MAP = {
 def _adjust_annotations(annotation):
     origin = get_origin(annotation)
     if _IS_PY38:
+        origin = _PY38_ORIGIN_MAP.get(origin, origin)
         if isinstance(annotation, typing_extensions._AnnotatedAlias):
-            return annotation
+            args = annotation.__metadata__
         else:
-            origin = _PY38_ORIGIN_MAP.get(origin, origin)
-    args = get_args(annotation)
+            args = get_args(annotation)
+    else:
+        args = get_args(annotation)
     if inspect.isclass(annotation) and issubclass(annotation, PydanticBaseModel):
         return SerializeAsAny[annotation]
     elif origin and args:
@@ -137,6 +139,10 @@ def _adjust_annotations(annotation):
             return ClassVar[_adjust_annotations(args[0])]
         else:
             try:
+                if _IS_PY38 and isinstance(annotation, typing_extensions._AnnotatedAlias):
+                    if origin != annotation:
+                        origin = _adjust_annotations(origin)
+                    return typing_extensions.Annotated[(origin,) + tuple(_adjust_annotations(arg) for arg in args)]
                 return origin[tuple(_adjust_annotations(arg) for arg in args)]
             except TypeError:
                 raise TypeError(f"Could not adjust annotations for {origin}")
