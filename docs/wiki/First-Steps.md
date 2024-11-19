@@ -703,7 +703,7 @@ assert isinstance(config.my_list, list)
 
 ### Arbitrary Types
 
-Often the need arises for configuration to create objects that are not built-in types (str, int, float, etc). Pydantic supports a number of additional types (see the [documentation](https://pydantic-docs.helpmanual.io/usage/types/) for a full list), but can also handle completely arbitrary types. We can also use hydra to instantiate these arbitrary types from the configs as well, and Pydantic will validate that the created object is an instance of the desired type. Furthermore, we specify some extension types  in `ccflow` that have additional validation and functionality (where `JinjaTemplate`, `PolarsExpression`, and `NDArray` described above are examples).
+Often the need arises for configuration to create objects that are not built-in types (str, int, float, etc). Pydantic supports a number of additional types (see the [documentation](https://pydantic-docs.helpmanual.io/usage/types/) for a full list), but can also handle completely arbitrary types. We can also use hydra to instantiate these arbitrary types from the configs as well, and Pydantic will validate that the created object is an instance of the desired type. Furthermore, we specify some extension types in `ccflow` that have additional validation and functionality (where `JinjaTemplate`, `PolarsExpression`, and `NDArray` described above are examples).
 
 First, to illustrate how custom types work, we define our own custom object type, and then a configuration object (i.e. `BaseModel`) that contains that type. To prevent accidental inclusion of custom types, Pydantic must be explicitly told to include them using the `model_config` option.
 

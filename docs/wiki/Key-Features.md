@@ -35,12 +35,12 @@ Although you are free to define your own models (`BaseModel` implementations) to
 
 The following table summarizes the available models.
 
-> \[!NOTE\]
+> [!NOTE]
 >
 > Some models are still in the process of being open sourced.
 
 | Name | Path | Description |
-| :--  | :--  | :---        |
+| :-- | :-- | :--- |
 | `ArrowCSVReader` | *Coming Soon!* | |
 | `PandasCSVReader` | *Coming Soon!* | |
 | `ArrowDatasetReader` | *Coming Soon!* | |
@@ -74,12 +74,12 @@ In fact, `ccflow` comes with several implementations of `PublisherModel` for com
 
 The following table summarizes the "publisher" models.
 
-> \[!NOTE\]
+> [!NOTE]
 >
 > Some models are still in the process of being open sourced.
 
 | Name | Path | Description |
-| :--  | :--  | :---        |
+| :-- | :-- | :--- |
 | `DictTemplateFilePublisher` | `ccflow.publishers` | Publish data to a file after populating a Jinja template. |
 | `GenericFilePublisher` | `ccflow.publishers` | Publish data using a generic "dump" Callable. Uses `smart_open` under the hood so that local and cloud paths are supported. |
 | `JSONPublisher` | `ccflow.publishers` | Publish data to file in JSON format. |
@@ -104,12 +104,12 @@ The following table summarizes the "publisher" models.
 
 The following table summarizes the "evaluator" models.
 
-> \[!NOTE\]
+> [!NOTE]
 >
 > Some models are still in the process of being open sourced.
 
 | Name | Path | Description |
-| :--  | :--  | :---        |
+| :-- | :-- | :--- |
 | `LazyEvaluator` | `ccflow.evaluators` | Evaluator that only actually runs the callable once an attribute of the result is queried (by hooking into `__getattribute__`) |
 | `LoggingEvaluator` | `ccflow.evaluators` | Evaluator that logs information about evaluating the callable. |
 | `MemoryCacheEvaluator` | `ccflow.evaluators` | Evaluator that caches results in memory. |
@@ -134,7 +134,7 @@ A Result is an object that holds the results from a callable model. It provides 
 The following table summarizes the "result" models.
 
 | Name | Path | Description |
-| :--  | :--  | :---        |
+| :-- | :-- | :--- |
 | `GenericResult` | `ccflow.result` | A generic result (holds anything). |
 | `DictResult` | `ccflow.result` | A generic dict (key/value) result. |
 | `ArrowResult` | `ccflow.result.pyarrow` | Holds an arrow table. |
