@@ -324,7 +324,7 @@ class TestGraphEvaluator(TestCase):
         evaluator = GraphEvaluator()
         NodeModel._calls = []
         with FlowOptionsOverride(options={"evaluator": evaluator}):
-            n2(context)
+            self.assertTrue(n2(context).value)
         graph_calls = NodeModel._calls
         deps_calls = NodeModel._deps_calls
 
