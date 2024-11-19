@@ -211,11 +211,15 @@ class GraphEvaluator(EvaluatorBase):
         if self._is_evaluating:
             return context()
         self._is_evaluating = True
+        root_result = None
         try:
             graph = get_dependency_graph(context)
             ts = graphlib.TopologicalSorter(graph.graph)
             for key in ts.static_order():
                 evaluation_context = graph.ids[key]
-                evaluation_context()
+                result = evaluation_context()
+                if key == graph.root_id:
+                    root_result = result
         finally:
             self._is_evaluating = False
+        return root_result
