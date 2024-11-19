@@ -37,7 +37,7 @@ class CompositePublisher(BasePublisher, Generic[PydanticModelType]):
     )
 
     models_as_dict: bool = Field(True, description="Whether to expand fields that contain pydantic models into dictionaries.")
-    options: PydanticDictOptions = Field(PydanticDictOptions(), dscription="Options for iterating through the pydantic model.")
+    options: PydanticDictOptions = Field(PydanticDictOptions(), description="Options for iterating through the pydantic model.")
 
     _normalize_data = field_validator("data", mode="before")(dict_to_model)
 
