@@ -164,12 +164,8 @@ class TestBaseModelSerialization(unittest.TestCase):
             self._check_serialization(H(arr=[1, 0]), self._numpy_equality)
 
         self._check_serialization(F(arr=["passes"]), self._numpy_equality)
-        self.assertRaises(
-            Exception,
-            self._check_serialization,
-            H_complex64(arr=[11, 12]),
-            self._numpy_equality,
-        )
+
+        self._check_serialization(H_complex64(arr=[11, 12]), self._numpy_equality)
 
         cut_off_array = H_int8(arr=[127, -128])
         np.testing.assert_array_equal(cut_off_array.arr, np.array([127, -128], dtype=np.int8))

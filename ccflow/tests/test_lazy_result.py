@@ -15,6 +15,7 @@ class MyResult(ResultBase):
     def _validate(self):
         # Track construction by incrementing the total each time the validation is called
         MyResult.total += 1
+        return self
 
 
 def test_make_lazy_result():
