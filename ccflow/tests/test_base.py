@@ -53,6 +53,10 @@ class CopyModel(BaseModel):
     x: str
 
 
+class GenericAliasAdjust(BaseModel):
+    x: list[str]
+
+
 class TestBaseModel(TestCase):
     def test_extra_fields(self):
         self.assertRaises(ValidationError, MyTestModel, a="foo", b=0.0, extra=None)

@@ -7,7 +7,7 @@ import logging
 import pathlib
 import platform
 import typing
-from types import MappingProxyType
+from types import GenericAlias, MappingProxyType
 from typing import Any, Callable, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar, get_args, get_origin
 
 import typing_extensions
@@ -129,7 +129,7 @@ def _adjust_annotations(annotation):
             args = get_args(annotation)
     else:
         args = get_args(annotation)
-    if inspect.isclass(annotation) and issubclass(annotation, PydanticBaseModel):
+    if isinstance(annotation, GenericAlias) or (inspect.isclass(annotation) and issubclass(annotation, PydanticBaseModel)):
         return SerializeAsAny[annotation]
     elif origin and args:
         # Filter out typing.Type and generic types
