@@ -6,13 +6,13 @@ from ccflow.utils.chunker import dates_to_chunks
 
 class TestChunker(unittest.TestCase):
     def test_dates_to_chunks_M(self):
-        out = dates_to_chunks(date(2022, 4, 6), date(2022, 4, 7), "M")
+        out = dates_to_chunks(date(2022, 4, 6), date(2022, 4, 7), "ME")
         self.assertListEqual(out, [(date(2022, 4, 1), date(2022, 4, 30))])
 
-        out = dates_to_chunks(date(2022, 4, 1), date(2022, 4, 30), "M")
+        out = dates_to_chunks(date(2022, 4, 1), date(2022, 4, 30), "ME")
         self.assertListEqual(out, [(date(2022, 4, 1), date(2022, 4, 30))])
 
-        out = dates_to_chunks(date(2022, 3, 6), date(2022, 4, 7), "M")
+        out = dates_to_chunks(date(2022, 3, 6), date(2022, 4, 7), "ME")
         self.assertListEqual(
             out,
             [
@@ -20,7 +20,7 @@ class TestChunker(unittest.TestCase):
                 (date(2022, 4, 1), date(2022, 4, 30)),
             ],
         )
-        out = dates_to_chunks(date(2022, 1, 6), date(2022, 4, 7), "M")
+        out = dates_to_chunks(date(2022, 1, 6), date(2022, 4, 7), "ME")
         self.assertListEqual(
             out,
             [
@@ -65,13 +65,13 @@ class TestChunker(unittest.TestCase):
         self.assertListEqual(out, [])
 
     def test_dates_to_chunks_trim(self):
-        out = dates_to_chunks(date(2022, 4, 6), date(2022, 4, 7), "M", trim=True)
+        out = dates_to_chunks(date(2022, 4, 6), date(2022, 4, 7), "ME", trim=True)
         self.assertListEqual(out, [(date(2022, 4, 6), date(2022, 4, 7))])
 
-        out = dates_to_chunks(date(2022, 4, 1), date(2022, 4, 30), "M", trim=True)
+        out = dates_to_chunks(date(2022, 4, 1), date(2022, 4, 30), "ME", trim=True)
         self.assertListEqual(out, [(date(2022, 4, 1), date(2022, 4, 30))])
 
-        out = dates_to_chunks(date(2022, 3, 6), date(2022, 4, 7), "M", trim=True)
+        out = dates_to_chunks(date(2022, 3, 6), date(2022, 4, 7), "ME", trim=True)
         self.assertListEqual(
             out,
             [
@@ -79,7 +79,7 @@ class TestChunker(unittest.TestCase):
                 (date(2022, 4, 1), date(2022, 4, 7)),
             ],
         )
-        out = dates_to_chunks(date(2022, 1, 6), date(2022, 4, 7), "M", trim=True)
+        out = dates_to_chunks(date(2022, 1, 6), date(2022, 4, 7), "ME", trim=True)
         self.assertListEqual(
             out,
             [

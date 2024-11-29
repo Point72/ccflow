@@ -38,4 +38,4 @@ class TestGenericResult(TestCase):
         self.assertEqual(GenericResult[int](value=GenericContext[str](value=v)), GenericResult[int](value=v))
         self.assertEqual(GenericResult[int](value=GenericContext[int](value=v)), GenericResult[int](value=v))
 
-        self.assertEqual(GenericResult[str].validate(GenericContext(value=5)), GenericResult[str](value="5"))
+        self.assertEqual(GenericResult[str].model_validate(GenericContext(value=5)), GenericResult[str](value="5"))
