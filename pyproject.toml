@@ -38,7 +38,7 @@ dependencies = [
     "hydra-core",
     "IPython",
     "jinja2",
-    "numpy<2",
+    "numpy<3",
     "orjson",
     "pandas",
     "pyarrow",
