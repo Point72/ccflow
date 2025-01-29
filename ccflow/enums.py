@@ -15,6 +15,7 @@ Notes:
 """
 
 import inspect
+from os import environ
 from typing import Any, Callable, Dict, List, Union
 
 from pydantic import GetJsonSchemaHandler
@@ -23,36 +24,35 @@ from pydantic_core import core_schema
 
 __all__ = ("auto", "Enum", "make_enum")
 
-try:
-    from csp import DynamicEnum, Enum as BaseEnum
 
-    auto = BaseEnum.auto
+from enum import (
+    Enum as BaseEnum,  # noqa: F401
+    auto,
+)
 
-    _CSP_ENUM = True
+BaseEnum.auto = auto
 
-except ImportError:
+_CSP_ENUM = False
+
+if environ.get("CCFLOW_NO_CSP", "0") != "1":
     try:
-        # NOTE: we also except attribute errors
-        # because csp.trading depends on cubist-core,
-        # and during struct hint/generation csp's
-        # enum is not fully constructed yet
-        # CSP BaseEnum just uses auto
-        from enum import auto
+        from csp import DynamicEnum, Enum as BaseEnum
 
-        from csp.impl.enum import DynamicEnum, Enum as BaseEnum
+        auto = BaseEnum.auto
 
         _CSP_ENUM = True
 
     except ImportError:
-        # if csp is not installed, rely on python Enum
-        from enum import (
-            Enum as BaseEnum,  # noqa: F401
-            auto,
-        )
+        try:
+            from enum import auto
 
-        BaseEnum.auto = auto
+            from csp.impl.enum import DynamicEnum, Enum as BaseEnum
 
-        _CSP_ENUM = False
+            _CSP_ENUM = True
+
+        except ImportError:
+            # if csp is not installed, rely on python Enum
+            pass
 
 
 class Enum(BaseEnum):
