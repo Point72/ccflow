@@ -1,5 +1,7 @@
 import enum
 import importlib
+import os
+import sys
 from unittest import TestCase
 from unittest.mock import MagicMock, patch
 
@@ -14,6 +16,7 @@ class TestEnum(TestCase):
         # Because test_init_parent and test_init_parent_csp muck around with imports
         # Make sure we always rest the imports at the end of each test so that other
         # tests are unaffected
+        os.environ.pop("CCFLOW_NO_CSP", None)
         importlib.invalidate_caches()
         import ccflow.enums
 
@@ -44,7 +47,7 @@ class TestEnum(TestCase):
             self.assertRaises(ImportError, f)
             self.assertRaises(ImportError, g)
 
-            import ccflow
+            import ccflow.enums
 
             importlib.reload(ccflow.enums)
 
@@ -106,3 +109,25 @@ class TestEnum(TestCase):
         self.assertEqual(MyDynamicEnum.A.value, 2)
         self.assertEqual(list(MyDynamicEnum), [MyDynamicEnum.A, MyDynamicEnum.B])
         self.assertTrue(issubclass(MyDynamicEnum, Enum))
+
+    def test_init_no_csp_explicit(self):
+        os.environ["CCFLOW_NO_CSP"] = "1"
+
+        sys.modules.pop("csp", None)
+        importlib.invalidate_caches()
+        import ccflow.enums
+
+        importlib.reload(ccflow.enums)
+
+        self.assertTrue("csp" not in sys.modules)
+
+        os.environ["CCFLOW_NO_CSP"] = "0"
+
+        sys.modules.pop("csp", None)
+        importlib.invalidate_caches()
+        import ccflow.enums
+
+        importlib.reload(ccflow.enums)
+
+        self.assertTrue("csp" in sys.modules)
+        os.environ.pop("CCFLOW_NO_CSP", None)
