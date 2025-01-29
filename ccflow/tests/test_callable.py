@@ -198,6 +198,22 @@ class TestCallableModel(TestCase):
         self.assertIn("type_", out)
         self.assertNotIn("context_type", out)
 
+    def test_signature(self):
+        m = MyCallable(i=5)
+        context = MyContext(a="foo")
+        target = m(context)
+        self.assertEqual(m(context=context), m(context))
+        # Validate from dict
+        self.assertEqual(m(dict(a="foo")), target)
+        self.assertEqual(m(context=dict(a="foo")), target)
+        # Kwargs passed in
+        self.assertEqual(m(a="foo"), target)
+        # No argument
+        self.assertRaises(TypeError, m)
+        # context and kwargs
+        self.assertRaises(TypeError, m, context, a="foo")
+        self.assertRaises(TypeError, m, context=context, a="foo")
+
     def test_inheritance(self):
         m = MyCallableChild(i=5)
         self.assertEqual(m(MyContext(a="foo")), MyResult(x=5, y="foo"))

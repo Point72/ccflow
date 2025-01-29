@@ -147,7 +147,11 @@ class _CallableModel(BaseModel, abc.ABC):
 
     @abc.abstractmethod
     def __call__(self, context: ContextType) -> ResultType:
-        """This method produces the result. Implementations should be decorated with Flow.call."""
+        """This method produces the result for the given context.
+
+        Instead of passing the context, one can pass an object that pydantic will try to validate as the context.
+        Additionally, if kwargs are passed instead of the context, it will use these to construct the context.
+        """
 
     @abc.abstractmethod
     def __deps__(
@@ -234,7 +238,7 @@ class FlowOptions(BaseModel):
         return self._get_evaluator_from_options(options)
 
     def __call__(self, fn):
-        def wrapper(model, context=Signature.empty):
+        def wrapper(model, context=Signature.empty, **kwargs):
             # TODO: Let ModelEvaluationContext handle this type checking
             if not isinstance(model, CallableModel):
                 raise TypeError("Can only decorate methods on CallableModels with the flow decorator")
@@ -245,7 +249,15 @@ class FlowOptions(BaseModel):
             if context is Signature.empty:
                 context = _cached_signature(fn).parameters["context"].default
                 if context is Signature.empty:
-                    raise TypeError(f"{fn.__name__}() missing 1 required positional argument: 'context'")
+                    if kwargs:
+                        context = kwargs
+                    else:
+                        raise TypeError(
+                            f"{fn.__name__}() missing 1 required positional argument: 'context' of type {model.context_type}, or kwargs to construct it"
+                        )
+            elif kwargs:  # Kwargs passed in as well as context. Not allowed
+                raise TypeError(f"{fn.__name__}() was passed a context and got an unexpected keyword argument '{next(iter(kwargs.keys()))}'")
+
             # Type coercion on input  TODO: Move to ModelEvaluationContext
             if not isinstance(context, model.context_type):
                 context = model.context_type.model_validate(context)
