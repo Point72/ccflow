@@ -65,7 +65,7 @@ develop = [
     "codespell>=2.3,<2.4",
     "hatchling",
     "mdformat>=0.7.18,<0.8",
-    "ruff>=0.6,<0.9",
+    "ruff>=0.6,<0.10",
     "toml",
     "twine",
     "wheel",
