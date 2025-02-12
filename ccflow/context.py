@@ -1,7 +1,7 @@
 """This module defines re-usable contexts for the "Callable Model" framework defined in flow.callable.py."""
 
 from datetime import date, datetime
-from typing import Generic, Hashable, Optional, Sequence, Set, TypeVar
+from typing import Generic, Hashable, List, Optional, Sequence, Set, TypeVar
 
 from pydantic import field_validator, model_validator
 
@@ -25,6 +25,7 @@ __all__ = [
     "FreqHorizonDateContext",
     "FreqHorizonDateRangeContext",
     "SeededDateRangeContext",
+    "SignalsDateRangeContext",
     "SourceContext",
     "UniverseContext",
     "UniverseDateContext",
@@ -109,6 +110,10 @@ class DateRangeContext(ContextBase):
 
 class SeededDateRangeContext(DateRangeContext):
     seed: int = 1234
+
+
+class SignalsDateRangeContext(DateRangeContext):
+    signals: List[str]
 
 
 class VersionedDateContext(DateContext, EntryTimeContext):

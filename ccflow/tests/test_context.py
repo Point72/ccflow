@@ -17,6 +17,7 @@ from ccflow.context import (
     ModelDateRangeSourceContext,
     ModelFreqDateRangeContext,
     NullContext,
+    SignalsDateRangeContext,
     UniverseContext,
     UniverseDateContext,
     UniverseDateRangeContext,
@@ -74,6 +75,14 @@ class TestContexts(TestCase):
         self.assertEqual(MyRangeModel(context={"start_date": d0, "end_date": d1}).context, c)
         self.assertEqual(MyRangeModel(context=("-1d", "0d")).context, c)
         self.assertEqual(MyRangeModel(context=["-1d", "0d"]).context, c)
+
+    def test_signal_date_range(self):
+        d0 = date.today() - timedelta(1)
+        d1 = date.today()
+        c = SignalsDateRangeContext(start_date=d0, end_date=d1, signals=["a", "b"])
+        self.assertEqual(SignalsDateRangeContext(start_date=str(d0), end_date=pd.Timestamp(date.today()), signals=["a", "b"]), c)
+        self.assertEqual(SignalsDateRangeContext(start_date="-1d", end_date="0d", signals=["a", "b"]), c)
+        self.assertRaises(ValueError, SignalsDateRangeContext, start_date=d0, end_date=d1, signals="foobar")
 
     def test_freq(self):
         self.assertEqual(
