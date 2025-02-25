@@ -6,7 +6,7 @@
 - [Evaluators](#evaluators)
 - [Results](#results)
 
-`ccflow` is a collection of tools for workflow configuration, orchestration, and dependency injection.
+`ccflow` (Composable Configuration Flow) is a collection of tools for workflow configuration, orchestration, and dependency injection.
 It is intended to be flexible enough to handle diverse use cases, including data retrieval, validation, transformation, and loading (i.e. ETL workflows), model training, microservice configuration, and automated report generation.
 
 ## Base Model
