@@ -1,7 +1,9 @@
+import platform
 import unittest
 from typing import ClassVar, Dict, List, Optional, Type, Union
 
 import numpy as np
+from packaging import version
 from pydantic import BaseModel as PydanticBaseModel, ConfigDict, ValidationError
 
 from ccflow import BaseModel, NDArray
@@ -205,6 +207,11 @@ class TestBaseModelSerialization(unittest.TestCase):
         from pydantic import SerializeAsAny
         from pydantic.types import constr
 
+        if version.parse(platform.python_version()) >= version.parse("3.10"):
+            pipe_union = A | int
+        else:
+            pipe_union = Union[A, int]
+
         class MyNestedModel(BaseModel):
             a1: A
             a2: Optional[Union[A, int]]
@@ -212,6 +219,7 @@ class TestBaseModelSerialization(unittest.TestCase):
             a4: ClassVar[A]
             a5: Type[A]
             a6: constr(min_length=1)
+            a7: pipe_union
 
         target = {
             "a1": SerializeAsAny[A],
@@ -219,6 +227,7 @@ class TestBaseModelSerialization(unittest.TestCase):
             "a4": ClassVar[SerializeAsAny[A]],
             "a5": Type[A],
             "a6": constr(min_length=1),  # Uses Annotation
+            "a7": Union[SerializeAsAny[A], int],
         }
         target["a3"] = dict[str, Optional[list[SerializeAsAny[A]]]]
         annotations = MyNestedModel.__annotations__
@@ -228,3 +237,4 @@ class TestBaseModelSerialization(unittest.TestCase):
         self.assertEqual(str(annotations["a4"]), str(target["a4"]))
         self.assertEqual(str(annotations["a5"]), str(target["a5"]))
         self.assertEqual(str(annotations["a6"]), str(target["a6"]))
+        self.assertEqual(str(annotations["a7"]), str(target["a7"]))
