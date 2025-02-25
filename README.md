@@ -13,7 +13,7 @@
 [![PyPI Version](https://img.shields.io/pypi/v/ccflow.svg)](https://pypi.python.org/pypi/ccflow)
 [![License](https://img.shields.io/pypi/l/ccflow.svg)](https://github.com/Point72/ccflow/blob/main/LICENSE)
 
-`ccflow` is a collection of tools for workflow configuration, orchestration, and dependency injection.
+`ccflow` (Composable Configuration Flow) is a collection of tools for workflow configuration, orchestration, and dependency injection.
 It is intended to be flexible enough to handle diverse use cases, including data retrieval, validation, transformation, and loading (i.e. ETL workflows), model training, microservice configuration, and automated report generation.
 
 The framework provides:
