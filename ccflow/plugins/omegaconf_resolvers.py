@@ -1,3 +1,4 @@
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -50,3 +51,6 @@ OmegaConf.register_new_resolver("if_else", lambda value, value_true, value_false
 
 # Register a resolver to boolean if an interpolated value is not provided
 OmegaConf.register_new_resolver("is_missing", lambda a, *, _parent_: a not in _parent_)
+
+# Register a resolver to run a command and return the value
+OmegaConf.register_new_resolver("cmd", lambda cmd: subprocess.check_output([cmd], shell=True).decode("utf-8").rstrip("\n"))
