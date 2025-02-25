@@ -771,6 +771,8 @@ class ContextBase(ResultBase):
             if isinstance(v, (str, tuple, list)):
                 if isinstance(v, str):
                     v = v.split(cls.model_config["separator"])
+                if len(v) > len(cls.model_fields):  # Do not allow extra elements
+                    raise e
                 v = dict(zip(cls.model_fields, v))
                 return handler(v)
             raise e
