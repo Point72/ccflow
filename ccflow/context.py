@@ -46,7 +46,12 @@ _SEPARATOR = ","
 
 
 class NullContext(ContextBase):
-    pass
+    """A Null Context that is used when no context is provided."""
+
+    @model_validator(mode="wrap")
+    def _validate_none(cls, v, handler, info):
+        v = v or {}
+        return handler(v)
 
 
 C = TypeVar("C", bound=Hashable)

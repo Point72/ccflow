@@ -39,6 +39,12 @@ class TestContexts(TestCase):
         self.assertEqual(n1, n2)
         self.assertEqual(hash(n1), hash(n2))
 
+    def test_null_context_validation(self):
+        self.assertEqual(NullContext.model_validate([]), NullContext())
+        self.assertEqual(NullContext.model_validate({}), NullContext())
+        self.assertEqual(NullContext.model_validate(None), NullContext())
+        self.assertRaises(ValueError, NullContext.model_validate, [True])
+
     def test_date_validation(self):
         c = DateContext(date=date.today())
         self.assertEqual(DateContext(date=str(date.today())), c)
