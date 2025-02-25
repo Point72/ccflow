@@ -6,6 +6,8 @@ from pydantic import TypeAdapter
 from pydantic_core import core_schema
 from typing_extensions import Literal, Self, get_args
 
+__all__ = ("ArrowSchema", "ArrowTable", "PyArrowDatatype")
+
 
 class ArrowSchema(type):
     """A metaclass for creating Arrow schema-specific types that can be used with Generic classes"""

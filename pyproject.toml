@@ -52,7 +52,6 @@ dependencies = [
 full = [
     "cexprtk",
     "pandas",
-    "pandera",
     "plotly",
     "polars",
     "ray",
@@ -74,7 +73,6 @@ develop = [
     "cexprtk",
     "csp>=0.0.4,<0.1",
     "pandas",
-    "pandera",
     "plotly",
     "polars",
     "ray",
