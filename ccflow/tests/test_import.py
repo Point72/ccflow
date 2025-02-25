@@ -20,7 +20,6 @@ if __name__ == "__main__":
         "deltalake",
         "emails",
         "matplotlib",
-        "pandera",
         "mlflow",
         "plotly",
         "pyarrow.dataset",
