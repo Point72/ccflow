@@ -134,11 +134,13 @@ A Result is an object that holds the results from a callable model. It provides 
 The following table summarizes the "result" models.
 
 | Name | Path | Description |
-| :-- | :-- | :--- |
+|:---------------------------|:-------------------------|:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `GenericResult` | `ccflow.result` | A generic result (holds anything). |
 | `DictResult` | `ccflow.result` | A generic dict (key/value) result. |
 | `ArrowResult` | `ccflow.result.pyarrow` | Holds an arrow table. |
 | `ArrowDateRangeResult` | `ccflow.result.pyarrow` | Extension of `ArrowResult` for representing a table over a date range that can be divided by date, such that generation of any sub-range of dates gives the same results as the original table filtered for those dates. |
+| `NarwhalsResult` | `ccflow.result.narwhals` | Holds a narwhals `DataFrame` or `LazyFrame`. |
+| `NarwhalsDataFrameResult` | `ccflow.result.narwhals` | Holds a narwhals eager `DataFrame`. |
 | `NumpyResult` | `ccflow.result.numpy` | Holds a numpy array. |
 | `PandasResult` | `ccflow.result.pandas` | Holds a pandas dataframe. |
 | `XArrayResult` | `ccflow.result.xarray` | Holds an xarray. |
