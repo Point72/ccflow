@@ -43,6 +43,27 @@ def test_narwhals_frame_result(data):
     assert result.df.to_native() is df
 
 
+def test_narwhals_frame_result_validation(data, schema):
+    # Test that we can automatically validate a dataframe into a result type for convenience
+    df = pl.DataFrame(data)
+    result = NarwhalsFrameResult.model_validate(df)
+    assert isinstance(result.df, nw.DataFrame)
+    assert result.df.to_native() is df
+
+    result = NarwhalsFrameResult.model_validate(dict(df=df))
+    assert isinstance(result.df, nw.DataFrame)
+    assert result.df.to_native() is df
+
+    df = pl.DataFrame(data).lazy()
+    result = NarwhalsFrameResult.model_validate(df)
+    assert isinstance(result.df, nw.LazyFrame)
+    assert result.df.to_native() is df
+
+    result = NarwhalsFrameResult.model_validate(dict(df=df))
+    assert isinstance(result.df, nw.LazyFrame)
+    assert result.df.to_native() is df
+
+
 def test_narwhals_dataframe_result(data):
     df = pl.DataFrame(data)
     result = NarwhalsDataFrameResult(df=df)

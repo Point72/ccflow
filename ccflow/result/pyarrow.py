@@ -1,3 +1,4 @@
+import narwhals.stable.v1 as nw
 import pyarrow as pa
 from pydantic import Field, field_validator, model_validator
 
@@ -12,20 +13,23 @@ __all__ = (
 
 
 class ArrowResult(ResultBase):
+    """Result that holds an Arrow Table."""
+
     table: ArrowTable
+
+    @model_validator(mode="wrap")
+    def _validate(cls, v, handler, info):
+        if not isinstance(v, ArrowResult) and not (isinstance(v, dict) and "table" in v):
+            v = {"table": v}
+        return handler(v)
 
     @field_validator("table", mode="before")
     def _from_dataframe(cls, v):
         if not isinstance(v, pa.Table):
-            import polars as pl
-
-            if isinstance(v, pl.DataFrame):
-                return v.to_arrow()
-
-            import pandas as pd
-
-            if isinstance(v, pd.DataFrame):
-                return pa.Table.from_pandas(v)
+            try:
+                v = nw.from_native(eager_only=True).to_arrow()
+            except TypeError:
+                pass
         return v
 
 

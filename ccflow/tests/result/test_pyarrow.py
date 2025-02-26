@@ -18,12 +18,18 @@ class TestResult(TestCase):
         r = ArrowResult(table=df)
         self.assertIsInstance(r.table, pa.Table)
 
+        r = ArrowResult.model_validate(df)
+        self.assertIsInstance(r.table, pa.Table)
+
     def test_arrow_from_polars(self):
         df = pl.DataFrame({"A": [1, 2, 3], "B": [4, 5, 6]})
         r = ArrowResult.model_validate({"table": df})
         self.assertIsInstance(r.table, pa.Table)
 
         r = ArrowResult(table=df)
+        self.assertIsInstance(r.table, pa.Table)
+
+        r = ArrowResult.model_validate(df)
         self.assertIsInstance(r.table, pa.Table)
 
     def test_arrow_date_range(self):
