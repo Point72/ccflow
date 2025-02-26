@@ -51,6 +51,7 @@ dependencies = [
 [project.optional-dependencies]
 full = [
     "cexprtk",
+    "duckdb",
     "pandas",
     "plotly",
     "polars",
@@ -72,6 +73,7 @@ develop = [
     # Full deps
     "cexprtk",
     "csp>=0.0.4,<0.1",
+    "duckdb",
     "pandas",
     "plotly",
     "polars",
@@ -169,6 +171,7 @@ testpaths = "ccflow/tests"
 
 [tool.ruff]
 line-length = 150
+exclude = ["ccflow/examples/tpch/queries"]
 
 [tool.ruff.lint]
 extend-select = ["I"]
