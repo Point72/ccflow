@@ -1,6 +1,6 @@
 from typing import Generic, Type, TypeVar, Union
 
-import pandas as pd
+import narwhals.stable.v1 as nw
 import pyarrow as pa
 from pydantic import TypeAdapter
 from pydantic_core import core_schema
@@ -62,13 +62,14 @@ class ArrowTable(pa.Table, Generic[S]):
         """Helper function for validation with common functionality between v1 and v2"""
         if isinstance(v, list):
             v = pa.Table.from_batches(v)
-        elif hasattr(v, "to_arrow"):  # For polars, but without importing it
-            v = v.to_arrow()
-        elif isinstance(v, pd.DataFrame):
-            v = pa.Table.from_pandas(v)
         elif isinstance(v, dict):
             v = pa.Table.from_pydict(v)
-        elif not isinstance(v, pa.Table):
+        else:
+            try:
+                v = nw.from_native(v, eager_only=True, allow_series=False).to_arrow()
+            except TypeError:
+                pass
+        if not isinstance(v, pa.Table):
             raise ValueError(f"Value of type {type(v)} cannot be converted to pyarrow.Table")
 
         if schema:
