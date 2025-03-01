@@ -23,7 +23,7 @@ class TestPolarsExpression(TestCase):
 
     def test_expression_complex(self):
         expression = PolarsExpression.validate(
-            "col('Col1') " "+ (sp.linalg.det(numpy.eye(2, dtype=int)) - 1 ) * math.pi * c('Col2') " "+ polars.col('Col2')"
+            "col('Col1') + (sp.linalg.det(numpy.eye(2, dtype=int)) - 1 ) * math.pi * c('Col2') + polars.col('Col2')"
         )
         expected_result = pl.col("Col1") + (scipy.linalg.det(np.eye(2, dtype=int)) - 1) * math.pi * pl.col("Col2") + pl.col("Col2")
 
