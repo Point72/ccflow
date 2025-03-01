@@ -507,7 +507,7 @@ class TestRegistryLoadingErrors(TestCase):
             }
         )
         r = ModelRegistry(name="test")
-        msg = "Error locating target 'ccflow.tests.test_base_registry.BadClass', " "set env var HYDRA_FULL_ERROR=1 to see chained exception.\n"
+        msg = "Error locating target 'ccflow.tests.test_base_registry.BadClass', set env var HYDRA_FULL_ERROR=1 to see chained exception.\n"
         "full_key: foo"
         with self.assertRaises(InstantiationException, msg=msg):
             r.load_config(cfg)
@@ -524,7 +524,7 @@ class TestRegistryLoadingErrors(TestCase):
         )
         r = ModelRegistry(name="test")
         msg = "Error in call to target 'ccflow.tests.test_base_registry.MyTestModel':\n"
-        ("ValidationError(model='MyTestModel', errors=[{'loc': ('b',), " "'msg': 'value is not a valid float', 'type': 'type_error.float'}])\n")
+        ("ValidationError(model='MyTestModel', errors=[{'loc': ('b',), 'msg': 'value is not a valid float', 'type': 'type_error.float'}])\n")
         "full_key: foo"
         with self.assertRaises(InstantiationException, msg=msg):
             r.load_config(cfg)

@@ -454,7 +454,7 @@ class ModelRegistry(BaseModel, collections.abc.Mapping):
                     registry = self._models[registry_name]
                 except KeyError:
                     raise KeyError(
-                        f"No sub-registry found by the name '{registry_name}' in registry '{self._debug_name}' " f"while looking up model '{item}'"
+                        f"No sub-registry found by the name '{registry_name}' in registry '{self._debug_name}' while looking up model '{item}'"
                     )
             return registry.__getitem__(name)
         else:

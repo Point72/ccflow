@@ -150,7 +150,7 @@ class TestBaseModelSerialization(unittest.TestCase):
         self._check_serialization(NestedModel(a=ChildModel(field1=0, field2=10)))
 
     def test_from_str_serialization(self):
-        serialized = '{"_target_": "ccflow.tests.test_base_serialize.ChildModel", ' '"field1": 9, "field2": 4}'
+        serialized = '{"_target_": "ccflow.tests.test_base_serialize.ChildModel", "field1": 9, "field2": 4}'
         deserialized = BaseModel.model_validate_json(serialized)
         self.assertEqual(deserialized, ChildModel(field1=9, field2=4))
 

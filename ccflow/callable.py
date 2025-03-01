@@ -110,7 +110,7 @@ class _CallableModel(BaseModel, abc.ABC):
             type_deps_arg = _cached_signature(self.__class__.__deps__).parameters["context"].annotation
             if type_call_arg is not type_deps_arg:
                 err_msg_type_mismatch = (
-                    f"The type of the context accepted by __deps__ {type_deps_arg} " f"must match that accepted by __call__ {type_call_arg}!"
+                    f"The type of the context accepted by __deps__ {type_deps_arg} must match that accepted by __call__ {type_call_arg}!"
                 )
                 raise ValueError(err_msg_type_mismatch)
 
