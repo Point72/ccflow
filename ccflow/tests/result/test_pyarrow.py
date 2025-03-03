@@ -20,6 +20,7 @@ class TestResult(TestCase):
 
         r = ArrowResult.model_validate(df)
         self.assertIsInstance(r.table, pa.Table)
+        self.assertIsInstance(r.df.to_native(), pa.Table)
 
     def test_arrow_from_polars(self):
         df = pl.DataFrame({"A": [1, 2, 3], "B": [4, 5, 6]})
@@ -31,12 +32,14 @@ class TestResult(TestCase):
 
         r = ArrowResult.model_validate(df)
         self.assertIsInstance(r.table, pa.Table)
+        self.assertIsInstance(r.df.to_native(), pa.Table)
 
     def test_arrow_date_range(self):
         df = pl.DataFrame({"A": [1, 2, 3], "B": [4, 5, 6], "D": [date(2020, 1, 1), date(2020, 1, 2), date(2020, 1, 3)]})
         context = DateRangeContext(start_date=date(2020, 1, 1), end_date=date(2020, 1, 3))
         r = ArrowDateRangeResult.model_validate({"table": df, "date_col": "D", "context": context})
         self.assertIsInstance(r.table, pa.Table)
+        self.assertIsInstance(r.df.to_native(), pa.Table)
 
         self.assertRaises(ValueError, ArrowDateRangeResult.model_validate, {"table": df, "date_col": "B", "context": context})
         self.assertRaises(ValueError, ArrowDateRangeResult.model_validate, {"table": df, "date_col": "E", "context": context})
