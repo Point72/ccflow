@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING
+
 import pyarrow as pa
 from pydantic import Field, model_validator
 
@@ -10,6 +12,9 @@ __all__ = (
     "ArrowDateRangeResult",
 )
 
+if TYPE_CHECKING:
+    from narwhals.stable.v1.typing import DataFrameT
+
 
 class ArrowResult(ResultBase):
     """Result that holds an Arrow Table."""
@@ -21,6 +26,14 @@ class ArrowResult(ResultBase):
         if not isinstance(v, ArrowResult) and not (isinstance(v, dict) and "table" in v):
             v = {"table": v}
         return handler(v)
+
+    @property
+    def df(self) -> "DataFrameT":
+        """Return the Arrow table as a narwhals DataFrame."""
+        # For duck-type compatibility with NarwhalsDataFrameResult (but not for serialization)
+        import narwhals.stable.v1 as nw
+
+        return nw.from_native(self.table)
 
 
 class ArrowDateRangeResult(ArrowResult):
