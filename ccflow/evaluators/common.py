@@ -14,6 +14,7 @@ from ..callable import CallableModel, ContextBase, EvaluatorBase, ModelEvaluatio
 __all__ = [
     "cache_key",
     "combine_evaluators",
+    "FallbackEvaluator",
     "LazyEvaluator",
     "LoggingEvaluator",
     "MemoryCacheEvaluator",
@@ -60,6 +61,21 @@ class MultiEvaluator(EvaluatorBase):
         for evaluator in self.evaluators:
             context = ModelEvaluationContext(model=evaluator, context=context, options=context.options)
         return context()
+
+
+class FallbackEvaluator(EvaluatorBase):
+    """An evaluator that tries a list of evaluators in turn until one succeeds."""
+
+    evaluators: List[EvaluatorBase] = Field(description="The list of evaluators to try (in order).")
+
+    @override
+    def __call__(self, context: ModelEvaluationContext) -> ResultType:
+        for evaluator in self.evaluators:
+            try:
+                return evaluator(context)
+            except Exception as e:
+                log.exception("Evaluator %s failed: \n%s", evaluator, e)
+        raise RuntimeError("All evaluators failed.")
 
 
 class LazyEvaluator(EvaluatorBase):
