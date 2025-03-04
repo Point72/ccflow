@@ -6,6 +6,7 @@ import pandas as pd
 
 from ccflow import DateContext, DateRangeContext, Evaluator, FlowOptionsOverride, ModelEvaluationContext
 from ccflow.evaluators import (
+    FallbackEvaluator,
     GraphEvaluator,
     LoggingEvaluator,
     MemoryCacheEvaluator,
@@ -54,6 +55,28 @@ class TestCombineEvaluator(TestCase):
         deps_model_context = ModelEvaluationContext(model=m1, context=context, fn="__deps__")
         self.assertEqual(multi_evaluator(deps_model_context), m1.__deps__(context))
         self.assertEqual(multi_evaluator.__deps__(model_evaluation_context), m1.__deps__(context))
+
+    def test_fallback_evaluator(self):
+        evaluator1 = LoggingEvaluator(log_level=logging.DEBUG)
+        evaluator2 = LoggingEvaluator(log_level=logging.INFO)
+        fallback_evaluator = FallbackEvaluator(evaluators=[evaluator1, evaluator2])
+        m1 = MyDateCallable(offset=1)
+        context = DateContext(date=date(2022, 1, 1))
+        model_evaluation_context = ModelEvaluationContext(model=m1, context=context)
+        with self.assertNoLogs(level=logging.INFO):
+            out = fallback_evaluator(model_evaluation_context)
+        self.assertEqual(out, m1(context))
+
+        # Corrupt evaluator 1 so it raises when run
+        evaluator1_raise = evaluator1.model_copy(update=dict(log_level="garbage"))
+        fallback_evaluator = FallbackEvaluator(evaluators=[evaluator1_raise, evaluator2])
+        self.assertRaises(Exception, evaluator1_raise, model_evaluation_context)
+        with self.assertLogs(level=logging.INFO) as captured:
+            out = fallback_evaluator(model_evaluation_context)
+        self.assertEqual(out, m1(context))
+        self.assertIn(f"Evaluator {evaluator1_raise} failed", captured.records[0].getMessage())
+        self.assertEqual(captured.records[0].levelname, "ERROR")
+        self.assertEqual(len(captured.records), 1 + 3)
 
 
 class TestLoggingEvaluator(TestCase):
