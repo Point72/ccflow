@@ -66,9 +66,7 @@ class MultiEvaluator(EvaluatorBase):
 class FallbackEvaluator(EvaluatorBase):
     """An evaluator that tries a list of evaluators in turn until one succeeds."""
 
-    evaluators: List[EvaluatorBase] = Field(
-        description="The list of evaluators to try (in order)."
-    )
+    evaluators: List[EvaluatorBase] = Field(description="The list of evaluators to try (in order).")
 
     @override
     def __call__(self, context: ModelEvaluationContext) -> ResultType:
