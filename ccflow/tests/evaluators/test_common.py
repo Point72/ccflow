@@ -63,8 +63,11 @@ class TestCombineEvaluator(TestCase):
         m1 = MyDateCallable(offset=1)
         context = DateContext(date=date(2022, 1, 1))
         model_evaluation_context = ModelEvaluationContext(model=m1, context=context)
-        with self.assertNoLogs(level=logging.INFO):
+        with self.assertLogs(level=logging.INFO) as log:
+            logging.info("just one")
             out = fallback_evaluator(model_evaluation_context)
+            self.assertEqual(len(log.output), 1)
+            self.assertEqual(len(log.records), 1)
         self.assertEqual(out, m1(context))
 
         # Corrupt evaluator 1 so it raises when run
