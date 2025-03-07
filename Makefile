@@ -3,7 +3,7 @@
 ###############
 .PHONY: build develop install
 
-build:  ## build python/javascript
+build:  ## build python
 	python -m build .
 
 requirements:  ## install prerequisite python build requirements
