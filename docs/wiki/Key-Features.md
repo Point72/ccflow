@@ -39,31 +39,31 @@ The following table summarizes the available models.
 >
 > Some models are still in the process of being open sourced.
 
-| Name | Path | Description |
-| :-- | :-- | :--- |
-| `ArrowCSVReader` | *Coming Soon!* | |
-| `PandasCSVReader` | *Coming Soon!* | |
-| `ArrowDatasetReader` | *Coming Soon!* | |
-| `ArrowDatasetWriter` | *Coming Soon!* | |
-| `PandasDeltaReader` | *Coming Soon!* | |
-| `PandasDeltaWriter` | *Coming Soon!* | |
-| `FileEraser` | *Coming Soon!* | |
-| `MLFlowPublisherModel` | *Coming Soon!* | |
-| `CallableModelGroup` | *Coming Soon!* | |
-| `MultiplexerModel` | *Coming Soon!* | |
-| `PanderaValidator` | *Coming Soon!* | |
-| `ArrowParquetReader` | *Coming Soon!* | |
-| `PandasParquetReader` | *Coming Soon!* | |
-| `ArrowParquetWriter` | *Coming Soon!* | |
-| `PandasParquetWriter` | *Coming Soon!* | |
-| `MultiFieldParquetReader` | *Coming Soon!* | |
-| `ArrowParquetCacher` | *Coming Soon!* | |
-| `SQLReader` | *Coming Soon!* | |
-| `SQLPollingReader` | *Coming Soon!* | |
-| `TableTransformModel` | *Coming Soon!* | |
-| `WaterfallModel` | *Coming Soon!* | |
-| `XArrayReader` | *Coming Soon!* | |
-| `XArrayWriter` | *Coming Soon!* | |
+| Name                      | Path           | Description |
+| :------------------------ | :------------- | :---------- |
+| `ArrowCSVReader`          | *Coming Soon!* |             |
+| `PandasCSVReader`         | *Coming Soon!* |             |
+| `ArrowDatasetReader`      | *Coming Soon!* |             |
+| `ArrowDatasetWriter`      | *Coming Soon!* |             |
+| `PandasDeltaReader`       | *Coming Soon!* |             |
+| `PandasDeltaWriter`       | *Coming Soon!* |             |
+| `FileEraser`              | *Coming Soon!* |             |
+| `MLFlowPublisherModel`    | *Coming Soon!* |             |
+| `CallableModelGroup`      | *Coming Soon!* |             |
+| `MultiplexerModel`        | *Coming Soon!* |             |
+| `PanderaValidator`        | *Coming Soon!* |             |
+| `ArrowParquetReader`      | *Coming Soon!* |             |
+| `PandasParquetReader`     | *Coming Soon!* |             |
+| `ArrowParquetWriter`      | *Coming Soon!* |             |
+| `PandasParquetWriter`     | *Coming Soon!* |             |
+| `MultiFieldParquetReader` | *Coming Soon!* |             |
+| `ArrowParquetCacher`      | *Coming Soon!* |             |
+| `SQLReader`               | *Coming Soon!* |             |
+| `SQLPollingReader`        | *Coming Soon!* |             |
+| `TableTransformModel`     | *Coming Soon!* |             |
+| `WaterfallModel`          | *Coming Soon!* |             |
+| `XArrayReader`            | *Coming Soon!* |             |
+| `XArrayWriter`            | *Coming Soon!* |             |
 
 ## Publishers
 
@@ -78,25 +78,25 @@ The following table summarizes the "publisher" models.
 >
 > Some models are still in the process of being open sourced.
 
-| Name | Path | Description |
-| :-- | :-- | :--- |
-| `DictTemplateFilePublisher` | `ccflow.publishers` | Publish data to a file after populating a Jinja template. |
-| `GenericFilePublisher` | `ccflow.publishers` | Publish data using a generic "dump" Callable. Uses `smart_open` under the hood so that local and cloud paths are supported. |
-| `JSONPublisher` | `ccflow.publishers` | Publish data to file in JSON format. |
-| `PandasFilePublisher` | `ccflow.publishers` | Publish a pandas data frame to a file using an appropriate method on pd.DataFrame. For large-scale exporting (using parquet), see `PandasParquetPublisher`. |
-| `PicklePublisher` | `ccflow.publishers` | Publish data to a pickle file. |
-| `PydanticJSONPublisher` | `ccflow.publishers` | Publish a pydantic model to a json file. See https://docs.pydantic.dev/latest/concepts/serialization/#modeljson |
-| `YAMLPublisher` | `ccflow.publishers` | Publish data to file in YAML format. |
-| `CompositePublisher` | `ccflow.publishers` | Highly configurable, publisher that decomposes a pydantic BaseModel or a dictionary into pieces and publishes each piece separately. |
-| `ArrowDatasetPublisher` | *Coming Soon!* | |
-| `PandasDeltaPublisher` | *Coming Soon!* | |
-| `EmailPublisher` | *Coming Soon!* | |
-| `MatplotlibFilePublisher` | *Coming Soon!* | |
-| `MLFlowArtifactPublisher` | *Coming Soon!* | |
-| `MLFlowPublisher` | *Coming Soon!* | |
-| `PandasParquetPublisher` | *Coming Soon!* | |
-| `PlotlyFilePublisher` | *Coming Soon!* | |
-| `XArrayPublisher` | *Coming Soon!* | |
+| Name                        | Path                | Description                                                                                                                                                 |
+| :-------------------------- | :------------------ | :---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DictTemplateFilePublisher` | `ccflow.publishers` | Publish data to a file after populating a Jinja template.                                                                                                   |
+| `GenericFilePublisher`      | `ccflow.publishers` | Publish data using a generic "dump" Callable. Uses `smart_open` under the hood so that local and cloud paths are supported.                                 |
+| `JSONPublisher`             | `ccflow.publishers` | Publish data to file in JSON format.                                                                                                                        |
+| `PandasFilePublisher`       | `ccflow.publishers` | Publish a pandas data frame to a file using an appropriate method on pd.DataFrame. For large-scale exporting (using parquet), see `PandasParquetPublisher`. |
+| `PicklePublisher`           | `ccflow.publishers` | Publish data to a pickle file.                                                                                                                              |
+| `PydanticJSONPublisher`     | `ccflow.publishers` | Publish a pydantic model to a json file. See https://docs.pydantic.dev/latest/concepts/serialization/#modeljson                                             |
+| `YAMLPublisher`             | `ccflow.publishers` | Publish data to file in YAML format.                                                                                                                        |
+| `CompositePublisher`        | `ccflow.publishers` | Highly configurable, publisher that decomposes a pydantic BaseModel or a dictionary into pieces and publishes each piece separately.                        |
+| `ArrowDatasetPublisher`     | *Coming Soon!*      |                                                                                                                                                             |
+| `PandasDeltaPublisher`      | *Coming Soon!*      |                                                                                                                                                             |
+| `EmailPublisher`            | *Coming Soon!*      |                                                                                                                                                             |
+| `MatplotlibFilePublisher`   | *Coming Soon!*      |                                                                                                                                                             |
+| `MLFlowArtifactPublisher`   | *Coming Soon!*      |                                                                                                                                                             |
+| `MLFlowPublisher`           | *Coming Soon!*      |                                                                                                                                                             |
+| `PandasParquetPublisher`    | *Coming Soon!*      |                                                                                                                                                             |
+| `PlotlyFilePublisher`       | *Coming Soon!*      |                                                                                                                                                             |
+| `XArrayPublisher`           | *Coming Soon!*      |                                                                                                                                                             |
 
 ## Evaluators
 
@@ -108,24 +108,24 @@ The following table summarizes the "evaluator" models.
 >
 > Some models are still in the process of being open sourced.
 
-| Name | Path | Description |
-| :-- | :-- | :--- |
-| `LazyEvaluator` | `ccflow.evaluators` | Evaluator that only actually runs the callable once an attribute of the result is queried (by hooking into `__getattribute__`) |
-| `LoggingEvaluator` | `ccflow.evaluators` | Evaluator that logs information about evaluating the callable. |
-| `MemoryCacheEvaluator` | `ccflow.evaluators` | Evaluator that caches results in memory. |
-| `MultiEvaluator` | `ccflow.evaluators` | An evaluator that combines multiple evaluators. |
-| `GraphEvaluator` | `ccflow.evaluators` | Evaluator that evaluates the dependency graph of callable models in topologically sorted order. |
-| `ChunkedDateRangeEvaluator` | *Coming Soon!* | |
-| `ChunkedDateRangeResultsAggregator` | *Coming Soon!* | |
-| `RayChunkedDateRangeEvaluator` | *Coming Soon!* | |
-| `DependencyTrackingEvaluator` | *Coming Soon!* | |
-| `DiskCacheEvaluator` | *Coming Soon!* | |
-| `ParquetCacheEvaluator` | *Coming Soon!* | |
-| `RayCacheEvaluator` | *Coming Soon!* | |
-| `RayGraphEvaluator` | *Coming Soon!* | |
-| `RayDelayedDistributedEvaluator` | *Coming Soon!* | |
-| `ParquetCacheEvaluator` | *Coming Soon!* | |
-| `RetryEvaluator` | *Coming Soon!* | |
+| Name                                | Path                | Description                                                                                                                    |
+| :---------------------------------- | :------------------ | :----------------------------------------------------------------------------------------------------------------------------- |
+| `LazyEvaluator`                     | `ccflow.evaluators` | Evaluator that only actually runs the callable once an attribute of the result is queried (by hooking into `__getattribute__`) |
+| `LoggingEvaluator`                  | `ccflow.evaluators` | Evaluator that logs information about evaluating the callable.                                                                 |
+| `MemoryCacheEvaluator`              | `ccflow.evaluators` | Evaluator that caches results in memory.                                                                                       |
+| `MultiEvaluator`                    | `ccflow.evaluators` | An evaluator that combines multiple evaluators.                                                                                |
+| `GraphEvaluator`                    | `ccflow.evaluators` | Evaluator that evaluates the dependency graph of callable models in topologically sorted order.                                |
+| `ChunkedDateRangeEvaluator`         | *Coming Soon!*      |                                                                                                                                |
+| `ChunkedDateRangeResultsAggregator` | *Coming Soon!*      |                                                                                                                                |
+| `RayChunkedDateRangeEvaluator`      | *Coming Soon!*      |                                                                                                                                |
+| `DependencyTrackingEvaluator`       | *Coming Soon!*      |                                                                                                                                |
+| `DiskCacheEvaluator`                | *Coming Soon!*      |                                                                                                                                |
+| `ParquetCacheEvaluator`             | *Coming Soon!*      |                                                                                                                                |
+| `RayCacheEvaluator`                 | *Coming Soon!*      |                                                                                                                                |
+| `RayGraphEvaluator`                 | *Coming Soon!*      |                                                                                                                                |
+| `RayDelayedDistributedEvaluator`    | *Coming Soon!*      |                                                                                                                                |
+| `ParquetCacheEvaluator`             | *Coming Soon!*      |                                                                                                                                |
+| `RetryEvaluator`                    | *Coming Soon!*      |                                                                                                                                |
 
 ## Results
 
@@ -133,14 +133,14 @@ A Result is an object that holds the results from a callable model. It provides 
 
 The following table summarizes the "result" models.
 
-| Name | Path | Description |
-|:---------------------------|:-------------------------|:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `GenericResult` | `ccflow.result` | A generic result (holds anything). |
-| `DictResult` | `ccflow.result` | A generic dict (key/value) result. |
-| `ArrowResult` | `ccflow.result.pyarrow` | Holds an arrow table. |
-| `ArrowDateRangeResult` | `ccflow.result.pyarrow` | Extension of `ArrowResult` for representing a table over a date range that can be divided by date, such that generation of any sub-range of dates gives the same results as the original table filtered for those dates. |
-| `NarwhalsResult` | `ccflow.result.narwhals` | Holds a narwhals `DataFrame` or `LazyFrame`. |
-| `NarwhalsDataFrameResult` | `ccflow.result.narwhals` | Holds a narwhals eager `DataFrame`. |
-| `NumpyResult` | `ccflow.result.numpy` | Holds a numpy array. |
-| `PandasResult` | `ccflow.result.pandas` | Holds a pandas dataframe. |
-| `XArrayResult` | `ccflow.result.xarray` | Holds an xarray. |
+| Name                      | Path                     | Description                                                                                                                                                                                                              |
+| :------------------------ | :----------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GenericResult`           | `ccflow.result`          | A generic result (holds anything).                                                                                                                                                                                       |
+| `DictResult`              | `ccflow.result`          | A generic dict (key/value) result.                                                                                                                                                                                       |
+| `ArrowResult`             | `ccflow.result.pyarrow`  | Holds an arrow table.                                                                                                                                                                                                    |
+| `ArrowDateRangeResult`    | `ccflow.result.pyarrow`  | Extension of `ArrowResult` for representing a table over a date range that can be divided by date, such that generation of any sub-range of dates gives the same results as the original table filtered for those dates. |
+| `NarwhalsResult`          | `ccflow.result.narwhals` | Holds a narwhals `DataFrame` or `LazyFrame`.                                                                                                                                                                             |
+| `NarwhalsDataFrameResult` | `ccflow.result.narwhals` | Holds a narwhals eager `DataFrame`.                                                                                                                                                                                      |
+| `NumpyResult`             | `ccflow.result.numpy`    | Holds a numpy array.                                                                                                                                                                                                     |
+| `PandasResult`            | `ccflow.result.pandas`   | Holds a pandas dataframe.                                                                                                                                                                                                |
+| `XArrayResult`            | `ccflow.result.xarray`   | Holds an xarray.                                                                                                                                                                                                         |
