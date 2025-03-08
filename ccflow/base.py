@@ -6,6 +6,7 @@ import inspect
 import logging
 import pathlib
 import platform
+import warnings
 from types import GenericAlias, MappingProxyType
 from typing import Any, Callable, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar, Union, get_args, get_origin
 
@@ -285,12 +286,23 @@ def _get_registry_dependencies(value, types: Optional[Tuple[Type]]) -> List[List
     return deps
 
 
+def _is_config_model(value: Dict):
+    """Test whether a config value is a model, i.e. it is a dict which contains a _target_ key."""
+    if "_target_" in value:
+        return True
+    for key in value:
+        # Catch potential misspellings (which will cause the config to be ignored and treated as a dict)
+        if key.lower().strip("_") in ("target", "arget", "trget", "taget", "taret", "targt", "targe", "tagret"):
+            warnings.warn(f"Found config value containing `{key}`, are you sure you didn't mean '_target_'?", SyntaxWarning)
+    return False
+
+
 def _is_config_subregistry(value):
     """Test whether a config value is a subregistry, i.e. it is a dict which either
     contains a _target_ key, or recursively contains a dict that has a _target_ key.
     """
     if isinstance(value, (dict, DictConfig)):
-        if "_target_" in value:
+        if _is_config_model(value):
             return True
         else:
             for v in value.values():
@@ -578,13 +590,14 @@ class _ModelRegistryLoader:
                 # Skip config "variables", i.e. strings, etc that could be re-used by reference across the
                 # object configs
                 continue
-            elif "_target_" in v:
+            elif _is_config_model(v):
                 models_to_register.append((registries, k, v))
             elif _is_config_subregistry(v):
                 # Config value represents a sub-registry
                 subregistry = ModelRegistry(name=k)
                 registry.add(k, subregistry, overwrite=self._overwrite)
                 models_to_register.extend(self._make_subregistries(v, registries + [subregistry]))
+
         return models_to_register
 
     def load_config(self, cfg: DictConfig, registry: ModelRegistry, skip_exceptions: bool = False) -> ModelRegistry:

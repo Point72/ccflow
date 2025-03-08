@@ -529,6 +529,21 @@ class TestRegistryLoadingErrors(TestCase):
         with self.assertRaises(InstantiationException, msg=msg):
             r.load_config(cfg)
 
+    def test_misspelling_warning(self):
+        cfg = OmegaConf.create(
+            {
+                "foo": {
+                    "_target": "ccflow.tests.test_base_registry.MyTestModel",
+                    "a": "test",
+                    "b": "string_that_should_be_a_float",
+                },
+            }
+        )
+        r = ModelRegistry(name="test")
+        msg = "Found config value containing `_target`, are you sure you didn't mean '_target_'?"
+        with self.assertWarnsRegex(SyntaxWarning, msg):
+            r.load_config(cfg)
+
 
 class TestRegistryLookupContext(TestCase):
     def setUp(self) -> None:
