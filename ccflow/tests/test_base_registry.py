@@ -20,6 +20,10 @@ class MyTestModel(BaseModel):
     d: Dict[str, float] = {}
 
 
+class MyTestModel2(BaseModel):
+    v: int
+
+
 class MyTestModelSubclass(MyTestModel):
     pass
 
@@ -493,6 +497,48 @@ class TestRegistryLoadingErrors(TestCase):
         msg = "RegistryKeyError('Could not find model foo in RootModelRegistry')\n"
         "RegistryKeyError('Could not find model foo in RootModelRegistry')\n"
         "full_key: subregistry.bar"
+        with self.assertRaises(InstantiationException, msg=msg):
+            r.load_config(cfg)
+
+    def test_model_lookup_error_relative(self):
+        cfg = OmegaConf.create(
+            {
+                "foo": {
+                    "_target_": "ccflow.tests.test_base_registry.MyTestModel",
+                    "a": "test",
+                    "b": 0.0,
+                },
+                "subregistry": {
+                    "bar": {
+                        "_target_": "ccflow.tests.test_base_registry.MyNestedModel",
+                        "x": "foo",  # Relative path, should be ../foo or /foo, so should raise
+                        "y": {"a": "test2", "b": 2.0},
+                    },
+                },
+            }
+        )
+        r = ModelRegistry(name="test")
+        msg = "RegistryKeyError('Could not find model foo in RootModelRegistry')\n"
+        "RegistryKeyError('Could not find model foo in RootModelRegistry')\n"
+        "full_key: subregistry.bar"
+        with self.assertRaises(InstantiationException, msg=msg):
+            r.load_config(cfg)
+
+    def test_model_lookup_wrong_type_error(self):
+        cfg = OmegaConf.create(
+            {
+                "foo": {"_target_": f"{MyTestModel2.__module__}.MyTestModel2", "v": 0},
+                "subregistry": {
+                    "bar": {
+                        "_target_": f"{MyNestedModel.__module__}.MyNestedModel",
+                        "x": "/foo",
+                        "y": {"a": "test2", "b": 2.0},
+                    },
+                },
+            }
+        )
+        r = ModelRegistry(name="test")
+        msg = "Input should be a valid dictionary or instance of MyTestModel"
         with self.assertRaises(InstantiationException, msg=msg):
             r.load_config(cfg)
 
