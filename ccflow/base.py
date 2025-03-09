@@ -641,8 +641,11 @@ class _ModelRegistryLoader:
 
         if not skip_exceptions and unresolved_models:
             # Raise the error from the first unresolved model by trying to instantiate it again
-            _registries, _k, v = unresolved_models[0]
-            model = instantiate(v, _convert_="all")
+            registries, k, v = unresolved_models[0]
+            with RegistryLookupContext(registries=registries):
+                instantiate(v, _convert_="all")
+            # The line above should have raised. If for whatever reason it didn't, we raise the error here.
+            raise InstantiationException(f"Failed to instantiate {k} with config {v}, but cannot reproduce.")
         return registry
 
 
