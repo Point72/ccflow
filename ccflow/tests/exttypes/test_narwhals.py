@@ -194,6 +194,7 @@ def test_dataframe_serialization(data, test_type):
     ta = TypeAdapter(test_type)
     pl_df = pl.DataFrame(data)
     df = ta.validate_python(pl_df)
+    assert isinstance(ta.dump_python(df), nw.DataFrame)
     json = ta.dump_json(df)
     assert isinstance(json, bytes)
 
@@ -216,6 +217,7 @@ def test_lazyframe_serialization(data, test_type):
     ta = TypeAdapter(test_type)
     pl_df = pl.DataFrame(data)
     df = ta.validate_python(pl_df)
+    assert isinstance(ta.dump_python(df), nw.LazyFrame)
     with pytest.raises(ValueError):
         ta.dump_json(df)
 

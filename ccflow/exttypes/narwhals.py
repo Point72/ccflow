@@ -97,7 +97,7 @@ class FrameValidator:
         return core_schema.json_or_python_schema(
             json_schema=from_any_schema,
             python_schema=from_any_schema,
-            serialization=core_schema.plain_serializer_function_ser_schema(serialize),
+            serialization=core_schema.plain_serializer_function_ser_schema(serialize, when_used="json"),
         )
 
 
