@@ -40,6 +40,24 @@ class TestArrowSchema(TestCase):
         # You can't actually construct the schema type (because the schema is on the type, not the instance)
         self.assertRaises(TypeError, SCHEMA_WEAK)
 
+    def test_validate(self):
+        # Validation failures should raise
+        self.assertRaises(ValueError, ArrowSchema.validate, "foo")
+        self.assertRaises(ValueError, ArrowSchema.validate, 20.0)
+        self.assertRaises(ValueError, ArrowSchema.validate, False)
+
+        # Validation of a pyarrow schema should provide an ArrowSchema
+        pyarrow_schema = pa.schema({"A": pa.float64(), "B": pa.int64(), "C": pa.string()})
+        result = ArrowSchema.validate(pyarrow_schema)
+        self.assertIsInstance(result, ArrowSchema)
+        self.assertTrue(pyarrow_schema.equals(result.schema))
+
+        # Validation of an ArrowSchema should provide an ArrowSchema
+        schema = ArrowSchema.make(pyarrow_schema, strict=True)
+        result = ArrowSchema.validate(schema)
+        self.assertIsInstance(result, ArrowSchema)
+        self.assertEqual(schema, result)
+
 
 class TestArrowTable(TestCase):
     def setUp(self) -> None:
