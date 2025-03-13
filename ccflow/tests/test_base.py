@@ -113,6 +113,22 @@ class TestBaseModel(TestCase):
         self.assertEqual(BaseModel.model_validate({"_target_": type_, "x": "foo"}), ModelA(x="foo"))
         self.assertEqual(BaseModel.model_validate(ModelA(x="foo")), ModelA(x="foo"))
 
+    def test_deferred_build_serialization(self):
+        # When defer_build was originally switched on, this didn't play nicely with SerializeAsAny
+        # Because the Child model is not explicitly instantiated, the Parent model does not have a serialization schema for it
+
+        # Define Child and Parent at module-level so that "type_" will validate properly
+        global Child, Parent
+
+        class Child(BaseModel):
+            a: str
+
+        class Parent(BaseModel):
+            c: Child  # Note that under the hood, ccflow turns this into SerializeAsAny[Child] so that child classes of Child will be fully serialized
+
+        p = Parent(c=dict(a=""))
+        self.assertIsInstance(p.model_dump(), dict)
+
     def test_widget(self):
         obj = object()
         m = ModelC(x=obj)

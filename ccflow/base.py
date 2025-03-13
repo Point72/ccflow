@@ -178,7 +178,6 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
         # where the default behavior is just to drop the mis-named value. This prevents that
         extra="forbid",
         ser_json_timedelta="float",
-        defer_build=True,
     )
 
     def __str__(self):
