@@ -4,7 +4,7 @@ import narwhals.stable.v1 as nw
 import pyarrow as pa
 from pydantic import TypeAdapter
 from pydantic_core import core_schema
-from typing_extensions import Literal, Self, get_args
+from typing_extensions import Any, Literal, Self, get_args
 
 __all__ = ("ArrowSchema", "ArrowTable", "PyArrowDatatype")
 
@@ -38,6 +38,25 @@ class ArrowSchema(type):
         newclass.__init__ = __init__
 
         return newclass
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source_type, handler):
+        return core_schema.no_info_plain_validator_function(cls._validate)
+
+    @classmethod
+    def _validate(cls, value: Any) -> Self:
+        if isinstance(value, ArrowSchema):
+            return value
+
+        if isinstance(value, pa.Schema):
+            return ArrowSchema.make(value)
+
+        raise ValueError(f"Cannot convert value to ArrowSchema, expects ArrowSchema or pa.Schema: {value}")
+
+    @classmethod
+    def validate(cls, value: Any) -> Self:
+        """Try to convert/validate an arbitrary value to an ArrowSchema."""
+        return _TYPE_ADAPTER_ARROW_SCHEMA.validate_python(value)
 
 
 S = TypeVar("S", bound=ArrowSchema)
@@ -120,7 +139,8 @@ class PyArrowDatatype(str):
     @classmethod
     def validate(cls, value) -> Self:
         """Try to convert/validate an arbitrary value to a PyArrowDatatype."""
-        return _TYPE_ADAPTER.validate_python(value)
+        return _TYPE_ADAPTER_PYARROW_DATA_TYPE.validate_python(value)
 
 
-_TYPE_ADAPTER = TypeAdapter(PyArrowDatatype)
+_TYPE_ADAPTER_PYARROW_DATA_TYPE = TypeAdapter(PyArrowDatatype)
+_TYPE_ADAPTER_ARROW_SCHEMA = TypeAdapter(ArrowSchema)
