@@ -73,7 +73,7 @@ develop = [
     "wheel",
     # Full deps
     "cexprtk",
-    "csp>=0.0.4,<0.1",
+    "csp>=0.0.4,<0.9",
     "duckdb",
     "pandas",
     "plotly",
