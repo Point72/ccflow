@@ -40,6 +40,7 @@ __all__ = (
     "RegistryLookupContext",
     "RootModelRegistry",
     "REGISTRY_SEPARATOR",
+    "load_config",
     "ContextBase",
     "ContextType",
     "ResultBase",
@@ -708,27 +709,26 @@ def resolve_str(v: str) -> ModelType:
 
 def _find_parent_config_folder(config_dir: str = "config", config_name: str = "", *, basepath: str = ""):
     folder = pathlib.Path(basepath).resolve()
-    exists = (
-        (folder / config_dir).exists()
-        if not config_name
-        else ((folder / config_dir / f"{config_name}.yml").exists() or (folder / config_dir / f"{config_name}.yaml").exists())
-    )
+    exists = (folder / config_dir).exists() if not config_name else (folder / config_dir / f"{config_name}.yaml").exists()
+    if not exists and (folder / config_dir / f"{config_name}.yml").exists():
+        raise ValueError(
+            f"Found config_name `{config_name}` with `.yml` suffix, which is not recognized by hydra. Please rename to `{config_name}.yaml`."
+        )
     while not exists:
         folder = folder.parent
         if str(folder) == os.path.abspath(os.sep):
             raise FileNotFoundError(f"Could not find config folder: {config_dir} in folder {basepath}")
-        exists = (
-            (folder / config_dir).exists()
-            if not config_name
-            else ((folder / config_dir / f"{config_name}.yml").exists() or (folder / config_dir / f"{config_name}.yaml").exists())
-        )
+        exists = (folder / config_dir).exists() if not config_name else (folder / config_dir / f"{config_name}.yaml").exists()
+        if not exists and (folder / config_dir / f"{config_name}.yml").exists():
+            raise ValueError(
+                f"Found config_name `{config_name}` with `.yml` suffix, which is not recognized by hydra. Please rename to `{config_name}.yaml`."
+            )
 
     config_dir = (folder / config_dir).resolve()
     if not config_name:
         return folder.resolve(), config_dir, ""
-    elif (folder / config_dir / f"{config_name}.yml").exists():
-        return folder.resolve(), config_dir, (folder / config_dir / f"{config_name}.yml").resolve()
-    return folder.resolve(), config_dir, (folder / config_dir / f"{config_name}.yaml").resolve()
+    else:
+        return folder.resolve(), config_dir, (folder / config_dir / f"{config_name}.yaml").resolve()
 
 
 def load_config(

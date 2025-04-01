@@ -1,14 +1,23 @@
 from pathlib import Path
 
+import pytest
+
 from ccflow.base import load_config
 
 
-def test_root_config():
+@pytest.fixture
+def basepath():
+    # Because os.cwd may change depending on how tests are run
+    return str(Path(__file__).resolve().parent)
+
+
+def test_root_config(basepath):
     root_config_dir = str(Path(__file__).resolve().parent / "config")
     r = load_config(
         root_config_dir=root_config_dir,
         root_config_name="conf",
         overwrite=True,
+        basepath=basepath,
     )
     try:
         assert len(r.models)
@@ -18,7 +27,7 @@ def test_root_config():
         r.clear()
 
 
-def test_config_dir():
+def test_config_dir(basepath):
     root_config_dir = str(Path(__file__).resolve().parent / "config")
     config_dir = str(Path(__file__).resolve().parent / "config_user")
     r = load_config(
@@ -26,6 +35,7 @@ def test_config_dir():
         root_config_name="conf",
         config_dir=config_dir,
         overwrite=True,
+        basepath=basepath,
     )
     try:
         assert len(r.models)
@@ -35,7 +45,7 @@ def test_config_dir():
         r.clear()
 
 
-def test_config_name():
+def test_config_name(basepath):
     root_config_dir = str(Path(__file__).resolve().parent / "config")
     config_dir = str(Path(__file__).resolve().parent / "config_user")
     r = load_config(
@@ -44,6 +54,7 @@ def test_config_name():
         config_dir=config_dir,
         config_name="sample",
         overwrite=True,
+        basepath=basepath,
     )
     try:
         assert len(r.models)
@@ -55,51 +66,9 @@ def test_config_name():
         r.clear()
 
 
-def test_config_dir_with_overrides():
+def test_config_dir_with_overrides(basepath):
     root_config_dir = str(Path(__file__).resolve().parent / "config")
     config_dir = str(Path(__file__).resolve().parent)
-    r = load_config(
-        root_config_dir=root_config_dir,
-        root_config_name="conf",
-        config_dir=config_dir,
-        overrides=["+config_user=sample"],
-        overwrite=True,
-    )
-    try:
-        assert len(r.models)
-        assert "foo" in r.models
-        assert "bar" in r.models
-        assert "config_user" in r.models
-        assert "user_foo" in r["config_user"]
-    finally:
-        r.clear()
-
-
-def test_config_name_yml_not_yaml():
-    # TODO: Doesn't look like hydra supports yml
-    root_config_dir = str(Path(__file__).resolve().parent / "config")
-    config_dir = str(Path(__file__).resolve().parent / "config_user")
-    r = load_config(
-        root_config_dir=root_config_dir,
-        root_config_name="conf",
-        config_dir=config_dir,
-        config_name="sample2",
-        overwrite=True,
-    )
-    try:
-        assert len(r.models)
-        assert "foo" in r.models
-        assert "bar" in r.models
-        assert "config_user" in r.models
-        assert "user_bar" in r["config_user"]
-    finally:
-        r.clear()
-
-
-def test_config_dir_basepath():
-    root_config_dir = str(Path(__file__).resolve().parent / "config")
-    config_dir = "."
-    basepath = str(Path(__file__).resolve().parent)
     r = load_config(
         root_config_dir=root_config_dir,
         root_config_name="conf",
@@ -116,6 +85,20 @@ def test_config_dir_basepath():
         assert "user_foo" in r["config_user"]
     finally:
         r.clear()
+
+
+def test_config_name_yml_not_yaml(basepath):
+    root_config_dir = str(Path(__file__).resolve().parent / "config")
+    config_dir = str(Path(__file__).resolve().parent / "config_user")
+    with pytest.raises(ValueError):
+        load_config(
+            root_config_dir=root_config_dir,
+            root_config_name="conf",
+            config_dir=config_dir,
+            config_name="sample2",
+            overwrite=True,
+            basepath=basepath,
+        )
 
 
 def test_config_dir_basepath_malformed():
