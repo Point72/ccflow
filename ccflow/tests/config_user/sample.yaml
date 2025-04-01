@@ -1,0 +1,9 @@
+user_foo:
+    _target_: ccflow.tests.test_base_registry.MyTestModel
+    a: test
+    b: 0.0
+    c:
+        - i
+        - j
+    d:
+        k: 2.0
