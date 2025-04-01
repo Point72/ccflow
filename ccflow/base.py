@@ -4,6 +4,7 @@ import collections.abc
 import copy
 import inspect
 import logging
+import os
 import pathlib
 import platform
 import warnings
@@ -39,6 +40,7 @@ __all__ = (
     "RegistryLookupContext",
     "RootModelRegistry",
     "REGISTRY_SEPARATOR",
+    "load_config",
     "ContextBase",
     "ContextType",
     "ResultBase",
@@ -703,6 +705,82 @@ def resolve_str(v: str) -> ModelType:
         return search_registry[v]
     except KeyError:
         raise RegistryKeyError(f"Could not resolve model '{v}' in registry '{search_registry._debug_name}'")
+
+
+def _find_parent_config_folder(config_dir: str = "config", config_name: str = "", *, basepath: str = ""):
+    folder = pathlib.Path(basepath).resolve()
+    exists = (folder / config_dir).exists() if not config_name else (folder / config_dir / f"{config_name}.yaml").exists()
+    if not exists and (folder / config_dir / f"{config_name}.yml").exists():
+        raise ValueError(
+            f"Found config_name `{config_name}` with `.yml` suffix, which is not recognized by hydra. Please rename to `{config_name}.yaml`."
+        )
+    while not exists:
+        folder = folder.parent
+        if str(folder) == os.path.abspath(os.sep):
+            raise FileNotFoundError(f"Could not find config folder: {config_dir} in folder {basepath}")
+        exists = (folder / config_dir).exists() if not config_name else (folder / config_dir / f"{config_name}.yaml").exists()
+        if not exists and (folder / config_dir / f"{config_name}.yml").exists():
+            raise ValueError(
+                f"Found config_name `{config_name}` with `.yml` suffix, which is not recognized by hydra. Please rename to `{config_name}.yaml`."
+            )
+
+    config_dir = (folder / config_dir).resolve()
+    if not config_name:
+        return folder.resolve(), config_dir, ""
+    else:
+        return folder.resolve(), config_dir, (folder / config_dir / f"{config_name}.yaml").resolve()
+
+
+def load_config(
+    root_config_dir: str,
+    root_config_name: str,
+    config_dir: str = "config",
+    config_name: str = "",
+    overrides: Optional[List[str]] = None,
+    *,
+    overwrite: bool = False,
+    basepath: str = "",
+) -> RootModelRegistry:
+    """Helper function to load a hydra config into the root model registry.
+
+    Hydra configs can be pulled from multiple places:
+      1. A root configuration
+      2. An optional user-provided config directory, and within that, an optional config name.
+
+    Arguments:
+        root_config_dir: The directory containing the root hydra config. This is typically the location of the configs in, i.e. "config"
+         This is passed to hydra.initialize_config_dir to get the loading started.
+        root_config_name: The config name within the base directory, i.e. "conf"
+        config_dir: End user-provided additional directory to search for hydra configs.
+        config_name: An optional config name to look for within the `config_dir`. This allows you to specify a particular config file to load.
+        overrides: A list of hydra-style override strings to apply when loading the config.
+        overwrite: Whether to overwrite existing entries in the registry when loading the config.
+        basepath: The base path to start searching for the `config_dir`. This is useful when you want to load from an absolute (rather than relative) path.
+    """
+    # Heavy import, only import if used
+    import os
+
+    from hydra import compose, initialize_config_dir
+
+    overrides = overrides or []
+    with initialize_config_dir(config_dir=root_config_dir, version_base=None):
+        if config_dir:
+            hydra_folder, config_dir, _ = _find_parent_config_folder(config_dir=config_dir, config_name=config_name, basepath=basepath or os.getcwd())
+
+            cfg = compose(config_name=root_config_name, overrides=[], return_hydra_config=True)
+            searchpaths = cfg["hydra"]["searchpath"]
+            searchpaths.extend([hydra_folder, config_dir])
+            if config_name:
+                config_group = pathlib.Path(config_dir).resolve().name
+                overrides = [f"+{config_group}={config_name}", *overrides.copy(), f"hydra.searchpath=[{','.join(searchpaths)}]"]
+            else:
+                overrides = [*overrides.copy(), f"hydra.searchpath=[{','.join(searchpaths)}]"]
+
+        cfg = compose(config_name=root_config_name, overrides=overrides)
+
+    registry = ModelRegistry.root()
+    registry.load_config(cfg, overwrite=overwrite)
+    return registry
 
 
 class ResultBase(BaseModel):

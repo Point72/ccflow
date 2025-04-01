@@ -1,0 +1,6 @@
+user_bar:
+    _target_: ccflow.tests.test_base_registry.MyNestedModel
+    x: foo
+    y:  # Note that when type is defined on parent model, no need to specify _target_
+        a: test2
+        b: 2.0
