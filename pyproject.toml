@@ -76,6 +76,7 @@ develop = [
     "csp>=0.8.0,<1",
     "duckdb",
     "pandas",
+    "panel",  # For hydra config explain UI
     "plotly",
     "polars",
     "ray",
@@ -85,6 +86,7 @@ develop = [
     "pytest",
     "pytest-asyncio",
     "pytest-cov",
+    "pytest-mock",
     "pytest-sugar",
 ]
 test = [
