@@ -3,8 +3,9 @@ from datetime import date
 from unittest import TestCase
 
 import pandas as pd
+import pyarrow as pa
 
-from ccflow import DateContext, DateRangeContext, Evaluator, FlowOptionsOverride, ModelEvaluationContext
+from ccflow import DateContext, DateRangeContext, Evaluator, FlowOptionsOverride, ModelEvaluationContext, NullContext
 from ccflow.evaluators import (
     FallbackEvaluator,
     GraphEvaluator,
@@ -16,7 +17,7 @@ from ccflow.evaluators import (
     get_dependency_graph,
 )
 
-from .util import CircularModel, MyDateCallable, MyDateRangeCallable, MyRaisingCallable, NodeModel
+from .util import CircularModel, MyDateCallable, MyDateRangeCallable, MyRaisingCallable, NodeModel, ResultModel
 
 
 class TestCombineEvaluator(TestCase):
@@ -146,6 +147,42 @@ class TestLoggingEvaluator(TestCase):
         self.assertIn("Start evaluation of __call__", captured.records[0].getMessage())
         self.assertIn("End evaluation of __call__", captured.records[1].getMessage())
         self.assertIn("time elapsed", captured.records[1].getMessage())
+
+    def test_log_result(self):
+        m1 = MyDateCallable(offset=1)
+        context = DateContext(date=date(2022, 1, 1))
+        model_evaluation_context = ModelEvaluationContext(model=m1, context=context)
+        evaluator = LoggingEvaluator(log_level=logging.INFO, verbose=False, log_result=True)
+        with self.assertLogs(level=logging.INFO) as captured:
+            evaluator(model_evaluation_context)
+        self.assertEqual(len(captured.records), 3)
+        for i in range(3):
+            self.assertEqual(captured.records[i].levelno, logging.INFO)
+        self.assertIn("Start evaluation of __call__", captured.records[0].getMessage())
+        self.assertIn("Result of __call__", captured.records[1].getMessage())
+        self.assertIn("End evaluation of __call__", captured.records[2].getMessage())
+        self.assertIn("time elapsed", captured.records[2].getMessage())
+
+    def test_log_result_arrow(self):
+        m1 = ResultModel(result=pa.table({"col1": [1, 2], "col2": [3, 4]}))
+        context = NullContext()
+        model_evaluation_context = ModelEvaluationContext(model=m1, context=context)
+        evaluator = LoggingEvaluator(
+            log_level=logging.INFO,
+            verbose=False,
+            log_result=True,
+            format_config=dict(arrow_as_polars=True, polars_config={"tbl_width_chars": 160}, pandas_config={"display.width": 160}),
+        )
+        with self.assertLogs(level=logging.INFO) as captured:
+            evaluator(model_evaluation_context)
+        self.assertEqual(len(captured.records), 3)
+        for i in range(3):
+            self.assertEqual(captured.records[i].levelno, logging.INFO)
+        self.assertIn("Start evaluation of __call__", captured.records[0].getMessage())
+        self.assertIn("Result of __call__", captured.records[1].getMessage())
+        self.assertIn("'value': shape: (2, 2)", captured.records[1].getMessage())  # This should come from polars formatting of the table
+        self.assertIn("End evaluation of __call__", captured.records[2].getMessage())
+        self.assertIn("time elapsed", captured.records[2].getMessage())
 
     def test_logging_options_nested(self):
         m1 = MyDateCallable(offset=1)
