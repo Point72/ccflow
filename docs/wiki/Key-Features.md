@@ -39,32 +39,6 @@ The following table summarizes the available models.
 >
 > Some models are still in the process of being open sourced.
 
-| Name                      | Path           | Description |
-| :------------------------ | :------------- | :---------- |
-| `ArrowCSVReader`          | *Coming Soon!* |             |
-| `PandasCSVReader`         | *Coming Soon!* |             |
-| `ArrowDatasetReader`      | *Coming Soon!* |             |
-| `ArrowDatasetWriter`      | *Coming Soon!* |             |
-| `PandasDeltaReader`       | *Coming Soon!* |             |
-| `PandasDeltaWriter`       | *Coming Soon!* |             |
-| `FileEraser`              | *Coming Soon!* |             |
-| `MLFlowPublisherModel`    | *Coming Soon!* |             |
-| `CallableModelGroup`      | *Coming Soon!* |             |
-| `MultiplexerModel`        | *Coming Soon!* |             |
-| `PanderaValidator`        | *Coming Soon!* |             |
-| `ArrowParquetReader`      | *Coming Soon!* |             |
-| `PandasParquetReader`     | *Coming Soon!* |             |
-| `ArrowParquetWriter`      | *Coming Soon!* |             |
-| `PandasParquetWriter`     | *Coming Soon!* |             |
-| `MultiFieldParquetReader` | *Coming Soon!* |             |
-| `ArrowParquetCacher`      | *Coming Soon!* |             |
-| `SQLReader`               | *Coming Soon!* |             |
-| `SQLPollingReader`        | *Coming Soon!* |             |
-| `TableTransformModel`     | *Coming Soon!* |             |
-| `WaterfallModel`          | *Coming Soon!* |             |
-| `XArrayReader`            | *Coming Soon!* |             |
-| `XArrayWriter`            | *Coming Soon!* |             |
-
 ## Publishers
 
 `ccflow` also comes with a range of models for writing data.

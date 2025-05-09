@@ -15,6 +15,11 @@ Notes for editors:
 - [Key Features](Key-Features)
 - [First steps](First-Steps)
 
+**Tutorials**
+
+- [Configuration](Configuration)
+- [Workflows](Workflows)
+
 **Developer Guide**
 
 - [Contributing](Contribute)

@@ -47,7 +47,7 @@ class ArrowDateRangeResult(ArrowResult):
     With the generic ArrowResult there is no way to know which column might correspond to the dates in the date range.
     """
 
-    date_col: str = Field("The column corresponding to the date of the record. It must align with the context dates.")
+    date_col: str = Field(description="The column corresponding to the date of the record. It must align with the context dates.")
     context: DateRangeContext = Field(
         description="The context that generated the result. Validation will check that all the dates in the date_col are within the context range."
     )
