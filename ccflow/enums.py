@@ -123,14 +123,3 @@ def make_enum(name: str, values: Union[Dict[str, float], List], start=0):
         values = {k: v + start for v, k in enumerate(values)}
 
     return Enum(name, values, module=module_name)
-
-
-class CacheMode(Enum):
-    """Enum to represent handling of caches."""
-
-    CACHE = auto()
-    """Normal caching behavior"""
-    IGNORE = auto()
-    """Ignore the cache, always generate fresh data"""
-    REBUILD = auto()
-    """Ignore the cache, and write new data back to the cache"""

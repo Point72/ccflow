@@ -4,7 +4,6 @@ import collections.abc
 import copy
 import inspect
 import logging
-import os
 import pathlib
 import platform
 import warnings
@@ -707,30 +706,6 @@ def resolve_str(v: str) -> ModelType:
         raise RegistryKeyError(f"Could not resolve model '{v}' in registry '{search_registry._debug_name}'")
 
 
-def _find_parent_config_folder(config_dir: str = "config", config_name: str = "", *, basepath: str = ""):
-    folder = pathlib.Path(basepath).resolve()
-    exists = (folder / config_dir).exists() if not config_name else (folder / config_dir / f"{config_name}.yaml").exists()
-    if not exists and (folder / config_dir / f"{config_name}.yml").exists():
-        raise ValueError(
-            f"Found config_name `{config_name}` with `.yml` suffix, which is not recognized by hydra. Please rename to `{config_name}.yaml`."
-        )
-    while not exists:
-        folder = folder.parent
-        if str(folder) == os.path.abspath(os.sep):
-            raise FileNotFoundError(f"Could not find config folder: {config_dir} in folder {basepath}")
-        exists = (folder / config_dir).exists() if not config_name else (folder / config_dir / f"{config_name}.yaml").exists()
-        if not exists and (folder / config_dir / f"{config_name}.yml").exists():
-            raise ValueError(
-                f"Found config_name `{config_name}` with `.yml` suffix, which is not recognized by hydra. Please rename to `{config_name}.yaml`."
-            )
-
-    config_dir = (folder / config_dir).resolve()
-    if not config_name:
-        return folder.resolve(), config_dir, ""
-    else:
-        return folder.resolve(), config_dir, (folder / config_dir / f"{config_name}.yaml").resolve()
-
-
 def load_config(
     root_config_dir: str,
     root_config_name: str,
@@ -757,29 +732,11 @@ def load_config(
         overwrite: Whether to overwrite existing entries in the registry when loading the config.
         basepath: The base path to start searching for the `config_dir`. This is useful when you want to load from an absolute (rather than relative) path.
     """
-    # Heavy import, only import if used
-    import os
+    import ccflow.utils.hydra
 
-    from hydra import compose, initialize_config_dir
-
-    overrides = overrides or []
-    with initialize_config_dir(config_dir=root_config_dir, version_base=None):
-        if config_dir:
-            hydra_folder, config_dir, _ = _find_parent_config_folder(config_dir=config_dir, config_name=config_name, basepath=basepath or os.getcwd())
-
-            cfg = compose(config_name=root_config_name, overrides=[], return_hydra_config=True)
-            searchpaths = cfg["hydra"]["searchpath"]
-            searchpaths.extend([hydra_folder, config_dir])
-            if config_name:
-                config_group = pathlib.Path(config_dir).resolve().name
-                overrides = [f"+{config_group}={config_name}", *overrides.copy(), f"hydra.searchpath=[{','.join(searchpaths)}]"]
-            else:
-                overrides = [*overrides.copy(), f"hydra.searchpath=[{','.join(searchpaths)}]"]
-
-        cfg = compose(config_name=root_config_name, overrides=overrides)
-
+    result = ccflow.utils.hydra.load_config(root_config_dir, root_config_name, config_dir, config_name, overrides, basepath=basepath, debug=False)
     registry = ModelRegistry.root()
-    registry.load_config(cfg, overwrite=overwrite)
+    registry.load_config(result.cfg, overwrite=overwrite)
     return registry
 
 
