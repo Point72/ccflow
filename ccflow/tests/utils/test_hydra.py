@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from ccflow.utils.hydra import load_config
+from ccflow.utils.hydra import get_args_parser, load_config
 
 
 @pytest.fixture
@@ -171,25 +171,36 @@ def mock_args(mocker, basepath, request):
     argv = ["dummy", "--config-path", root_config_dir, "--config-name", "conf", "--config-dir", config_dir, "--basepath", basepath]
     if request.param == "--no-gui":
         argv += ["--no-gui"]
+    elif request.param == "--gui":
+        argv += ["--port=8080"]
     argv += ["+config_user=sample"]
     mocker.patch.object(sys, "argv", argv)
+    return request.param
 
 
-def test_cfg_explain_cli_args(mock_args):
+def test_cfg_explain_cli_args(mock_args, request):
     """Test that the mocking of the argparse args works correctly in isolation"""
-    from ccflow.utils.hydra import _get_args_parser
 
-    parser = _get_args_parser()
+    parser = get_args_parser()
+    if mock_args == "--gui":
+        parser.add_argument("--port", type=int, default=8080, help="Port for the GUI")
     args = parser.parse_args()
     assert args.overrides == ["+config_user=sample"]
     assert args.config_name == "conf"
-    assert args.port == 8080
+    if mock_args == "--gui":
+        assert args.port == 8080
 
 
 def test_cfg_explain_cli(mock_args, mocker, capsys):
     """Test that the CLI works correctly with the mocked args"""
     from ccflow.utils.hydra import cfg_explain_cli
 
-    mocker.patch("panel.serve")
+    if mock_args == "--gui":
+        parser = get_args_parser()
+        parser.add_argument("--port", type=int, default=8080, help="Port for the GUI")
+        cfg_explain_cli(args_parser=parser, ui_launcher=lambda cfg, port, **kwargs: print(f"Launching UI on port {port}"))
+        captured = capsys.readouterr()
+        assert "Launching UI on port 8080" in captured.out
 
-    cfg_explain_cli()
+    else:
+        cfg_explain_cli()

@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from pprint import pprint
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from hydra._internal.defaults_list import DefaultsList
 from omegaconf import DictConfig, OmegaConf
@@ -209,7 +209,7 @@ def load_config(
     return result
 
 
-def _get_args_parser() -> argparse.ArgumentParser:
+def get_args_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(add_help=True, description="Hydra Config Audit Tool")
     parser.add_argument(
         "overrides",
@@ -249,24 +249,26 @@ def _get_args_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable the GUI",
     )
-    parser.add_argument(
-        "--port",
-        default=8080,
-        help="The port to run the GUI on",
-    )
     return parser
 
 
-def cfg_explain_cli(config_path: str = "", config_name: str = "", hydra_main: Optional[Callable] = None):
+def cfg_explain_cli(
+    config_path: str = "",
+    config_name: str = "",
+    hydra_main: Optional[Callable] = None,
+    args_parser: argparse.ArgumentParser = None,
+    ui_launcher: Callable[[Dict[str, Any], ...], None] = None,
+):
     """CLI entry point for hydra config explain
 
     Parameters:
         config_path: The config_path specified in hydra.main()
         config_name: The config_name specified in hydra.main()
         hydra_main: The module in which hydra.main() is declared. This is used to find the config_path and config_name.
-
+        args_parser: An optionally extended version of the argparser returned by `get_args_parser` to add UI arguments
+        ui_launcher: A callable that takes the config dict and the parsed args and launches a custom display.
     """
-    parser = _get_args_parser()
+    parser = args_parser or get_args_parser()
     args = parser.parse_args()
 
     if args.config_path:
@@ -296,39 +298,10 @@ def cfg_explain_cli(config_path: str = "", config_name: str = "", hydra_main: Op
 
     if args.no_gui:
         pprint(merged_cfg, width=120, indent=2)
+    elif ui_launcher is not None:
+        ui_launcher(merged_cfg, **vars(args))
     else:
-        cfg_viewer_serve(merged_cfg, port=args.port, show=True, title=f"Hydra Explain:{root_config_dir}/{root_config_name}")
-
-
-def cfg_viewer_app(cfg):
-    """Return a panel widget to display the config
-
-    Parameters:
-        cfg: The config to display
-    """
-    import panel as pn
-
-    viewer = pn.widgets.JSONEditor(value=cfg, width=1200, mode="view")
-    return viewer
-
-
-def cfg_viewer_serve(cfg, **kwargs):
-    """Run the explain app.
-
-    Parameters:
-        cfg: The config to dispay
-    """
-    try:
-        import panel as pn
-    except ImportError:
-        raise ImportError("Panel is not installed. Please install it with `pip install panel`.")
-
-    pn.extension()
-    pn.extension("jsoneditor")
-
-    app = cfg_viewer_app(cfg)
-    app.servable()
-    pn.serve(app, **kwargs)
+        raise ValueError("Cannot launch UI, no ui_launcher provided. Use --no-gui to print the results.")
 
 
 if __name__ == "__main__":

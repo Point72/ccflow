@@ -76,7 +76,6 @@ develop = [
     "csp>=0.8.0,<1",
     "duckdb",
     "pandas",
-    "panel",  # For hydra config explain UI
     "plotly",
     "polars",
     "ray",
