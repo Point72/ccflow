@@ -14,7 +14,7 @@ It is intended to be flexible enough to handle diverse use cases, including data
 Central to `ccflow` is the `BaseModel` class.
 `BaseModel` is the base class for models in the `ccflow` framework.
 A model is basically a data class (class with attributes).
-The naming was inspired by the open source library [Pydantic](https://docs.pydantic.dev/latest/)(`BaseModel` actually inherits from the Pydantic base model class).
+The naming was inspired by the open source library [Pydantic](https://docs.pydantic.dev/latest/) (`BaseModel` actually inherits from the Pydantic base model class).
 
 ## Callable Model
 
@@ -59,7 +59,7 @@ The following table summarizes the "publisher" models.
 | `JSONPublisher`             | `ccflow.publishers` | Publish data to file in JSON format.                                                                                                                        |
 | `PandasFilePublisher`       | `ccflow.publishers` | Publish a pandas data frame to a file using an appropriate method on pd.DataFrame. For large-scale exporting (using parquet), see `PandasParquetPublisher`. |
 | `PicklePublisher`           | `ccflow.publishers` | Publish data to a pickle file.                                                                                                                              |
-| `PydanticJSONPublisher`     | `ccflow.publishers` | Publish a pydantic model to a json file. See https://docs.pydantic.dev/latest/concepts/serialization/#modeljson                                             |
+| `PydanticJSONPublisher`     | `ccflow.publishers` | Publish a pydantic model to a json file. See [Pydantic modeljson](https://docs.pydantic.dev/latest/concepts/serialization/#modeljson)                       |
 | `YAMLPublisher`             | `ccflow.publishers` | Publish data to file in YAML format.                                                                                                                        |
 | `CompositePublisher`        | `ccflow.publishers` | Highly configurable, publisher that decomposes a pydantic BaseModel or a dictionary into pieces and publishes each piece separately.                        |
 | `ArrowDatasetPublisher`     | *Coming Soon!*      |                                                                                                                                                             |
