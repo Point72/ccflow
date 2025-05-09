@@ -5,13 +5,27 @@ from typing import Any, ClassVar, List, Optional
 import pandas as pd
 from pydantic import PrivateAttr
 
-from ccflow import CallableModel, DateContext, DateRangeContext, Flow, GenericResult, GraphDepList, ResultBase
+from ccflow import CallableModel, DateContext, DateRangeContext, Flow, GenericContext, GenericResult, GraphDepList, ResultBase
 
 log = logging.getLogger(__name__)
 
 
 class MyResult(ResultBase):
     x: int
+
+
+class IdentityModel(CallableModel):
+    @Flow.call
+    def __call__(self, context: GenericContext) -> GenericResult:
+        return context
+
+
+class ResultModel(CallableModel):
+    result: GenericResult
+
+    @Flow.call
+    def __call__(self, context: GenericContext) -> GenericResult:
+        return self.result
 
 
 class MyDateCallable(CallableModel):
