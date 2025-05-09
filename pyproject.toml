@@ -85,6 +85,7 @@ develop = [
     "pytest",
     "pytest-asyncio",
     "pytest-cov",
+    "pytest-mock",
     "pytest-sugar",
 ]
 test = [
