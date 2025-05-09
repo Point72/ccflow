@@ -1,11 +1,11 @@
 - [Workflows with `ccflow`](#workflows-with-ccflow)
   - [Result Type](#result-type)
-    - [GenericResult](#genericresult)
+    - [`GenericResult`](#genericresult)
     - [Common Result Types](#common-result-types)
     - [Custom Results](#custom-results)
   - [Context](#context)
-    - [NullContext](#nullcontext)
-    - [GenericContext](#genericcontext)
+    - [`NullContext`](#nullcontext)
+    - [`GenericContext`](#genericcontext)
     - [Common Context Types](#common-context-types)
     - [Custom Contexts](#custom-contexts)
     - [Properties](#properties)
@@ -20,7 +20,7 @@
 
 # Workflows with `ccflow`
 
-As described in the [Workflow Design Goals](Design-Goals#workflow-design-goals), `ccflow` wishes to make it easy to define (via configuration) the tasks/steps that make up a workflow. In the [Using Configuration](#Using-Configuration) section and in some of the examples above, we described how to bind functionality to the configuration by adding `__call__` methods to the models.
+As described in the [Workflow Design Goals](Design-Goals#workflow-design-goals), `ccflow` wishes to make it easy to define (via configuration) the tasks/steps that make up a workflow. In the [Using Configuration](Configuration#using-configuration) section and in some of the examples on that page, we described how to bind functionality to the configuration by adding `__call__` methods to the models.
 
 In `ccflow` we formalize this pattern, by introducing the following
 
@@ -86,7 +86,7 @@ print(GenericResult.model_validate("Any string"))
 ### Common Result Types
 
 `ccflow` provides some other result types to make it easy to work with common data structures.
-These include `PandasResult`, `NDArrayResult`, `ArrowResult`, `XArrayResult` and `NarwhalsFrameResult` (for generic compatibility across dataframe libraries using the excellent [`narwhals`](https://narwhals-dev.github.io/narwhals/) library).
+These include `PandasResult`, `NDArrayResult`, `ArrowResult`, `XArrayResult` and `NarwhalsFrameResult` (for generic compatibility across dataframe libraries using the excellent [Narwhals](https://narwhals-dev.github.io/narwhals/) library).
 Each of these types is designed to hold a specific type of data structure (which will be validated via pydantic), and they all inherit from `ResultBase` to ensure compatibility with the workflow system.
 
 ### Custom Results

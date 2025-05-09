@@ -13,7 +13,7 @@ Notes for editors:
 - [Installation](Installation)
 - [Design Goals](Design-Goals)
 - [Key Features](Key-Features)
-- [First steps](First-Steps)
+- [First Steps](First-Steps)
 
 **Tutorials**
 
