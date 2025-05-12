@@ -170,7 +170,7 @@ print(GenericContext[str].model_validate(100))
 
 ```python
 from datetime import date
-from cubist_core.flow import (
+from ccflow import (
     DateContext,
     DateRangeContext,
     UniverseContext,
@@ -223,7 +223,7 @@ With the context and result types defined, we are now ready to define a workflow
 Following the design objectives, and the exposition of how best to use configuration objects, we define a `CallableModel` abstract base class, which is essentially a configurable object where one must implement the `__call__` method as a function of the context. It has a few other features which we will explore below.
 Note that since every CallableModel is a BaseModel, this class is configurable using all the configuration logic described in the Configuration Tutorial. In particular any workflow step can be named and added to the registry for later reference.
 
-First, we illustrate a trivial example of defining a `CallableModel` that implements the "(FizzBuzz)[https://en.wikipedia.org/wiki/Fizz_buzz]" programming problem. operating on a `GenericContext` and returning a `GenericResult`
+First, we illustrate a trivial example of defining a `CallableModel` that implements the "[FizzBuzz](https://en.wikipedia.org/wiki/Fizz_buzz)" programming problem. operating on a `GenericContext` and returning a `GenericResult`
 
 ```python
 from ccflow import CallableModel, Flow, GenericResult, GenericContext
@@ -354,7 +354,7 @@ An example of the former is to change the log level for all model evaluations:
 ```python
 import logging
 
-from cubist_core.flow import FlowOptionsOverride
+from ccflow import FlowOptionsOverride
 
 logger = logging.getLogger()
 logger.setLevel(logging.WARN)
