@@ -26,7 +26,7 @@
 
 ## Pydantic for Configuration
 
-Let's dive deeper into some of the ideas from the First Steps, focusing on how we leverage features of `pydantic` for the purposes of configuration.
+Let's dive deeper into some of the ideas from the [First Steps](First-Steps), focusing on how we leverage features of `pydantic` for the purposes of configuration.
 
 ```python
 from ccflow import BaseModel, ModelRegistry
