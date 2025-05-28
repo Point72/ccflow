@@ -1,9 +1,8 @@
 import pickle
-from typing import IO, Any, Callable, Dict, Generic
+from typing import IO, TYPE_CHECKING, Any, Callable, Dict, Generic
 
 import pandas as pd
 import yaml
-from cloudpathlib import AnyPath
 from pydantic import Field, field_validator
 from typing_extensions import Literal, override
 
@@ -21,6 +20,9 @@ __all__ = (
     "PydanticJSONPublisher",
     "YAMLPublisher",
 )
+
+if TYPE_CHECKING:
+    from cloudpathlib import AnyPath
 
 
 def _write_to_io(data: Any, f: IO, **kwargs):
@@ -46,7 +48,9 @@ class GenericFilePublisher(BasePublisher):
     kwargs: Dict[str, Any] = Field({}, description="The kwargs to pass to the dump function")
 
     @override
-    def __call__(self) -> AnyPath:
+    def __call__(self) -> "AnyPath":
+        from cloudpathlib import AnyPath  # Expensive import
+
         if self.data is None:
             raise ValueError("'data' field must be set before publishing")
         # This uses cloudpathlib's AnyPath so that S3 paths are supported
@@ -69,7 +73,7 @@ class JSONPublisher(BasePublisher):
     kwargs: Dict[str, Any] = Field(default_factory=dict)
 
     @override
-    def __call__(self) -> AnyPath:
+    def __call__(self) -> "AnyPath":
         return GenericFilePublisher(
             name=self.name,
             name_params=self.name_params,
@@ -86,7 +90,7 @@ class YAMLPublisher(BasePublisher):
     kwargs: Dict[str, Any] = Field(default_factory=dict)
 
     @override
-    def __call__(self) -> AnyPath:
+    def __call__(self) -> "AnyPath":
         return GenericFilePublisher(
             name=self.name,
             name_params=self.name_params,
@@ -104,7 +108,7 @@ class PicklePublisher(BasePublisher):
     kwargs: Dict[str, Any] = Field(default_factory=dict)
 
     @override
-    def __call__(self) -> AnyPath:
+    def __call__(self) -> "AnyPath":
         kwargs = self.kwargs.copy()
         kwargs["protocol"] = self.protocol
         return GenericFilePublisher(
@@ -126,7 +130,7 @@ class DictTemplateFilePublisher(BasePublisher):
     template: JinjaTemplate
 
     @override
-    def __call__(self) -> AnyPath:
+    def __call__(self) -> "AnyPath":
         data = self.template.template.render(**self.data)
         return GenericFilePublisher(
             name=self.name,
@@ -154,7 +158,7 @@ class PydanticJSONPublisher(BasePublisher, Generic[PydanticModelType]):
         file.write(out)
 
     @override
-    def __call__(self) -> AnyPath:
+    def __call__(self) -> "AnyPath":
         kwargs = self.options.model_dump(mode="python")
         kwargs.update(self.kwargs)
         return GenericFilePublisher(
@@ -180,7 +184,7 @@ class PandasFilePublisher(BasePublisher):
     mode: Literal["w", "wb"] = "w"
 
     @override
-    def __call__(self) -> AnyPath:
+    def __call__(self) -> "AnyPath":
         return GenericFilePublisher(
             name=self.name,
             name_params=self.name_params,
