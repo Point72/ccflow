@@ -1,11 +1,11 @@
 import pickle
 import platform
 import unittest
-from typing import ClassVar, Dict, List, Optional, Type, Union
+from typing import Annotated, ClassVar, Dict, List, Optional, Type, Union
 
 import numpy as np
 from packaging import version
-from pydantic import BaseModel as PydanticBaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field, ValidationError
 
 from ccflow import BaseModel, NDArray
 from ccflow.enums import Enum
@@ -94,8 +94,8 @@ class H_int8(BaseModel):
 class MultiAttributeModel(BaseModel):
     z: int
     y: str
-    x: float
-    w: bool
+    x: float = Field(defualt=0.0)
+    w: Annotated[bool, None]
 
 
 class TestBaseModelSerialization(unittest.TestCase):
@@ -253,10 +253,11 @@ class TestBaseModelSerialization(unittest.TestCase):
         self.assertEqual(str(annotations["a7"]), str(target["a7"]))
 
     def test_pickle_consistency(self):
-        m = MultiAttributeModel(z=1, y="test", x=3.14, w=True)
-        serialized = pickle.dumps(m)
+        model = MultiAttributeModel(z=1, y="test", x=3.14, w=True)
+        serialized = pickle.dumps(model)
         # Hard code the pickled form of the model because it shouldn't change from run to run
         # (as it would normally in pydantic because of https://github.com/pydantic/pydantic/issues/11603)
+        # This is generated on Linux/Python 3.11 - might need to have version specific values if it changes.
         target = (
             b"\x80\x04\x95\xdf\x00\x00\x00\x00\x00\x00\x00\x8c ccflow.tests.test_base_seri"
             b"alize\x94\x8c\x13MultiAttributeModel\x94\x93\x94)\x81\x94}\x94(\x8c\x08__"
@@ -266,3 +267,5 @@ class TestBaseModelSerialization(unittest.TestCase):
             b"__pydantic_private__\x94}\x94\x8c\x0e_registrations\x94]\x94sub."
         )
         self.assertEqual(serialized, target)
+        deserialized = pickle.loads(serialized)
+        self.assertEqual(model, deserialized)
