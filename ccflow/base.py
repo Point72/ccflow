@@ -254,6 +254,16 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
 
         return handler(v)
 
+    # Override pickling to work around https://github.com/pydantic/pydantic/issues/11603 (same use case)
+    def __getstate__(self):
+        state = super().__getstate__()
+        state["__pydantic_fields_set__"] = sorted(state["__pydantic_fields_set__"])
+        return state
+
+    def __setstate__(self, state):
+        state["__pydantic_fields_set__"] = set(state["__pydantic_fields_set__"])
+        super().__setstate__(state)
+
 
 class _ModelRegistryData(PydanticBaseModel):
     """A data structure representation of the model registry, without the associated functionality"""
