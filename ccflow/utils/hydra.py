@@ -135,6 +135,7 @@ def load_config(
     config_name: str = "",
     overrides: Optional[List[str]] = None,
     *,
+    version_base: Optional[str] = None,
     basepath: str = "",
     debug: bool = False,
 ) -> ConfigLoadResult:
@@ -153,6 +154,7 @@ def load_config(
         config_dir: End user-provided additional directory to search for hydra configs.
         config_name: An optional config name to look for within the `config_dir`. This allows you to specify a particular config file to load.
         overrides: A list of hydra-style override strings to apply when loading the config.
+        version_base: See https://hydra.cc/docs/upgrades/version_base/
         basepath: The base path to start searching for the `config_dir`. This is useful when you want to load from an absolute (rather than relative) path.
         debug: (Experimental) Whether to enable debug mode. This will return more information about the configs on ConfigLoadResult.
     """
@@ -162,7 +164,7 @@ def load_config(
     from hydra import compose, initialize_config_dir
 
     overrides = overrides or []
-    with initialize_config_dir(config_dir=root_config_dir, version_base=None):
+    with initialize_config_dir(config_dir=root_config_dir, version_base=version_base):
         if config_dir:
             hydra_folder, config_dir, _ = _find_parent_config_folder(config_dir=config_dir, config_name=config_name, basepath=basepath or os.getcwd())
 
