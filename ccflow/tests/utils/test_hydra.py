@@ -12,15 +12,22 @@ def basepath():
     return str(Path(__file__).resolve().parent.parent)
 
 
-def test_root_config(basepath):
+@pytest.mark.parametrize("return_hydra_config", [True, False])
+def test_root_config(basepath, return_hydra_config):
     root_config_dir = str(Path(__file__).resolve().parent.parent / "config")
-    result = load_config(root_config_dir=root_config_dir, root_config_name="conf", basepath=basepath, debug=False)
+    result = load_config(
+        root_config_dir=root_config_dir, root_config_name="conf", basepath=basepath, debug=False, return_hydra_config=return_hydra_config
+    )
     assert result.root_config_dir == root_config_dir
     assert result.root_config_name == "conf"
     assert result.cfg
     assert result.cfg_sources is None
     assert result.defaults_list is None
     assert result.group_options is None
+    if return_hydra_config:
+        assert "hydra" in result.cfg
+    else:
+        assert "hydra" not in result.cfg
 
 
 def test_config_dir(basepath):
@@ -161,6 +168,13 @@ def test_debug(basepath):
     assert "source_file" in merged["config_user"]["user_foo"]["a"]
     assert "value_raw" in merged["config_user"]["user_foo"]["a"]
     assert "value_interp" in merged["config_user"]["user_foo"]["a"]
+
+
+def test_debug_and_return_hydra_config(basepath):
+    root_config_dir = str(Path(__file__).resolve().parent.parent / "config")
+
+    with pytest.raises(ValueError):
+        load_config(root_config_dir=root_config_dir, root_config_name="conf", basepath=basepath, debug=True, return_hydra_config=True)
 
 
 @pytest.fixture(params=["--no-gui", "--gui"])
