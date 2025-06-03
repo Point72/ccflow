@@ -177,7 +177,7 @@ def load_config(
             else:
                 overrides = [*overrides.copy(), f"hydra.searchpath=[{','.join(searchpaths)}]"]
 
-        cfg = compose(config_name=root_config_name, overrides=overrides)
+        cfg = compose(config_name=root_config_name, overrides=overrides, return_hydra_config=True)
         result = ConfigLoadResult(root_config_dir=root_config_dir, root_config_name=root_config_name, cfg=cfg)
         if debug:
             import yaml
@@ -193,7 +193,7 @@ def load_config(
                     return _dict_add_source(res, args[0].name)
 
                 yaml.load = yaml_load
-                result.cfg_sources = compose(config_name=root_config_name, overrides=overrides)
+                result.cfg_sources = compose(config_name=root_config_name, overrides=overrides, return_hydra_config=True)
             finally:
                 yaml.load = original_yaml_load
 
