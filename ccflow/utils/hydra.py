@@ -136,6 +136,7 @@ def load_config(
     overrides: Optional[List[str]] = None,
     *,
     version_base: Optional[str] = None,
+    return_hydra_config: bool = False,
     basepath: str = "",
     debug: bool = False,
 ) -> ConfigLoadResult:
@@ -155,6 +156,7 @@ def load_config(
         config_name: An optional config name to look for within the `config_dir`. This allows you to specify a particular config file to load.
         overrides: A list of hydra-style override strings to apply when loading the config.
         version_base: See https://hydra.cc/docs/upgrades/version_base/
+        return_hydra_config: Whether to return the hydra config as well. Note this does not work with debug=True.
         basepath: The base path to start searching for the `config_dir`. This is useful when you want to load from an absolute (rather than relative) path.
         debug: (Experimental) Whether to enable debug mode. This will return more information about the configs on ConfigLoadResult.
     """
@@ -162,6 +164,9 @@ def load_config(
     import os
 
     from hydra import compose, initialize_config_dir
+
+    if return_hydra_config and debug:
+        raise ValueError("Cannot return hydra config and debug=True at the same time. Please set return_hydra_config=False.")
 
     overrides = overrides or []
     with initialize_config_dir(config_dir=root_config_dir, version_base=version_base):
@@ -177,7 +182,7 @@ def load_config(
             else:
                 overrides = [*overrides.copy(), f"hydra.searchpath=[{','.join(searchpaths)}]"]
 
-        cfg = compose(config_name=root_config_name, overrides=overrides, return_hydra_config=True)
+        cfg = compose(config_name=root_config_name, overrides=overrides, return_hydra_config=return_hydra_config)
         result = ConfigLoadResult(root_config_dir=root_config_dir, root_config_name=root_config_name, cfg=cfg)
         if debug:
             import yaml
@@ -193,7 +198,8 @@ def load_config(
                     return _dict_add_source(res, args[0].name)
 
                 yaml.load = yaml_load
-                result.cfg_sources = compose(config_name=root_config_name, overrides=overrides, return_hydra_config=True)
+                # We can't load the hydra config after monkey patching yaml loading, so skip that step
+                result.cfg_sources = compose(config_name=root_config_name, overrides=overrides, return_hydra_config=False)
             finally:
                 yaml.load = original_yaml_load
 
