@@ -5,6 +5,6 @@ __all__ = ("StreamHandler", "FileHandler")
 
 
 class FileHandler(BaseFileHandler):
-    def __init__(self, filename, mode="a", encoding=None, delay=False):
+    def __init__(self, filename, *args, **kwargs):
         Path(filename).parent.mkdir(parents=True, exist_ok=True)
-        super().__init__(filename, mode, encoding, delay)
+        super().__init__(filename, *args, **kwargs)
