@@ -139,7 +139,7 @@ class DictTemplateFilePublisher(BasePublisher):
 class PydanticJSONPublisher(BasePublisher, Generic[PydanticModelType]):
     """Publish a pydantic model to a json file.
 
-    See https://docs.pydantic.dev/latest/concepts/serialization/#modeljson
+    See https://docs.pydantic.dev/latest/concepts/serialization/#modelmodel_dump
     """
 
     data: PydanticModelType = None

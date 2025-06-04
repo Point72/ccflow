@@ -52,25 +52,30 @@ The following table summarizes the "publisher" models.
 >
 > Some models are still in the process of being open sourced.
 
-| Name                        | Path                | Description                                                                                                                                                 |
-| :-------------------------- | :------------------ | :---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DictTemplateFilePublisher` | `ccflow.publishers` | Publish data to a file after populating a Jinja template.                                                                                                   |
-| `GenericFilePublisher`      | `ccflow.publishers` | Publish data using a generic "dump" Callable. Uses `smart_open` under the hood so that local and cloud paths are supported.                                 |
-| `JSONPublisher`             | `ccflow.publishers` | Publish data to file in JSON format.                                                                                                                        |
-| `PandasFilePublisher`       | `ccflow.publishers` | Publish a pandas data frame to a file using an appropriate method on pd.DataFrame. For large-scale exporting (using parquet), see `PandasParquetPublisher`. |
-| `PicklePublisher`           | `ccflow.publishers` | Publish data to a pickle file.                                                                                                                              |
-| `PydanticJSONPublisher`     | `ccflow.publishers` | Publish a pydantic model to a json file. See [Pydantic modeljson](https://docs.pydantic.dev/latest/concepts/serialization/#modeljson)                       |
-| `YAMLPublisher`             | `ccflow.publishers` | Publish data to file in YAML format.                                                                                                                        |
-| `CompositePublisher`        | `ccflow.publishers` | Highly configurable, publisher that decomposes a pydantic BaseModel or a dictionary into pieces and publishes each piece separately.                        |
-| `ArrowDatasetPublisher`     | *Coming Soon!*      |                                                                                                                                                             |
-| `PandasDeltaPublisher`      | *Coming Soon!*      |                                                                                                                                                             |
-| `EmailPublisher`            | *Coming Soon!*      |                                                                                                                                                             |
-| `MatplotlibFilePublisher`   | *Coming Soon!*      |                                                                                                                                                             |
-| `MLFlowArtifactPublisher`   | *Coming Soon!*      |                                                                                                                                                             |
-| `MLFlowPublisher`           | *Coming Soon!*      |                                                                                                                                                             |
-| `PandasParquetPublisher`    | *Coming Soon!*      |                                                                                                                                                             |
-| `PlotlyFilePublisher`       | *Coming Soon!*      |                                                                                                                                                             |
-| `XArrayPublisher`           | *Coming Soon!*      |                                                                                                                                                             |
+| Name                         | Path                | Description                                                                                                                                                 |
+| :--------------------------- | :------------------ | :---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DictTemplateFilePublisher`  | `ccflow.publishers` | Publish data to a file after populating a Jinja template.                                                                                                   |
+| `GenericFilePublisher`       | `ccflow.publishers` | Publish data using a generic "dump" Callable. Uses `smart_open` under the hood so that local and cloud paths are supported.                                 |
+| `JSONPublisher`              | `ccflow.publishers` | Publish data to file in JSON format.                                                                                                                        |
+| `PandasFilePublisher`        | `ccflow.publishers` | Publish a pandas data frame to a file using an appropriate method on pd.DataFrame. For large-scale exporting (using parquet), see `PandasParquetPublisher`. |
+| `PicklePublisher`            | `ccflow.publishers` | Publish data to a pickle file.                                                                                                                              |
+| `PydanticJSONPublisher`      | `ccflow.publishers` | Publish a pydantic model to a json file. See [Pydantic modeljson](https://docs.pydantic.dev/latest/concepts/serialization/#modelmodel_dump)                 |
+| `YAMLPublisher`              | `ccflow.publishers` | Publish data to file in YAML format.                                                                                                                        |
+| `CompositePublisher`         | `ccflow.publishers` | Highly configurable, publisher that decomposes a pydantic BaseModel or a dictionary into pieces and publishes each piece separately.                        |
+| `PrintPublisher`             | `ccflow.publishers` | Print data using python standard print.                                                                                                                     |
+| `LogPublisher`               | `ccflow.publishers` | Print data using python standard logging.                                                                                                                   |
+| `PrintJSONPublisher`         | `ccflow.publishers` | Print data in JSON format.                                                                                                                                  |
+| `PrintYAMLPublisher`         | `ccflow.publishers` | Print data in YAML format.                                                                                                                                  |
+| `PrintPydanticJSONPublisher` | `ccflow.publishers` | Print pydantic model as json. See https://docs.pydantic.dev/latest/concepts/serialization/#modelmodel_dump_json                                             |
+| `ArrowDatasetPublisher`      | *Coming Soon!*      |                                                                                                                                                             |
+| `PandasDeltaPublisher`       | *Coming Soon!*      |                                                                                                                                                             |
+| `EmailPublisher`             | *Coming Soon!*      |                                                                                                                                                             |
+| `MatplotlibFilePublisher`    | *Coming Soon!*      |                                                                                                                                                             |
+| `MLFlowArtifactPublisher`    | *Coming Soon!*      |                                                                                                                                                             |
+| `MLFlowPublisher`            | *Coming Soon!*      |                                                                                                                                                             |
+| `PandasParquetPublisher`     | *Coming Soon!*      |                                                                                                                                                             |
+| `PlotlyFilePublisher`        | *Coming Soon!*      |                                                                                                                                                             |
+| `XArrayPublisher`            | *Coming Soon!*      |                                                                                                                                                             |
 
 ## Evaluators
 
