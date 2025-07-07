@@ -1,6 +1,7 @@
-import subprocess
 from datetime import datetime
 from pathlib import Path
+from socket import gethostname
+from subprocess import check_output
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -40,6 +41,9 @@ OmegaConf.register_new_resolver("replace", lambda input_val, orig_val, replace_v
 # Provides a path to the current user's home directory
 OmegaConf.register_new_resolver("user_home", lambda: str(Path.home()))
 
+# Provides the machine hostname without having to use oc.env:HOSTNAME
+OmegaConf.register_new_resolver("hostname", lambda: gethostname())
+
 # Returns a boolean value indicating whether the value provided is None or an empty string
 OmegaConf.register_new_resolver("is_none_or_empty", lambda x: x is None or x == "")
 
@@ -53,4 +57,4 @@ OmegaConf.register_new_resolver("if_else", lambda value, value_true, value_false
 OmegaConf.register_new_resolver("is_missing", lambda a, *, _parent_: a not in _parent_)
 
 # Register a resolver to run a command and return the value
-OmegaConf.register_new_resolver("cmd", lambda cmd: subprocess.check_output([cmd], shell=True).decode("utf-8").rstrip("\n"))
+OmegaConf.register_new_resolver("cmd", lambda cmd: check_output([cmd], shell=True).decode("utf-8").rstrip("\n"))
