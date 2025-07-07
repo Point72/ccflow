@@ -1,7 +1,10 @@
 from datetime import date
 from pathlib import Path
+from socket import gethostname
 
 from omegaconf import OmegaConf
+
+import ccflow.plugins.omegaconf_resolvers  # noqa: F401
 
 
 def test_today_resolver():
@@ -32,6 +35,11 @@ def test_replace():
 def test_user_home():
     conf = OmegaConf.create({"out": "${user_home:}"})
     assert conf["out"] == str(Path.home())
+
+
+def test_hostname():
+    conf = OmegaConf.create({"out": "${hostname:}"})
+    assert conf["out"] == gethostname()
 
 
 def test_is_none_or_empty():
