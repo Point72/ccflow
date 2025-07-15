@@ -500,6 +500,10 @@ class ModelRegistry(BaseModel, collections.abc.Mapping):
                 count += len(model)
         return count
 
+    def _ipython_key_completions_(self):
+        # Supports tab-completion on registry selection in IPython/Jupyter
+        return list(self.__iter__())
+
     def load_config(
         self,
         cfg: DictConfig,
