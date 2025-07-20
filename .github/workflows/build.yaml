@@ -67,5 +67,11 @@ jobs:
         files: junit.xml
       if: ${{ matrix.os == 'ubuntu-latest' }}
 
+    - name: Upload coverage
+      uses: codecov/codecov-action@v5
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+      if: matrix.os == 'ubuntu-latest'
+
     - name: Twine check
       run: make dist
