@@ -5,7 +5,7 @@ from datetime import date
 from pathlib import Path
 from unittest import TestCase
 
-import narwhals as nw
+import narwhals.stable.v1 as nw
 import pandas as pd
 from pydantic import BaseModel as PydanticBaseModel
 

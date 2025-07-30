@@ -1,7 +1,7 @@
 import pickle
 from typing import IO, Any, Callable, Dict, Generic
 
-import narwhals as nw
+import narwhals.stable.v1 as nw
 import pandas as pd
 import yaml
 from cloudpathlib import AnyPath
@@ -9,6 +9,7 @@ from pydantic import Field, field_validator
 from typing_extensions import Literal, override
 
 from ..exttypes import JinjaTemplate
+from ..exttypes.narwhals import FrameT
 from ..publisher import BasePublisher
 from ..serialization import orjson_dumps
 from ..utils import PydanticDictOptions, PydanticModelType, dict_to_model
@@ -197,7 +198,7 @@ class PandasFilePublisher(BasePublisher):
 class NarwhalsFilePublisher(BasePublisher):
     """Publish a narwhals data frame to a file using an appropriate method on nw.DataFrame."""
 
-    data: nw.DataFrame = None
+    data: FrameT = None
     kwargs: Dict[str, Any] = Field(default_factory=dict)
     func: str = "write_csv"  # The access function must be able to write to a buffer or file-like object.
     suffix: str = ".csv"
