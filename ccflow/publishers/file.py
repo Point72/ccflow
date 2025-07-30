@@ -1,6 +1,7 @@
 import pickle
 from typing import IO, Any, Callable, Dict, Generic
 
+import narwhals.stable.v1 as nw
 import pandas as pd
 import yaml
 from cloudpathlib import AnyPath
@@ -8,6 +9,7 @@ from pydantic import Field, field_validator
 from typing_extensions import Literal, override
 
 from ..exttypes import JinjaTemplate
+from ..exttypes.narwhals import DataFrameT
 from ..publisher import BasePublisher
 from ..serialization import orjson_dumps
 from ..utils import PydanticDictOptions, PydanticModelType, dict_to_model
@@ -16,6 +18,7 @@ __all__ = (
     "DictTemplateFilePublisher",
     "GenericFilePublisher",
     "JSONPublisher",
+    "NarwhalsFilePublisher",
     "PandasFilePublisher",
     "PicklePublisher",
     "PydanticJSONPublisher",
@@ -186,6 +189,28 @@ class PandasFilePublisher(BasePublisher):
             name_params=self.name_params,
             data=self.data,
             dump=getattr(pd.DataFrame, self.func),
+            suffix=self.suffix,
+            mode=self.mode,
+            kwargs=self.kwargs,
+        )()
+
+
+class NarwhalsFilePublisher(BasePublisher):
+    """Publish a narwhals data frame to a file using an appropriate method on nw.DataFrame."""
+
+    data: DataFrameT = None
+    kwargs: Dict[str, Any] = Field(default_factory=dict)
+    func: str = "write_csv"  # The access function must be able to write to a buffer or file-like object.
+    suffix: str = ".csv"
+    mode: Literal["w", "wb"] = "w"
+
+    @override
+    def __call__(self) -> AnyPath:
+        return GenericFilePublisher(
+            name=self.name,
+            name_params=self.name_params,
+            data=self.data,
+            dump=getattr(nw.DataFrame, self.func),
             suffix=self.suffix,
             mode=self.mode,
             kwargs=self.kwargs,

@@ -5,6 +5,7 @@ from datetime import date
 from pathlib import Path
 from unittest import TestCase
 
+import narwhals.stable.v1 as nw
 import pandas as pd
 from pydantic import BaseModel as PydanticBaseModel
 
@@ -13,6 +14,7 @@ from ccflow.publishers import (
     DictTemplateFilePublisher,
     GenericFilePublisher,
     JSONPublisher,
+    NarwhalsFilePublisher,
     PandasFilePublisher,
     PicklePublisher,
     YAMLPublisher,
@@ -162,3 +164,36 @@ class TestFilePublishers(TestCase):
             self.assertEqual(path, Path("test_pandas.f"))
             df = pd.read_feather(path)
             pd.testing.assert_frame_equal(df, p.data)
+
+    def test_narwhals_csv(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            os.chdir(tempdir)
+            p = NarwhalsFilePublisher(
+                name="test_{{param}}",
+                name_params={"param": "narwhals"},
+                func="write_csv",
+                suffix=".csv",
+            )
+            df = pd.DataFrame({"a": [1, 2, 3], "b": ["foo", "bar", "baz"]})
+            p.data = nw.from_native(df)
+            path = p()
+            self.assertEqual(path, Path("test_narwhals.csv"))
+            df2 = pd.read_csv(path)
+            pd.testing.assert_frame_equal(df, df2)
+
+    def test_narwhals_parquet(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            os.chdir(tempdir)
+            p = NarwhalsFilePublisher(
+                name="test_{{param}}",
+                name_params={"param": "narwhals"},
+                func="write_parquet",
+                suffix=".parquet",
+                mode="wb",
+            )
+            df = pd.DataFrame({"a": [1, 2, 3], "b": ["foo", "bar", "baz"]})
+            p.data = nw.from_native(df)
+            path = p()
+            self.assertEqual(path, Path("test_narwhals.parquet"))
+            df2 = pd.read_parquet(path)
+            pd.testing.assert_frame_equal(df, df2)
