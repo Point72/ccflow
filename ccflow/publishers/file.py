@@ -9,7 +9,7 @@ from pydantic import Field, field_validator
 from typing_extensions import Literal, override
 
 from ..exttypes import JinjaTemplate
-from ..exttypes.narwhals import FrameT
+from ..exttypes.narwhals import DataFrameT
 from ..publisher import BasePublisher
 from ..serialization import orjson_dumps
 from ..utils import PydanticDictOptions, PydanticModelType, dict_to_model
@@ -198,7 +198,7 @@ class PandasFilePublisher(BasePublisher):
 class NarwhalsFilePublisher(BasePublisher):
     """Publish a narwhals data frame to a file using an appropriate method on nw.DataFrame."""
 
-    data: FrameT = None
+    data: DataFrameT = None
     kwargs: Dict[str, Any] = Field(default_factory=dict)
     func: str = "write_csv"  # The access function must be able to write to a buffer or file-like object.
     suffix: str = ".csv"
