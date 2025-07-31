@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import Any, Callable, Dict, List, Optional, Set, Union
 
 import dask.base
-from pydantic import Field, PrivateAttr
+from pydantic import Field, PrivateAttr, field_validator
 from typing_extensions import override
 
 from ..base import BaseModel, make_lazy_result
@@ -119,6 +119,14 @@ class LoggingEvaluator(EvaluatorBase):
     verbose: bool = Field(True, description="Whether to output the model definition as part of logging")
     log_result: bool = Field(False, description="Whether to log the result of the evaluation")
     format_config: FormatConfig = Field(FormatConfig(), description="Configuration for formatting the result of the evaluation if log_result=True")
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def _validate_log_level(cls, v: Union[int, str]) -> int:
+        """Validate that the log level is a valid logging level."""
+        if isinstance(v, str):
+            return getattr(logging, v.upper(), "")
+        return v
 
     @override
     def __call__(self, context: ModelEvaluationContext) -> ResultType:

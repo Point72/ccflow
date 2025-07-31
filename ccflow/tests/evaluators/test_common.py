@@ -84,6 +84,12 @@ class TestCombineEvaluator(TestCase):
 
 
 class TestLoggingEvaluator(TestCase):
+    def test_validation(self):
+        self.assertEqual(LoggingEvaluator(log_level=logging.INFO).log_level, logging.INFO)
+        self.assertEqual(LoggingEvaluator(log_level="INFO").log_level, logging.INFO)
+        self.assertEqual(LoggingEvaluator(log_level="info").log_level, logging.INFO)
+        self.assertRaises(ValueError, LoggingEvaluator, log_level="foo")
+
     def test_logging(self):
         m1 = MyDateCallable(offset=1)
         context = DateContext(date=date(2022, 1, 1))
