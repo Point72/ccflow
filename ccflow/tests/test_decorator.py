@@ -56,6 +56,15 @@ class DefaultModel(CallableModel):
         return context.date
 
 
+class TestModelEvaluationContext(TestCase):
+    def test_model_evaluation_context(self):
+        model = DefaultModel()
+        evaluation_context = ModelEvaluationContext(model=model, context="0d")
+        self.assertEqual(evaluation_context.context, DateContext(date=date.today()))
+        out = evaluation_context()
+        self.assertEqual(out, GenericResult(value=date.today()))
+
+
 class TestFlowDecorator(TestCase):
     def test_get_options(self):
         model = DefaultModel()

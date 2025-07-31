@@ -76,24 +76,8 @@ class _CallableModel(BaseModel, abc.ABC):
 
     model_config = ConfigDict(
         ignored_types=(property,),
-        # Whether to validate that the decorator has been applied to __call__
-        validate_decorator=True,
     )
     meta: MetaData = Field(default_factory=MetaData)
-
-    @model_validator(mode="after")
-    def _check_decorator(self):
-        call = self.__call__
-        if self.model_config["validate_decorator"] and not hasattr(call, "__wrapped__") and getattr(call, "__name__", "") != "Flow.call":
-            raise ValueError("__call__ function of CallableModel must be wrapped with the Flow.call decorator")
-
-        if (
-            self.model_config["validate_decorator"]
-            and not hasattr(self.__deps__, "__wrapped__")
-            and getattr(self.__deps__, "__name__", "") != "Flow.deps"
-        ):
-            raise ValueError("__deps__ function of CallableModel must be wrapped with the Flow.deps decorator")
-        return self
 
     @model_validator(mode="after")
     def _check_signature(self):
@@ -115,35 +99,6 @@ class _CallableModel(BaseModel, abc.ABC):
                 raise ValueError(err_msg_type_mismatch)
 
         return self
-
-    @property
-    def context_type(self) -> Type[ContextType]:
-        """Return the context type for the model.
-
-        By default, it reads the value from the function signature (if a concrete value is provided),
-        otherwise the implementation needs to be overridden.
-        """
-        typ = _cached_signature(self.__class__.__call__).parameters["context"].annotation
-        if typ is Signature.empty:
-            raise TypeError("Must either define a type annotation for context on __call__ or implement 'context_type'")
-        if not issubclass(typ, ContextBase):
-            raise TypeError("Context type declared in signature of __call__ must be a subclass of ContextBase")
-
-        return typ
-
-    @property
-    def result_type(self) -> Type[ResultType]:
-        """Return the result type for the model.
-
-        By default, it reads the value from the function signature (if a concrete value is provided),
-        otherwise the implementation needs to be overridden.
-        """
-        typ = _cached_signature(self.__class__.__call__).return_annotation
-        if typ is Signature.empty:
-            raise TypeError("Must either define a return type annotation on __call__ or implement 'result_type'")
-        if not issubclass(typ, ResultBase):
-            raise TypeError("Return type declared in signature of __call__ must be a subclass of ResultBase (i.e. GenericResult)")
-        return typ
 
     @abc.abstractmethod
     def __call__(self, context: ContextType) -> ResultType:
@@ -238,14 +193,31 @@ class FlowOptions(BaseModel):
         return self._get_evaluator_from_options(options)
 
     def __call__(self, fn):
+        # Used for building a graph of model evaluation contexts without evaluating
+        def get_evaluation_context(model: CallableModelType, context: ContextType, as_dict: bool = False):
+            # Create the evaluation context.
+            # Record the options that are used, in case the evaluators want to use it,
+            # but exclude the evaluator itself to avoid potential circular dependencies
+            # or other difficulties with serialization/caching of the options
+            options = FlowOptionsOverride.get_options(model, self)
+            evaluator = self._get_evaluator_from_options(options)
+            options_dict = options.model_dump(mode="python", exclude={"evaluator"}, exclude_unset=True)
+            evaluation_context = ModelEvaluationContext(model=model, context=context, fn=fn.__name__, options=options_dict)
+            if as_dict:
+                return dict(model=evaluator, context=evaluation_context)
+            else:
+                return ModelEvaluationContext(model=evaluator, context=evaluation_context)
+
+        # The decorator implementation
         def wrapper(model, context=Signature.empty, **kwargs):
-            # TODO: Let ModelEvaluationContext handle this type checking
             if not isinstance(model, CallableModel):
                 raise TypeError("Can only decorate methods on CallableModels with the flow decorator")
             if not isclass(model.context_type) or not issubclass(model.context_type, ContextBase):
                 raise TypeError(f"Context type {model.context_type} must be a subclass of ContextBase")
             if not isclass(model.result_type) or not issubclass(model.result_type, ResultBase):
                 raise TypeError(f"Result type {model.result_type} must be a subclass of ResultBase")
+            if self._deps and fn.__name__ != "__deps__":
+                raise ValueError("Can only apply Flow.deps decorator to __deps__")
             if context is Signature.empty:
                 context = _cached_signature(fn).parameters["context"].default
                 if context is Signature.empty:
@@ -258,49 +230,24 @@ class FlowOptions(BaseModel):
             elif kwargs:  # Kwargs passed in as well as context. Not allowed
                 raise TypeError(f"{fn.__name__}() was passed a context and got an unexpected keyword argument '{next(iter(kwargs.keys()))}'")
 
-            # Type coercion on input  TODO: Move to ModelEvaluationContext
+            # Type coercion on input. We do this here (rather than relying on ModelEvaluationContext) as it produces a nicer traceback/error message
             if not isinstance(context, model.context_type):
                 context = model.context_type.model_validate(context)
-            # Create the evaluation context.
-            # Record the options that are used, in case the evaluators want to use it,
-            # but exclude the evaluator itself to avoid potential circular dependencies
-            # or other difficulties with serialization/caching of the options
-            options = FlowOptionsOverride.get_options(model, self)
-            evaluator = self._get_evaluator_from_options(options)
-            options = options.model_dump(mode="python", exclude={"evaluator"}, exclude_unset=True)
+
             if fn != getattr(model.__class__, fn.__name__).__wrapped__:
                 # This happens when super().__call__ is used when implementing a CallableModel that derives from another one.
                 # In this case, we don't apply the decorator again, we just call the function on the model and context.
                 return fn(model, context)
-            evaluation_context = ModelEvaluationContext(model=model, context=context, fn=fn.__name__, options=options)
-            result = evaluator(evaluation_context)
 
-            # TODO: Move into the __call__ function of ModelEvaluationContext
-            if options.get("validate_result", True):
-                if self._deps:
-                    if fn.__name__ != "__deps__":
-                        raise ValueError("Can only apply Flow.deps decorator to __deps__")
-                    result = _GraphDepListAdapter.validate_python(result)
-                # If we validate a delayed result, we will force evaluation.
-                # Instead, we can flag that validation is requested, and have it done after evaluation
-                elif hasattr(result, "_lazy_is_delayed"):
-                    object.__setattr__(result, "_lazy_validation_requested", True)
-                else:
-                    result = model.result_type.model_validate(result)
+            evaluation_context = get_evaluation_context(model, context, as_dict=True)
+            # Here we call the evaluator directly on the context, instead of calling evaluation_context()
+            # to eliminate one level in the call stack when things go wrong/when debugging.
+            result = evaluation_context["model"](evaluation_context["context"])
             return result
 
         wrap = wraps(fn)(wrapper)
         wrap.get_evaluator = self.get_evaluator
         wrap.get_options = self.get_options
-
-        # Used for building a graph of model evaluation contexts without evaluating
-        def get_evaluation_context(model: CallableModelType, context: ContextType):
-            # TODO: This logic is duplicative of the logic in wrapper - combine into a single place
-            options = FlowOptionsOverride.get_options(model, self).model_dump(mode="python", exclude={"evaluator"}, exclude_unset=True)
-            evaluation_context = ModelEvaluationContext(model=model, context=context, fn=fn.__name__, options=options)
-            evaluator = self.get_evaluator(model)
-            return ModelEvaluationContext(model=evaluator, context=evaluation_context)
-
         wrap.get_evaluation_context = get_evaluation_context
         return wrap
 
@@ -440,9 +387,17 @@ class ModelEvaluationContext(
 
     @model_validator(mode="wrap")
     def _context_validator(cls, values, handler, info):
-        # Override context validator from parent - no funky coercion stuff here,
-        # and no deep copy.
+        """Override _context_validator from parent"""
+
+        # Validate the context with the model, if possible
+        model = values.get("model")
+        if model and isinstance(model, CallableModel) and not isinstance(values.get("context"), model.context_type):
+            values["context"] = model.context_type.model_validate(values.get("context"))
+
+        # Apply standard pydantic validation
         context = handler(values)
+
+        # Check that the function is correctly specified
         if not hasattr(context.model, context.fn):
             raise ValueError(f"Class {type(context.model)} does not have a function {context.fn} to call")
         return context
@@ -450,7 +405,19 @@ class ModelEvaluationContext(
     def __call__(self) -> ResultType:
         fn = getattr(self.model, self.fn)
         if hasattr(fn, "__wrapped__"):
-            return fn.__wrapped__(self.model, self.context)
+            result = fn.__wrapped__(self.model, self.context)
+            # If it's a callable model, then we can validate the result
+            if self.options.get("validate_result", True):
+                if fn.__name__ == "__deps__":
+                    result = _GraphDepListAdapter.validate_python(result)
+                # If we validate a delayed result, we will force evaluation.
+                # Instead, we can flag that validation is requested, and have it done after evaluation
+                elif hasattr(result, "_lazy_is_delayed"):
+                    object.__setattr__(result, "_lazy_validation_requested", True)
+                elif hasattr(self.model, "result_type"):
+                    result = self.model.result_type.model_validate(result)
+
+            return result
         else:
             return fn(self.context)
 
@@ -460,8 +427,6 @@ class EvaluatorBase(_CallableModel, abc.ABC):
 
     Note that evaluators don't use the Flow decorator on __call__ and __deps__ by design.
     """
-
-    model_config = ConfigDict(validate_decorator=False)
 
     @abc.abstractmethod
     def __call__(self, context: ModelEvaluationContext) -> ResultType:
@@ -501,6 +466,45 @@ _FLOW_OPTIONS = FlowOptions()
 
 class CallableModel(_CallableModel):
     """Generic base class for Callable Models, with a default implementation for __deps__."""
+
+    @model_validator(mode="after")
+    def _check_decorator(self):
+        call = self.__call__
+        if not hasattr(call, "__wrapped__") and getattr(call, "__name__", "") != "Flow.call":
+            raise ValueError("__call__ function of CallableModel must be wrapped with the Flow.call decorator")
+
+        if not hasattr(self.__deps__, "__wrapped__") and getattr(self.__deps__, "__name__", "") != "Flow.deps":
+            raise ValueError("__deps__ function of CallableModel must be wrapped with the Flow.deps decorator")
+        return self
+
+    @property
+    def context_type(self) -> Type[ContextType]:
+        """Return the context type for the model.
+
+        By default, it reads the value from the function signature (if a concrete value is provided),
+        otherwise the implementation needs to be overridden.
+        """
+        typ = _cached_signature(self.__class__.__call__).parameters["context"].annotation
+        if typ is Signature.empty:
+            raise TypeError("Must either define a type annotation for context on __call__ or implement 'context_type'")
+        if not issubclass(typ, ContextBase):
+            raise TypeError("Context type declared in signature of __call__ must be a subclass of ContextBase")
+
+        return typ
+
+    @property
+    def result_type(self) -> Type[ResultType]:
+        """Return the result type for the model.
+
+        By default, it reads the value from the function signature (if a concrete value is provided),
+        otherwise the implementation needs to be overridden.
+        """
+        typ = _cached_signature(self.__class__.__call__).return_annotation
+        if typ is Signature.empty:
+            raise TypeError("Must either define a return type annotation on __call__ or implement 'result_type'")
+        if not issubclass(typ, ResultBase):
+            raise TypeError("Return type declared in signature of __call__ must be a subclass of ResultBase (i.e. GenericResult)")
+        return typ
 
     @Flow.deps
     def __deps__(
