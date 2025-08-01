@@ -1,17 +1,15 @@
 [build-system]
-requires = ["hatchling>=1.22.4,<1.28"]
-build-backend = "hatchling.build"
+requires = ["hatchling"]
+build-backend="hatchling.build"
 
 [project]
 name = "ccflow"
-description = "Composable Configuration Flow"
-version = "0.5.9"
+authors = [{name = "Point72, L.P.", email = "OpenSource@point72.com"}]
+description = "ccflow is a collection of tools for workflow configuration, orchestration, and dependency injection"
 readme = "README.md"
-license = { file = "LICENSE" }
+license = { text = "Apache-2.0" }
+version = "0.1.0"
 requires-python = ">=3.9"
-authors = [
-    { name = "Point72", email = "OpenSource@Point72.com" },
-]
 keywords = [
     "configuration",
     "flow",
@@ -22,6 +20,8 @@ keywords = [
 classifiers = [
     "Development Status :: 4 - Beta",
     "Programming Language :: Python",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
@@ -70,6 +70,7 @@ develop = [
     "ruff>=0.6,<0.13",
     "toml",
     "twine",
+    "uv",
     "wheel",
     # Full deps
     "cexprtk",
@@ -95,9 +96,11 @@ test = [
     "pytest-sugar",
 ]
 
+[project.scripts]
+
 [project.urls]
-Repository = "https://github.com/point72/ccflow"
-Homepage = "https://github.com/point72/ccflow"
+Repository = "https://github.com/Point72/ccflow"
+Homepage = "https://github.com/Point72/ccflow"
 
 [tool.bumpversion]
 current_version = "0.5.9"
@@ -106,28 +109,27 @@ tag = false
 commit_args = "-s"
 
 [[tool.bumpversion.files]]
-filename = "pyproject.toml"
-search = 'version = "{current_version}"'
-replace = 'version = "{new_version}"'
-
-[[tool.bumpversion.files]]
 filename = "ccflow/__init__.py"
 search = '__version__ = "{current_version}"'
 replace = '__version__ = "{new_version}"'
 
+[[tool.bumpversion.files]]
+filename = "pyproject.toml"
+search = 'version = "{current_version}"'
+replace = 'version = "{new_version}"'
+
 [tool.check-manifest]
 ignore = [
-    "docs/**",
-    "conda-recipe/**",
+    ".copier-answers.yaml",
     "Makefile",
-    "setup.py",
-    "*.ipynb",
+    "docs/**/*",
 ]
 
 [tool.coverage.run]
 branch = true
-omit = []
-
+omit = [
+    "ccflow/tests/integration/",
+]
 [tool.coverage.report]
 exclude_also = [
     "raise NotImplementedError",
@@ -144,11 +146,7 @@ artifacts = []
 src = "/"
 
 [tool.hatch.build.targets.sdist]
-include = [
-    "/ccflow",
-    "LICENSE",
-    "README.md",
-]
+packages = ["ccflow"]
 exclude = [
     "/.github",
     "/.gitignore",
@@ -156,19 +154,17 @@ exclude = [
 ]
 
 [tool.hatch.build.targets.wheel]
-include = [
-    "/ccflow",
-]
+packages = ["ccflow"]
 exclude = [
     "/.github",
     "/.gitignore",
-    "/pyproject.toml",
     "/docs",
 ]
 
+[tool.hatch.build.targets.wheel.shared-data]
+
 [tool.pytest.ini_options]
 addopts = ["-vvv", "--junitxml=junit.xml"]
-asyncio_mode = "strict"
 testpaths = "ccflow/tests"
 
 [tool.ruff]
@@ -182,13 +178,7 @@ extend-select = ["I"]
 combine-as-imports = true
 default-section = "third-party"
 known-first-party = ["ccflow"]
-section-order = [
-    "future",
-    "standard-library",
-    "third-party",
-    "first-party",
-    "local-folder",
-]
+section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401", "F403"]
