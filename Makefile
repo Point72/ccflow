@@ -1,96 +1,120 @@
-###############
-# Build Tools #
-###############
-.PHONY: build develop install
+#########
+# BUILD #
+#########
+.PHONY: develop build install
 
-build:  ## build python
-	python -m build .
+develop:  ## install dependencies and build library
+	uv pip install -e .[develop]
 
 requirements:  ## install prerequisite python build requirements
 	python -m pip install --upgrade pip toml
 	python -m pip install `python -c 'import toml; c = toml.load("pyproject.toml"); print("\n".join(c["build-system"]["requires"]))'`
 	python -m pip install `python -c 'import toml; c = toml.load("pyproject.toml"); print(" ".join(c["project"]["optional-dependencies"]["develop"]))'`
 
-develop:  ## install to site-packages in editable mode
-	python -m pip install -e .[develop]
+build:  ## build the python library
+	python -m build -n
 
-install:  ## install to site-packages
-	python -m pip install .
+install:  ## install library
+	uv pip install .
 
-###########
-# Testing #
-###########
-.PHONY: test tests
-
-test: ## run the python unit tests
-	python -m pytest -v ccflow/tests --cov=ccflow --cov-report xml --cov-report term-missing
-
-tests: test
-
-###########
-# Linting #
-###########
-.PHONY: lint fix format
+#########
+# LINTS #
+#########
+.PHONY: lint-py lint-docs fix-py fix-docs lint lints fix format
 
 lint-py:  ## lint python with ruff
-	python -m ruff check ccflow setup.py
-	python -m ruff format --check ccflow setup.py
+	python -m ruff check ccflow
+	python -m ruff format --check ccflow
 
 lint-docs:  ## lint docs with mdformat and codespell
-	python -m mdformat --check docs/wiki/ README.md
-	python -m codespell_lib docs/wiki/ README.md
+	python -m mdformat --check README.md docs/wiki/
+	python -m codespell_lib README.md docs/wiki/
 
 fix-py:  ## autoformat python code with ruff
-	python -m ruff check --fix ccflow setup.py
-	python -m ruff format ccflow setup.py
+	python -m ruff check --fix ccflow
+	python -m ruff format ccflow
 
 fix-docs:  ## autoformat docs with mdformat and codespell
-	python -m mdformat docs/wiki/ README.md
-	python -m codespell_lib --write docs/wiki/ README.md
+	python -m mdformat README.md docs/wiki/
+	python -m codespell_lib --write README.md docs/wiki/
 
 lint: lint-py lint-docs  ## run all linters
 lints: lint
 fix: fix-py fix-docs  ## run all autoformatters
 format: fix
 
-#################
+################
 # Other Checks #
-#################
-.PHONY: check checks check-manifest
+################
+.PHONY: check-manifest checks check
 
-check: checks
-
-checks: check-manifest  ## run security, packaging, and other checks
-
-check-manifest:  ## run manifest checker for sdist
+check-manifest:  ## check python sdist manifest with check-manifest
 	check-manifest -v
 
-################
-# Distribution #
-################
-.PHONY: dist publish
+checks: check-manifest
 
-dist: clean build  ## create dists
+# Alias
+check: checks
+
+#########
+# TESTS #
+#########
+.PHONY: test coverage tests
+
+test:  ## run python tests
+	python -m pytest -v ccflow/tests
+
+coverage:  ## run tests and collect test coverage
+	python -m pytest -v ccflow/tests --cov=ccflow --cov-report term-missing --cov-report xml
+
+# Alias
+tests: test
+
+###########
+# VERSION #
+###########
+.PHONY: show-version patch minor major
+
+show-version:  ## show current library version
+	@bump-my-version show current_version
+
+patch:  ## bump a patch version
+	@bump-my-version bump patch
+
+minor:  ## bump a minor version
+	@bump-my-version bump minor
+
+major:  ## bump a major version
+	@bump-my-version bump major
+
+########
+# DIST #
+########
+.PHONY: dist dist-build dist-sdist dist-local-wheel publish
+
+dist-build:  # build python dists
+	python -m build -w -s
+
+dist-check:  ## run python dist checker with twine
 	python -m twine check dist/*
 
-publish: dist  ## dist to pypi
-	python -m twine upload dist/* --skip-existing
+dist: clean dist-build dist-check  ## build all dists
 
-############
-# Cleaning #
-############
-.PHONY: clean
+publish: dist  # publish python assets
+
+#########
+# CLEAN #
+#########
+.PHONY: deep-clean clean
+
+deep-clean: ## clean everything from the repository
+	git clean -fdx
 
 clean: ## clean the repository
-	find . -name "__pycache__" | xargs  rm -rf
-	find . -name "*.pyc" | xargs rm -rf
-	find . -name ".ipynb_checkpoints" | xargs  rm -rf
-	rm -rf .coverage coverage *.xml build dist *.egg-info lib node_modules .pytest_cache *.egg-info
-	git clean -fd
+	rm -rf .coverage coverage cover htmlcov logs build dist *.egg-info
 
-###########
-# Helpers #
-###########
+############################################################################################
+
 .PHONY: help
 
 # Thanks to Francoise at marmelab.com for this

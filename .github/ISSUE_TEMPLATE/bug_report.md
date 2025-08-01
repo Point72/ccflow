@@ -21,7 +21,7 @@ existing issues about the bug you would like to report.
 self-contained, i.e., can be copy-pasted into the Python interpreter or
 run as-is via `python myproblem.py`. If this is a problem with the C++
 interface, it should link to a buildable C++ project that demonstrates
-the issue. 
+the issue.
 
 ```python
 
@@ -38,7 +38,7 @@ the issue.
       full traceback -->
 
 **Runtime Environment**
-<!-- Output from 
+<!-- Output from
 
 `import sys, csp; print(csp.__version__); print(sys.version); print(sys.platform)`.
 -->
