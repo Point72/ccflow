@@ -139,10 +139,13 @@ js/dist
 js/lib
 js/node_modules
 js/*.tgz
+ccflow/extension
 
 # Jupyter
 .ipynb_checkpoints
 .autoversion
+!ccflow/extension/ccflow.json
+!ccflow/extension/install.json
 ccflow/nbextension
 ccflow/labextension
 
