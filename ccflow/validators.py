@@ -1,7 +1,7 @@
 """This module contains common validators."""
 
 import logging
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Dict, Optional
 
 import pandas as pd
@@ -11,13 +11,15 @@ from .exttypes import PyObjectPath
 
 
 def normalize_date(v: Any) -> Any:
-    """Validator that will convert string offsets to date based on today."""
+    """Validator that will convert string offsets to date based on today, and convert datetime to date."""
     if isinstance(v, str):  # Check case where it's an offset
         try:
             timestamp = pd.tseries.frequencies.to_offset(v) + date.today()
             return timestamp.date()
         except ValueError:
             pass
+    if isinstance(v, datetime):
+        return v.date()
     return v
 
 
