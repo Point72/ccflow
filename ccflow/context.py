@@ -13,6 +13,7 @@ __all__ = [
     "NullContext",
     "GenericContext",
     "DateContext",
+    "DatetimeContext",
     "EntryTimeContext",
     "DateRangeContext",
     "VersionedDateContext",
@@ -93,6 +94,19 @@ class DateContext(ContextBase):
                 v = v[0]
 
             v = DateContext(date=v)
+        return handler(v)
+
+
+class DatetimeContext(ContextBase):
+    dt: datetime
+
+    @model_validator(mode="wrap")
+    def _datetime_context_validator(cls, v, handler, info):
+        if cls is DatetimeContext and not isinstance(v, (DatetimeContext, dict)):
+            if isinstance(v, (tuple, list)) and len(v) == 1:
+                v = v[0]
+
+            v = DatetimeContext(dt=v)
         return handler(v)
 
 

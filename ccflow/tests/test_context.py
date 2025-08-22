@@ -1,12 +1,13 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from unittest import TestCase
 
 import pandas as pd
-from pydantic import BaseModel, ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from ccflow.context import (
     DateContext,
     DateRangeContext,
+    DatetimeContext,
     FreqContext,
     FreqDateContext,
     FreqDateRangeContext,
@@ -22,14 +23,6 @@ from ccflow.context import (
     UniverseDateRangeContext,
 )
 from ccflow.result import GenericResult
-
-
-class MyModel(BaseModel):
-    context: DateContext
-
-
-class MyRangeModel(BaseModel):
-    context: DateRangeContext
 
 
 class TestContexts(TestCase):
@@ -54,13 +47,32 @@ class TestContexts(TestCase):
         self.assertEqual(DateContext(date="-1d"), c1)
         self.assertRaises(ValueError, DateContext, date="foo")
 
-        # Test coercion to DateContext on nested models
-        self.assertEqual(MyModel(context={"date": date.today()}).context, c)
-        self.assertEqual(MyModel(context=date.today()).context, c)
-        self.assertEqual(MyModel(context=str(date.today())).context, c)
-        self.assertEqual(MyModel(context="0d").context, c)
-        self.assertEqual(MyModel(context="-1d").context, c1)
-        self.assertRaises(ValueError, MyModel, context="foo")
+        # Test validation from other types
+        self.assertEqual(TypeAdapter(DateContext).validate_python({"date": date.today()}), c)
+        self.assertEqual(TypeAdapter(DateContext).validate_python(date.today()), c)
+        self.assertEqual(TypeAdapter(DateContext).validate_python([date.today()]), c)
+        self.assertEqual(TypeAdapter(DateContext).validate_python(str(date.today())), c)
+        self.assertEqual(TypeAdapter(DateContext).validate_python("0d"), c)
+        self.assertEqual(TypeAdapter(DateContext).validate_python("-1d"), c1)
+        self.assertRaises(ValueError, TypeAdapter(DateContext).validate_python, "foo")
+
+        # Test validation from datetime (not normally allowed by pydantic)
+        dt = datetime(2022, 1, 1, 12, tzinfo=timezone.utc)
+        self.assertEqual(TypeAdapter(DateContext).validate_python(dt), DateContext(date=dt.date()))
+
+    def test_datetime_validation(self):
+        dt = datetime(2022, 1, 1, 12, 0, tzinfo=timezone.utc)
+        c = DatetimeContext(dt=dt)
+        self.assertEqual(DatetimeContext(dt=str(dt)), c)
+        self.assertEqual(DatetimeContext(dt=dt.date()), DatetimeContext(dt=datetime(2022, 1, 1)))
+
+        # Test validation from other types
+        self.assertEqual(TypeAdapter(DatetimeContext).validate_python({"dt": dt}), c)
+        self.assertEqual(TypeAdapter(DatetimeContext).validate_python(dt), c)
+        self.assertEqual(TypeAdapter(DatetimeContext).validate_python([dt]), c)
+        self.assertEqual(TypeAdapter(DatetimeContext).validate_python(str(dt)), c)
+        self.assertEqual(TypeAdapter(DatetimeContext).validate_python(dt.isoformat()), c)
+        self.assertRaises(ValueError, TypeAdapter(DatetimeContext).validate_python, "foo")
 
     def test_coercion(self):
         d = DateContext(date=date(2022, 1, 1))
@@ -76,10 +88,11 @@ class TestContexts(TestCase):
         self.assertEqual(DateRangeContext(start_date="-1d", end_date="0d"), c)
         self.assertRaises(ValueError, DateRangeContext, start_date="foo", end_date=d1)
 
-        # Test coercion to DateContext on nested models
-        self.assertEqual(MyRangeModel(context={"start_date": d0, "end_date": d1}).context, c)
-        self.assertEqual(MyRangeModel(context=("-1d", "0d")).context, c)
-        self.assertEqual(MyRangeModel(context=["-1d", "0d"]).context, c)
+        # Test validation from other types
+        self.assertEqual(TypeAdapter(DateRangeContext).validate_python({"start_date": d0, "end_date": d1}), c)
+        self.assertEqual(TypeAdapter(DateRangeContext).validate_python(("-1d", "0d")), c)
+        self.assertEqual(TypeAdapter(DateRangeContext).validate_python(["-1d", "0d"]), c)
+        self.assertEqual(TypeAdapter(DateRangeContext).validate_python(["-1d", datetime.now()]), c)
 
     def test_freq(self):
         self.assertEqual(
