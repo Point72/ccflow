@@ -54,11 +54,13 @@ class TestContexts(TestCase):
         self.assertEqual(TypeAdapter(DateContext).validate_python(str(date.today())), c)
         self.assertEqual(TypeAdapter(DateContext).validate_python("0d"), c)
         self.assertEqual(TypeAdapter(DateContext).validate_python("-1d"), c1)
-        self.assertRaises(ValueError, TypeAdapter(DateContext).validate_python, "foo")
+        self.assertRaises(ValidationError, TypeAdapter(DateContext).validate_python, "foo")
+        self.assertRaises(ValidationError, TypeAdapter(DateContext).validate_python, None)
 
-        # Test validation from datetime (not normally allowed by pydantic)
+    def test_date_from_datetime_validation(self):
         dt = datetime(2022, 1, 1, 12, tzinfo=timezone.utc)
         self.assertEqual(TypeAdapter(DateContext).validate_python(dt), DateContext(date=dt.date()))
+        self.assertEqual(TypeAdapter(DateContext).validate_python(dt.isoformat()), DateContext(date=dt.date()))
 
     def test_datetime_validation(self):
         dt = datetime(2022, 1, 1, 12, 0, tzinfo=timezone.utc)
