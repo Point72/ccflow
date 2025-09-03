@@ -1,5 +1,5 @@
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from unittest import TestCase
 
 from ccflow.validators import eval_or_load_object, load_object, normalize_date, str_to_log_level
@@ -12,9 +12,16 @@ class A:
 class TestValidators(TestCase):
     def test_normalize_date(self):
         c = date.today()
+        self.assertEqual(normalize_date(c), c)
         self.assertEqual(normalize_date("0d"), c)
         c1 = date.today() - timedelta(1)
         self.assertEqual(normalize_date("-1d"), c1)
+
+        self.assertEqual(normalize_date(datetime.now()), c)
+        self.assertEqual(normalize_date(datetime.now().isoformat()), c)
+
+        self.assertEqual(normalize_date("foo"), "foo")
+        self.assertEqual(normalize_date(None), None)
 
     def test_load_object(self):
         self.assertEqual(load_object("ccflow.tests.test_validators.A"), A)

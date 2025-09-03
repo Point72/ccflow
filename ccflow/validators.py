@@ -5,9 +5,11 @@ from datetime import date, datetime
 from typing import Any, Dict, Optional
 
 import pandas as pd
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from .exttypes import PyObjectPath
+
+_DatetimeAdapter = TypeAdapter(datetime)
 
 
 def normalize_date(v: Any) -> Any:
@@ -18,8 +20,14 @@ def normalize_date(v: Any) -> Any:
             return timestamp.date()
         except ValueError:
             pass
-    if isinstance(v, datetime):
-        return v.date()
+    # Convert from anything that can be converted to a datetime to a date via datetime
+    # This is not normally allowed by pydantic.
+    try:
+        v = _DatetimeAdapter.validate_python(v)
+        if isinstance(v, datetime):
+            return v.date()
+    except ValidationError:
+        pass
     return v
 
 
