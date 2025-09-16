@@ -146,6 +146,7 @@ ccflow/extension
 # Jupyter
 .ipynb_checkpoints
 .autoversion
+Untitled*.ipynb
 !ccflow/extension/ccflow.json
 !ccflow/extension/install.json
 ccflow/nbextension
