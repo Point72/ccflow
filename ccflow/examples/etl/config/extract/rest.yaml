@@ -1,0 +1,8 @@
+_target_: ccflow.PublisherModel
+model:
+  _target_: ccflow.examples.etl.models.RestModel
+publisher:
+  _target_: ccflow.publishers.GenericFilePublisher
+  name: raw
+  suffix: .html
+field: value

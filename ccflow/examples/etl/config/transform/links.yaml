@@ -1,0 +1,9 @@
+_target_: ccflow.PublisherModel
+model:
+  _target_: ccflow.examples.etl.models.LinksModel
+  file: ${extract.publisher.name}${extract.publisher.suffix}
+publisher:
+  _target_: ccflow.publishers.GenericFilePublisher
+  name: extracted
+  suffix: .csv
+field: value
