@@ -84,6 +84,8 @@ develop = [
     "scipy",
     "xarray",
     # Test deps
+    "beautifulsoup4",
+    "httpx",
     "pytest",
     "pytest-asyncio",
     "pytest-cov",
@@ -91,6 +93,8 @@ develop = [
     "pytest-sugar",
 ]
 test = [
+    "beautifulsoup4",
+    "httpx",
     "pytest",
     "pytest-asyncio",
     "pytest-cov",
