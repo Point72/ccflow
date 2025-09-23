@@ -34,6 +34,16 @@ def test_replace():
     assert conf["out"] == "azcde"
 
 
+def test_split():
+    conf = OmegaConf.create({"out": "${split:a-b-c-d-e,-}"})
+    assert conf["out"] == ["a", "b", "c", "d", "e"]
+
+
+def test_join():
+    conf = OmegaConf.create({"out": "${join:[a,b,c,d,e],-}"})
+    assert conf["out"] == "a-b-c-d-e"
+
+
 def test_user_home():
     conf = OmegaConf.create({"out": "${user_home:}"})
     assert conf["out"] == str(Path.home())

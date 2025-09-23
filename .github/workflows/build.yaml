@@ -10,8 +10,6 @@ on:
       - LICENSE
       - README.md
   pull_request:
-    branches:
-      - main
   workflow_dispatch:
 
 concurrency:

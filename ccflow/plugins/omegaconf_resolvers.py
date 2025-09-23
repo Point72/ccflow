@@ -105,6 +105,12 @@ register_omegaconf_resolver("trim_null_values", lambda dict_val: {k: v for k, v 
 # Perform replacements in strings
 register_omegaconf_resolver("replace", lambda input_val, orig_val, replace_val: input_val.replace(orig_val, replace_val))
 
+# Perform split in strings
+register_omegaconf_resolver("split", lambda input_val, sep: input_val.split(sep))
+
+# Perform join in strings
+register_omegaconf_resolver("join", lambda input_val, sep: sep.join(input_val))
+
 # Provides a path to the current user's home directory
 register_omegaconf_resolver("user_home", lambda: str(Path.home()))
 
