@@ -8,8 +8,7 @@ from typing import Dict, List, Optional, Union
 from zoneinfo import ZoneInfo
 
 from omegaconf import DictConfig, ListConfig, OmegaConf
-
-from .. import DatetimeContext
+from pydantic import TypeAdapter
 
 # Import this file to register the resolvers with OmegaConf
 __all__ = ("register_omegaconf_resolver",)
@@ -56,10 +55,15 @@ def date_resolver(
     """
     if isinstance(dt, (DictConfig, ListConfig)):
         dt = OmegaConf.to_container(dt, resolve=True)
-    ctx = DatetimeContext.model_validate(dt)
-    if ctx.dt.time() == time(0, 0) and date_format:
-        return ctx.dt.strftime(date_format)
-    return ctx.dt.strftime(datetime_format)
+    if isinstance(dt, dict):
+        # e.g. DatetimeContext object, {"dt": datetime(...)}
+        dt = list(dt.values())[0]
+    if isinstance(dt, list):
+        dt = dt[0]
+    dt = TypeAdapter(Union[datetime, date]).validate_python(dt)
+    if dt.time() == time(0, 0) and date_format:
+        return dt.strftime(date_format)
+    return dt.strftime(datetime_format)
 
 
 def param_resolver(param_name: str = None, args: List[str] = None) -> Union[str, Dict[str, str]]:
