@@ -5,7 +5,7 @@ from ccflow.models import PublisherModel
 from ccflow.publishers import PrintPublisher
 
 
-class TestModel(CallableModel):
+class ModelTest(CallableModel):
     @Flow.call
     def __call__(self, context: NullContext) -> DictResult[str, str]:
         return DictResult[str, str](value={"message": "Hello, World!"})
@@ -14,7 +14,7 @@ class TestModel(CallableModel):
 class TestPublisherModel:
     def test_run(self):
         with patch("ccflow.publishers.print.print") as mock_print:
-            model = PublisherModel(model=TestModel(), publisher=PrintPublisher())
+            model = PublisherModel(model=ModelTest(), publisher=PrintPublisher())
             res = model(None)
             assert isinstance(res, GenericResult)  # from PrintPublisher
             assert isinstance(res.value, DictResult[str, str])
