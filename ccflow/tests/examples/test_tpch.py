@@ -45,4 +45,4 @@ def test_tpch_queries(tpch_answer_generator, tpch_data_generator, query_id):
     out = runner(context)
     assert out is not None
     assert answer is not None
-    assert_frame_equal(out.df.to_polars(), answer.df.to_polars(), check_dtype=False)
+    assert_frame_equal(out.df.to_polars(), answer.df.to_polars(), check_dtypes=False)

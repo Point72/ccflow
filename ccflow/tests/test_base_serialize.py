@@ -94,7 +94,7 @@ class H_int8(BaseModel):
 class MultiAttributeModel(BaseModel):
     z: int
     y: str
-    x: float = Field(defualt=0.0)
+    x: float = Field(default=0.0)
     w: Annotated[bool, None]
 
 
