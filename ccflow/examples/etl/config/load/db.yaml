@@ -1,0 +1,4 @@
+_target_: ccflow.examples.etl.models.DBModel
+file: ${transform.publisher.name}${transform.publisher.suffix}
+db_file: etl.db
+table: links
