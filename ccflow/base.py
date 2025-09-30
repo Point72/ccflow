@@ -360,7 +360,7 @@ class ModelRegistry(BaseModel, collections.abc.Mapping):
         models = {}
         if "models" in kwargs:
             models = kwargs.pop("models")
-            if not isinstance(models, dict):
+            if not isinstance(models, (dict, MappingProxyType)):
                 raise TypeError("models must be a dict")
         super(ModelRegistry, self).__init__(*args, **kwargs)
         for name, model in models.items():
@@ -400,6 +400,10 @@ class ModelRegistry(BaseModel, collections.abc.Mapping):
         for name in names:
             self.remove(name)
         return self
+
+    def clone(self, name: Optional[str] = None) -> Self:
+        """Shallow clone the registry (but not the models within it)."""
+        return ModelRegistry(name=name or self.name, models=self.models)
 
     def remove(self, name: str) -> None:
         """Remove a model from the registry.
