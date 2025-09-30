@@ -211,7 +211,7 @@ class FlowOptions(BaseModel):
         # The decorator implementation
         def wrapper(model, context=Signature.empty, **kwargs):
             if not isinstance(model, CallableModel):
-                raise TypeError("Can only decorate methods on CallableModels with the flow decorator")
+                raise TypeError(f"Can only decorate methods on CallableModels (not {type(model)}) with the flow decorator.")
             if not isclass(model.context_type) or not issubclass(model.context_type, ContextBase):
                 raise TypeError(f"Context type {model.context_type} must be a subclass of ContextBase")
             if not isclass(model.result_type) or not issubclass(model.result_type, ResultBase):
@@ -488,7 +488,7 @@ class CallableModel(_CallableModel):
         if typ is Signature.empty:
             raise TypeError("Must either define a type annotation for context on __call__ or implement 'context_type'")
         if not issubclass(typ, ContextBase):
-            raise TypeError("Context type declared in signature of __call__ must be a subclass of ContextBase")
+            raise TypeError(f"Context type declared in signature of __call__ must be a subclass of ContextBase. Received {typ}.")
 
         return typ
 
@@ -503,7 +503,7 @@ class CallableModel(_CallableModel):
         if typ is Signature.empty:
             raise TypeError("Must either define a return type annotation on __call__ or implement 'result_type'")
         if not issubclass(typ, ResultBase):
-            raise TypeError("Return type declared in signature of __call__ must be a subclass of ResultBase (i.e. GenericResult)")
+            raise TypeError(f"Return type declared in signature of __call__ must be a subclass of ResultBase (i.e. GenericResult). Received {typ}.")
         return typ
 
     @Flow.deps
