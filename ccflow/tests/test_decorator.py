@@ -3,7 +3,6 @@ from datetime import date
 from unittest import TestCase
 
 from ccflow import CallableModel, DateContext, EvaluatorBase, Flow, FlowOptions, FlowOptionsOverride, GenericResult, ModelEvaluationContext
-from ccflow.evaluators import MemoryCacheEvaluator
 
 
 class MyModel(CallableModel):
@@ -56,6 +55,13 @@ class DefaultModel(CallableModel):
         return context.date
 
 
+class DummyEvaluator(EvaluatorBase):
+    return_value: GenericResult = GenericResult(value=date(2020, 1, 1))
+
+    def __call__(self, context: ModelEvaluationContext):
+        return self.return_value
+
+
 class TestModelEvaluationContext(TestCase):
     def test_model_evaluation_context(self):
         model = DefaultModel()
@@ -99,25 +105,33 @@ class TestFlowDecorator(TestCase):
         model = DefaultModel()
         context = DateContext(date=date.today())
         options = FlowOptions(log_level=0)
+
+        evaluation_context = model.__call__.get_evaluation_context(model, context, _options=options)
+        self.assertEqual(evaluation_context.model.log_level, 0)
+
+        evaluation_context = model.__call__.get_evaluation_context(model, context, _options=dict(log_level=0))
+        self.assertEqual(evaluation_context.model.log_level, 0)
+
         with FlowOptionsOverride(options=options):
             self.assertEqual(model.__call__.get_options(model), options)
             evaluation_context = model.__call__.get_evaluation_context(model, context)
             self.assertEqual(evaluation_context.model.log_level, 0)
 
-    def test_new_evaluator(self):
-        """Test that we can use the decorator to make an evaluation with a new evaluator."""
-        model = MyModel()
-        new_evaluator = MemoryCacheEvaluator()
-        wrapped_call = Flow.call(evaluator=new_evaluator)(MyModel.__call__)
-        out_evaluator = wrapped_call.get_evaluator(model)
-        self.assertEqual(out_evaluator, new_evaluator)
+            # Make sure passing _options takes precedence over the FlowOptionsOverride context
+            evaluation_context = model.__call__.get_evaluation_context(model, context, _options=dict(log_level=1))
+            self.assertEqual(evaluation_context.model.log_level, 1)
 
+    def test_new_evaluator(self):
+        """Test that we can call the model easily with a new evaluator."""
+        model = MyModel()
+        new_evaluator = DummyEvaluator()
         context = DateContext(date=date.today())
-        self.assertEqual(wrapped_call(model, context), model(context))
+        self.assertEqual(model(context), GenericResult(value=context.date))
+        self.assertEqual(model(context, _options=dict(evaluator=new_evaluator)), new_evaluator.return_value)
 
         # Now test it on foo
-        wrapped_foo = Flow.call(evaluator=new_evaluator)(MyModel.foo)
-        self.assertEqual(wrapped_foo(model, context), model.foo(context))
+        self.assertEqual(model(context), GenericResult(value=context.date))
+        self.assertEqual(model.foo(context, _options=dict(evaluator=new_evaluator)), new_evaluator.return_value)
 
     def test_coercion(self):
         model = MyModel()

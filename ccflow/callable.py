@@ -194,12 +194,17 @@ class FlowOptions(BaseModel):
 
     def __call__(self, fn):
         # Used for building a graph of model evaluation contexts without evaluating
-        def get_evaluation_context(model: CallableModelType, context: ContextType, as_dict: bool = False):
+        def get_evaluation_context(model: CallableModelType, context: ContextType, as_dict: bool = False, *, _options: Optional[FlowOptions] = None):
             # Create the evaluation context.
             # Record the options that are used, in case the evaluators want to use it,
             # but exclude the evaluator itself to avoid potential circular dependencies
             # or other difficulties with serialization/caching of the options
-            options = FlowOptionsOverride.get_options(model, self)
+            if _options:
+                if not isinstance(_options, FlowOptions):
+                    _options = FlowOptions.model_validate(_options)
+                options = _options
+            else:
+                options = FlowOptionsOverride.get_options(model, self)
             evaluator = self._get_evaluator_from_options(options)
             options_dict = options.model_dump(mode="python", exclude={"evaluator"}, exclude_unset=True)
             evaluation_context = ModelEvaluationContext(model=model, context=context, fn=fn.__name__, options=options_dict)
@@ -209,7 +214,7 @@ class FlowOptions(BaseModel):
                 return ModelEvaluationContext(model=evaluator, context=evaluation_context)
 
         # The decorator implementation
-        def wrapper(model, context=Signature.empty, **kwargs):
+        def wrapper(model, context=Signature.empty, *, _options: Optional[FlowOptions] = None, **kwargs):
             if not isinstance(model, CallableModel):
                 raise TypeError("Can only decorate methods on CallableModels with the flow decorator")
             if not isclass(model.context_type) or not issubclass(model.context_type, ContextBase):
@@ -239,7 +244,7 @@ class FlowOptions(BaseModel):
                 # In this case, we don't apply the decorator again, we just call the function on the model and context.
                 return fn(model, context)
 
-            evaluation_context = get_evaluation_context(model, context, as_dict=True)
+            evaluation_context = get_evaluation_context(model, context, as_dict=True, _options=_options)
             # Here we call the evaluator directly on the context, instead of calling evaluation_context()
             # to eliminate one level in the call stack when things go wrong/when debugging.
             result = evaluation_context["model"](evaluation_context["context"])
