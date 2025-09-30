@@ -344,12 +344,29 @@ except TypeError as e:
 
 Behind the `@Flow.call` decorator is where all the magic lives, including advanced features which are not yet well tested or have not yet been implemented. However, we walk through some of the more basic functionality to give an idea of how it can be used.
 
-The behavior of the `@Flow.call` decorator can be controlled in two ways:
+The behavior of the `@Flow.call` decorator can be controlled in several ways:
 
-- by using the FlowOptionsOverride context (which allows you to scope changes to specific models, specific model types or all models)
 - by passing arguments to it when defining the CallableModel to customize model-specific behavior
+- by using the FlowOptionsOverride context (which allows you to scope changes to specific models, specific model types or all models)
+- by setting `options` in the `meta` attribute of the CallableModel
+- by passing `_options` directly to the `__call__` method
 
-An example of the former is to change the log level for all model evaluations:
+An example of the first one (model-specific options) is to disable validation of the result type on a particular model
+
+```python
+from ccflow import CallableModel, Flow, GenericResult, GenericContext
+
+class NoValidationModel(CallableModel):
+    @Flow.call(validate_result=False)
+    def __call__(self, context: GenericContext[str]) -> GenericResult[float]:
+        return "foo"
+
+model = NoValidationModel()
+print(model("foo"))
+#> foo
+```
+
+An example of the latter three is to change the log level for all model evaluations (including sub-models):
 
 ```python
 import logging
@@ -369,19 +386,26 @@ with FlowOptionsOverride(options={"log_level": logging.WARN}):
 #> GenericResult[list[Union[int, str]]](value=[1, 2, 'Fizz', 4, 'Buzz', 'Fizz', 7, 8, 'Fizz', 'Buzz', 11, 'Fizz', 13, 14, 'FizzBuzz'])
 ```
 
-An example of the latter (model-specific options) is to disable validation of the result type on a particular model
+If there is only a need to set the options for a specific model (and not any sub-models that it may call), then the `meta` attribute or passing `_options` to the `__call__` method are better options.
+Setting `meta.options` is particularly useful when the model is being loaded from a configuration file, though it can be done interactively as well to persist the options with the model instance.
 
 ```python
-from ccflow import CallableModel, Flow, GenericResult, GenericContext
+model = FizzBuzzModel()
+model.meta.options = {"log_level": logging.WARN}
+_ = model(15)
+#[FizzBuzzModel]: Start evaluation of __call__ on GenericContext[int](value=15).
+#[FizzBuzzModel]: FizzBuzzModel(meta=MetaData(name=''), fizz='Fizz', buzz='Buzz')
+#[FizzBuzzModel]: End evaluation of __call__ on GenericContext[int](value=15) (time elapsed: 0:00:00.000074).
+```
 
-class NoValidationModel(CallableModel):
-    @Flow.call(validate_result=False)
-    def __call__(self, context: GenericContext[str]) -> GenericResult[float]:
-        return "foo"
+Most convenient for interactive work is to pass the options to the `__call__` method directly.
 
-model = NoValidationModel()
-print(model("foo"))
-#> foo
+```python
+model = FizzBuzzModel()
+_ = model(15, _options={"log_level": logging.WARN})
+#[FizzBuzzModel]: Start evaluation of __call__ on GenericContext[int](value=15).
+#[FizzBuzzModel]: FizzBuzzModel(meta=MetaData(name=''), fizz='Fizz', buzz='Buzz')
+#[FizzBuzzModel]: End evaluation of __call__ on GenericContext[int](value=15) (time elapsed: 0:00:00.000072).
 ```
 
 To see a list of all the available options, you can look at the schema definition of the FlowOptions class:
