@@ -4,6 +4,8 @@ import collections.abc
 import copy
 import logging
 import pathlib
+import platform
+import sys
 import warnings
 from types import MappingProxyType
 from typing import Any, Callable, Dict, List, Optional, Tuple, Type, TypeVar
@@ -542,7 +544,7 @@ class _ModelRegistryLoader:
     def __init__(self, overwrite: bool):
         self._overwrite = overwrite
 
-    def _make_subregistries(self, cfg, registries: List[ModelRegistry]) -> List[Tuple[List[ModelRegistry], str, DictConfig]]:
+    def _make_subregistries(self, cfg, registries: List[ModelRegistry]) -> List[Tuple[List[ModelRegistry], str, DictConfig, Optional[Exception]]]:
         registry = registries[-1]
         models_to_register = []
         for k, v in cfg.items():
@@ -551,7 +553,7 @@ class _ModelRegistryLoader:
                 # object configs
                 continue
             elif _is_config_model(v):
-                models_to_register.append((registries, k, v))
+                models_to_register.append((registries, k, v, None))
             elif _is_config_subregistry(v):
                 # Config value represents a sub-registry
                 subregistry = ModelRegistry(name=k)
@@ -574,13 +576,13 @@ class _ModelRegistryLoader:
         models_to_register = self._make_subregistries(cfg, [registry])
         while True:
             unresolved_models = []
-            for registries, k, v in models_to_register:
+            for registries, k, v, _ in models_to_register:
                 with RegistryLookupContext(registries=registries):
                     try:
                         model = instantiate(v, _convert_="all")
                     except InstantiationException as e:
                         if isinstance(e.__cause__, (RegistryKeyError, ValidationError)):
-                            unresolved_models.append((registries, k, v))
+                            unresolved_models.append((registries, k, v, e))
                         elif not skip_exceptions:
                             raise e
                         continue
@@ -599,12 +601,30 @@ class _ModelRegistryLoader:
                 unresolved_models = []
 
         if not skip_exceptions and unresolved_models:
-            # Raise the error from the first unresolved model by trying to instantiate it again
-            registries, k, v = unresolved_models[0]
-            with RegistryLookupContext(registries=registries):
-                instantiate(v, _convert_="all")
-            # The line above should have raised. If for whatever reason it didn't, we raise the error here.
-            raise InstantiationException(f"Failed to instantiate {k} with config {v}, but cannot reproduce.")
+            # If we have many unresolved errors, it could be because of a dependency chain (or cycle)
+            # Users need to know the "first" errors in the chain.
+            # Since all errors from pydantic are "ValidationErrors", we filter out those due to resolution (i.e. starting with "Could not resolve")
+            # vs other types of validation errors, which we raise first (as a group).
+            resolution_errors = []
+            non_resolution_errors = []
+            for _, _, _, e in unresolved_models:
+                # Pydantic doesn't differentiate between exception types during validation, so look for the string
+                if "Could not resolve model" in str(e):
+                    resolution_errors.append(e)
+                else:
+                    non_resolution_errors.append(e)
+            if non_resolution_errors:
+                if len(non_resolution_errors) == 1 or sys.version_info < (3, 11):
+                    raise non_resolution_errors[0]
+                else:
+                    raise ExceptionGroup("Multiple validation errors occurred", non_resolution_errors)  # noqa: F821
+
+            # Raise the corresponding to resolution errors (i.e. RegistryKeyErrors, etc)
+            if len(resolution_errors) == 1 or sys.version_info < (3, 11):
+                raise resolution_errors[0]
+            else:
+                raise ExceptionGroup("Multiple ccflow registry resolution errors occurred", resolution_errors)  # noqa: F821
+
         return registry
 
 
@@ -643,6 +663,7 @@ class RegistryLookupContext:
 def resolve_str(v: str) -> ModelType:
     """Resolve a string value from the RootModelRegistry."""
     search_registries = RegistryLookupContext.registry_search_paths()
+    original_v = v
     idx = -1
     if not search_registries:
         search_registries = [ModelRegistry.root()]
@@ -662,6 +683,17 @@ def resolve_str(v: str) -> ModelType:
     try:
         return search_registry[v]
     except KeyError:
+        # A common mistake is to forget to start an absolute lookup with a forward slash. Return a better error message in that case.
+        if not original_v.startswith("/"):
+            try:
+                resolve_str(f"/{v}")
+            except RegistryKeyError:
+                pass
+            else:
+                raise RegistryKeyError(
+                    f"Could not resolve model '{v}' in registry '{search_registry._debug_name}'. Did you mean '/{v}' for an absolute lookup from the root registry?"
+                )
+
         raise RegistryKeyError(f"Could not resolve model '{v}' in registry '{search_registry._debug_name}'")
 
 

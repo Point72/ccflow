@@ -1,9 +1,11 @@
 import collections.abc
 import json
 import os
+import sys
 from typing import Dict, List
 from unittest import TestCase
 
+import pytest
 from hydra.errors import InstantiationException
 from omegaconf import OmegaConf
 from omegaconf.errors import InterpolationKeyError
@@ -478,8 +480,9 @@ class TestRegistryLoadingErrors(TestCase):
             }
         )
         r = ModelRegistry(name="test")
-        with self.assertRaises(InterpolationKeyError, msg="Interpolation key 'bar' not found"):
+        with self.assertRaises(InterpolationKeyError) as cm:
             r.load_config(cfg)
+        self.assertIn("Interpolation key 'bar' not found", str(cm.exception))
 
     def test_model_lookup_error(self):
         cfg = OmegaConf.create(
@@ -494,11 +497,42 @@ class TestRegistryLoadingErrors(TestCase):
             }
         )
         r = ModelRegistry(name="test")
-        msg = "RegistryKeyError('Could not find model foo in RootModelRegistry')\n"
-        "RegistryKeyError('Could not find model foo in RootModelRegistry')\n"
-        "full_key: subregistry.bar"
-        with self.assertRaises(InstantiationException, msg=msg):
+        with self.assertRaises(InstantiationException) as cm:
             r.load_config(cfg)
+
+        self.assertIn("Could not resolve model 'foo' in registry 'subregistry'", str(cm.exception))
+        self.assertNotIn("Did you mean", str(cm.exception))  # No helpful suggestions because there is no "foo" anywhere
+        self.assertIn("full_key: subregistry.bar", str(cm.exception))
+
+    @pytest.mark.skipif(sys.version_info < (3, 11), reason="Skipping on python<3.11 because ExceptionGroup not supported")
+    def test_two_model_lookup_errors(self):
+        cfg = OmegaConf.create(
+            {
+                "subregistry": {
+                    "bar": {
+                        "_target_": "ccflow.tests.test_base_registry.MyNestedModel",
+                        "x": "foo",  # Model which does not exist
+                        "y": {"a": "test2", "b": 2.0},
+                    },
+                    "baz": {
+                        "_target_": "ccflow.tests.test_base_registry.MyNestedModel",
+                        "x": "foo",  # Model which does not exist
+                        "y": {"a": "test3", "b": 3.0},
+                    },
+                }
+            }
+        )
+        r = ModelRegistry(name="test")
+
+        with self.assertRaises(ExceptionGroup) as cm:  # noqa: F821
+            r.load_config(cfg)
+        group = cm.exception
+        self.assertEqual(len(group.exceptions), 2)
+        for ex in group.exceptions:
+            self.assertIsInstance(ex, InstantiationException)
+            self.assertIn("Could not resolve model 'foo' in registry 'subregistry'", str(ex))
+        self.assertIn("full_key: subregistry.bar", str(group.exceptions[0]))
+        self.assertIn("full_key: subregistry.baz", str(group.exceptions[1]))
 
     def test_model_lookup_error_relative(self):
         cfg = OmegaConf.create(
@@ -518,11 +552,11 @@ class TestRegistryLoadingErrors(TestCase):
             }
         )
         r = ModelRegistry(name="test")
-        msg = "RegistryKeyError('Could not find model foo in RootModelRegistry')\n"
-        "RegistryKeyError('Could not find model foo in RootModelRegistry')\n"
-        "full_key: subregistry.bar"
-        with self.assertRaises(InstantiationException, msg=msg):
+        with self.assertRaises(InstantiationException) as cm:
             r.load_config(cfg)
+        self.assertIn("Could not resolve model 'foo' in registry 'subregistry'", str(cm.exception))
+        self.assertIn("Did you mean '/foo' for an absolute lookup from the root registry?", str(cm.exception))
+        self.assertIn("full_key: subregistry.bar", str(cm.exception))
 
     def test_model_lookup_wrong_type_error(self):
         cfg = OmegaConf.create(
@@ -538,9 +572,10 @@ class TestRegistryLoadingErrors(TestCase):
             }
         )
         r = ModelRegistry(name="test")
-        msg = "Input should be a valid dictionary or instance of MyTestModel"
-        with self.assertRaises(InstantiationException, msg=msg):
+        with self.assertRaises(InstantiationException) as cm:
             r.load_config(cfg)
+        self.assertIn("Input should be a valid dictionary or instance of MyTestModel", str(cm.exception))
+        self.assertIn("full_key: subregistry.bar", str(cm.exception))
 
     def test_bad_class_error(self):
         cfg = OmegaConf.create(
@@ -553,10 +588,11 @@ class TestRegistryLoadingErrors(TestCase):
             }
         )
         r = ModelRegistry(name="test")
-        msg = "Error locating target 'ccflow.tests.test_base_registry.BadClass', set env var HYDRA_FULL_ERROR=1 to see chained exception.\n"
-        "full_key: foo"
-        with self.assertRaises(InstantiationException, msg=msg):
+        msg = "Error locating target 'ccflow.tests.test_base_registry.BadClass', set env var HYDRA_FULL_ERROR=1 to see chained exception."
+        with self.assertRaises(InstantiationException) as cm:
             r.load_config(cfg)
+        self.assertIn(msg, str(cm.exception))
+        self.assertIn("full_key: foo", str(cm.exception))
 
     def test_validation_error(self):
         cfg = OmegaConf.create(
@@ -569,11 +605,67 @@ class TestRegistryLoadingErrors(TestCase):
             }
         )
         r = ModelRegistry(name="test")
-        msg = "Error in call to target 'ccflow.tests.test_base_registry.MyTestModel':\n"
-        ("ValidationError(model='MyTestModel', errors=[{'loc': ('b',), 'msg': 'value is not a valid float', 'type': 'type_error.float'}])\n")
-        "full_key: foo"
-        with self.assertRaises(InstantiationException, msg=msg):
+        msg = "b\n  Input should be a valid number, unable to parse string as a number [type=float_parsing, input_value='string_that_should_be_a_float', input_type=str]"
+        with self.assertRaises(InstantiationException) as cm:
             r.load_config(cfg)
+        self.assertIn("Error in call to target 'ccflow.tests.test_base_registry.MyTestModel':", str(cm.exception))
+        self.assertIn(msg, str(cm.exception))
+        self.assertIn("full_key: foo", str(cm.exception))
+
+    @pytest.mark.skipif(sys.version_info < (3, 11), reason="Skipping on python<3.11 because ExceptionGroup not supported")
+    def test_two_validation_errors(self):
+        cfg = OmegaConf.create(
+            {
+                "foo": {
+                    "_target_": "ccflow.tests.test_base_registry.MyTestModel",
+                    "a": "test",
+                    "b": "string_that_should_be_a_float",
+                },
+                "bar": {
+                    "_target_": "ccflow.tests.test_base_registry.MyTestModel",
+                    "a": "test",
+                    "b": "another_string",
+                },
+            }
+        )
+        r = ModelRegistry(name="test")
+        with self.assertRaises(ExceptionGroup) as cm:  # noqa: F821
+            r.load_config(cfg)
+        group = cm.exception
+        self.assertEqual(len(group.exceptions), 2)
+        for ex in group.exceptions:
+            self.assertIsInstance(ex, InstantiationException)
+            self.assertIn("Error in call to target 'ccflow.tests.test_base_registry.MyTestModel':", str(ex))
+
+        msg0 = "b\n  Input should be a valid number, unable to parse string as a number [type=float_parsing, input_value='string_that_should_be_a_float', input_type=str]"
+        msg1 = "b\n  Input should be a valid number, unable to parse string as a number [type=float_parsing, input_value='another_string', input_type=str]"
+        self.assertIn(msg0, str(group.exceptions[0]))
+        self.assertIn(msg1, str(group.exceptions[1]))
+        self.assertIn("full_key: foo", str(group.exceptions[0]))
+        self.assertIn("full_key: bar", str(group.exceptions[1]))
+
+    def test_lookup_and_validation_error(self):
+        cfg = OmegaConf.create(
+            {
+                "bar": {  # This produces a resolution error, which is skipped to highlight the underlying validation error
+                    "_target_": "ccflow.tests.test_base_registry.MyNestedModel",
+                    "x": "foo",  # Model which does not exist because it failed to load
+                    "y": {"a": "test2", "b": 2.0},
+                },
+                "foo": {
+                    "_target_": "ccflow.tests.test_base_registry.MyTestModel",
+                    "a": "test",
+                    "b": "string_that_should_be_a_float",
+                },
+            }
+        )
+        r = ModelRegistry(name="test")
+        msg = "b\n  Input should be a valid number, unable to parse string as a number [type=float_parsing, input_value='string_that_should_be_a_float', input_type=str]"
+        with self.assertRaises(InstantiationException) as cm:
+            r.load_config(cfg)
+        self.assertIn("Error in call to target 'ccflow.tests.test_base_registry.MyTestModel':", str(cm.exception))
+        self.assertIn(msg, str(cm.exception))
+        self.assertIn("full_key: foo", str(cm.exception))
 
     def test_misspelling_warning(self):
         cfg = OmegaConf.create(
