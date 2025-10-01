@@ -4,7 +4,6 @@ import collections.abc
 import copy
 import logging
 import pathlib
-import platform
 import sys
 import warnings
 from types import MappingProxyType
@@ -123,10 +122,14 @@ class BaseModel(PydanticBaseModel, _RegistryMixin):
 
     # https://docs.pydantic.dev/latest/concepts/serialization/#overriding-the-serialize_as_any-default-false
     def model_dump(self, **kwargs) -> dict[str, Any]:
-        return super().model_dump(serialize_as_any=True, **kwargs)
+        if not kwargs.get("serialize_as_any"):
+            kwargs["serialize_as_any"] = True
+        return super().model_dump(**kwargs)
 
     def model_dump_json(self, **kwargs) -> str:
-        return super().model_dump_json(serialize_as_any=True, **kwargs)
+        if not kwargs.get("serialize_as_any"):
+            kwargs["serialize_as_any"] = True
+        return super().model_dump_json(**kwargs)
 
     def __str__(self):
         # Because the standard string representation does not include class name
@@ -322,7 +325,8 @@ class ModelRegistry(BaseModel, collections.abc.Mapping):
     @model_serializer(mode="wrap")
     def _registry_serializer(self, handler):
         values = handler(self)
-        values["models"] = self._models
+        models_serialized = {k: model.model_dump(serialize_as_any=True, by_alias=True) for k, model in self._models.items()}
+        values["models"] = models_serialized
         return values
 
     @property
