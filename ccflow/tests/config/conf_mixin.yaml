@@ -1,0 +1,19 @@
+mixin_simple:
+  _target_: ccflow.tests.utils.test_mixin.MixinSimpleModel
+  ccflow_path: ccflow.tests.data.path_key_resolver_samples.SIMPLE_CONFIG
+
+mixin_db:
+  _target_: ccflow.tests.utils.test_mixin.MixinDatabaseConfigModel
+  ccflow_path: ccflow.tests.data.path_key_resolver_samples.NESTED_CONFIG
+  ccflow_keys: database
+
+mixin_parent:
+  _target_: ccflow.tests.utils.test_mixin.MixinParentModel
+  ccflow_path: ccflow.tests.data.path_key_resolver_samples.SIMPLE_CONFIG
+  child:
+    ccflow_path: ccflow.tests.data.path_key_resolver_samples.NESTED_CONFIG
+    ccflow_keys: database
+  plain_child:
+    host: plain.example.com
+    port: 3306
+    name: plain_db
