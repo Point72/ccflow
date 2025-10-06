@@ -1,13 +1,13 @@
 import math
 from io import StringIO
-from typing import Any
+from typing import Annotated, Any
 
 import numpy as np
 import orjson
 import polars as pl
 from packaging import version
 from pydantic import TypeAdapter
-from typing_extensions import Annotated, Self
+from typing_extensions import Self
 
 __all__ = ("PolarsExpression", "PolarsExpr")
 
