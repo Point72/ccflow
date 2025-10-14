@@ -1,6 +1,6 @@
 import math
 from io import StringIO
-from typing import Any
+from typing import Annotated, Any
 
 import numpy as np
 import orjson
@@ -9,10 +9,10 @@ from packaging import version
 from pydantic import TypeAdapter
 from typing_extensions import Self
 
-__all__ = ("PolarsExpression",)
+__all__ = ("PolarsExpression", "PolarsExpr")
 
 
-class PolarsExpression(pl.Expr):
+class _PolarsExprPydanticAnnotation:
     """Provides a polars expressions from a string"""
 
     @classmethod
@@ -68,6 +68,10 @@ class PolarsExpression(pl.Expr):
 
         raise ValueError(f"Supplied value '{value}' cannot be converted to a Polars expression")
 
+
+class PolarsExpression(_PolarsExprPydanticAnnotation, pl.Expr):
+    """Provides a polars expressions from a string"""
+
     @classmethod
     def validate(cls, value: Any) -> Self:
         """Try to convert/validate an arbitrary value to a PolarsExpression."""
@@ -75,3 +79,7 @@ class PolarsExpression(pl.Expr):
 
 
 _TYPE_ADAPTER = TypeAdapter(PolarsExpression)
+
+
+# Public alias for use with Pydantic v2 Annotated type
+PolarsExpr = Annotated[pl.Expr, _PolarsExprPydanticAnnotation]
