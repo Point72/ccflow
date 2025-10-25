@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from ccflow.utils.hydra import get_args_parser, load_config
+from ccflow.utils.hydra import get_args_parser_default, load_config
 
 
 @pytest.fixture
@@ -195,7 +195,7 @@ def mock_args(mocker, basepath, request):
 def test_cfg_explain_cli_args(mock_args, request):
     """Test that the mocking of the argparse args works correctly in isolation"""
 
-    parser = get_args_parser()
+    parser = get_args_parser_default()
     if mock_args == "--gui":
         parser.add_argument("--port", type=int, default=8080, help="Port for the GUI")
     args = parser.parse_args()
@@ -210,7 +210,7 @@ def test_cfg_explain_cli(mock_args, mocker, capsys):
     from ccflow.utils.hydra import cfg_explain_cli
 
     if mock_args == "--gui":
-        parser = get_args_parser()
+        parser = get_args_parser_default()
         parser.add_argument("--port", type=int, default=8080, help="Port for the GUI")
         cfg_explain_cli(args_parser=parser, ui_launcher=lambda cfg, port, **kwargs: print(f"Launching UI on port {port}"))
         captured = capsys.readouterr()

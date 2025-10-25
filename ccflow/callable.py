@@ -15,7 +15,7 @@ import abc
 import logging
 from functools import lru_cache, wraps
 from inspect import Signature, isclass, signature
-from typing import Any, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar
+from typing import Any, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar, Union, get_args, get_origin
 
 from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field, InstanceOf, PrivateAttr, TypeAdapter, field_validator, model_validator
 from typing_extensions import override
@@ -492,9 +492,13 @@ class CallableModel(_CallableModel):
         typ = _cached_signature(self.__class__.__call__).parameters["context"].annotation
         if typ is Signature.empty:
             raise TypeError("Must either define a type annotation for context on __call__ or implement 'context_type'")
+
+        # If optional type, extract inner type
+        if get_origin(typ) is Optional or (get_origin(typ) is Union and type(None) in get_args(typ)):
+            typ = [t for t in get_args(typ) if t is not type(None)][0]
+        # Ensure subclass of ContextBase
         if not issubclass(typ, ContextBase):
             raise TypeError(f"Context type declared in signature of __call__ must be a subclass of ContextBase. Received {typ}.")
-
         return typ
 
     @property
