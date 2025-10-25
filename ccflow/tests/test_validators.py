@@ -1,8 +1,9 @@
 import logging
 from datetime import date, datetime, timedelta
 from unittest import TestCase
+from zoneinfo import ZoneInfo
 
-from ccflow.validators import eval_or_load_object, load_object, normalize_date, str_to_log_level
+from ccflow.validators import eval_or_load_object, load_object, normalize_date, normalize_datetime, str_to_log_level
 
 
 class A:
@@ -22,6 +23,34 @@ class TestValidators(TestCase):
 
         self.assertEqual(normalize_date("foo"), "foo")
         self.assertEqual(normalize_date(None), None)
+
+    def test_normalize_datetime(self):
+        today = datetime.today()
+        now = datetime.now()
+        c = datetime(today.year, today.month, today.day)
+
+        self.assertEqual(normalize_datetime(c), c)
+        self.assertEqual(normalize_datetime("0d"), c)
+
+        c1 = c - timedelta(1)
+        self.assertEqual(normalize_datetime("-1d"), c1)
+
+        self.assertEqual(normalize_datetime(now), now)
+
+        # check passthrough validation error
+        self.assertEqual(normalize_datetime("foo"), "foo")
+        self.assertEqual(normalize_datetime(None), None)
+
+        # check dict
+        self.assertEqual(
+            normalize_datetime({"dt": now.isoformat(), "tz": "US/Hawaii"}),
+            now.astimezone(tz=ZoneInfo("US/Hawaii")),
+        )
+        # check list
+        self.assertEqual(
+            normalize_datetime([now.isoformat(), "US/Hawaii"]),
+            now.astimezone(tz=ZoneInfo("US/Hawaii")),
+        )
 
     def test_load_object(self):
         self.assertEqual(load_object("ccflow.tests.test_validators.A"), A)

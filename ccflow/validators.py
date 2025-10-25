@@ -3,6 +3,7 @@
 import logging
 from datetime import date, datetime
 from typing import Any, Dict, Optional
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 from pydantic import TypeAdapter, ValidationError
@@ -10,6 +11,14 @@ from pydantic import TypeAdapter, ValidationError
 from .exttypes import PyObjectPath
 
 _DatetimeAdapter = TypeAdapter(datetime)
+
+__all__ = (
+    "normalize_date",
+    "normalize_datetime",
+    "load_object",
+    "eval_or_load_object",
+    "str_to_log_level",
+)
 
 
 def normalize_date(v: Any) -> Any:
@@ -29,6 +38,34 @@ def normalize_date(v: Any) -> Any:
     except ValidationError:
         pass
     return v
+
+
+def normalize_datetime(v: Any) -> Any:
+    """Validator that will convert string offsets to datetime based on today, and convert datetime to date."""
+    if isinstance(v, str):  # Check case where it's an offset
+        try:
+            return (pd.tseries.frequencies.to_offset(v) + date.today()).to_pydatetime()
+        except ValueError:
+            pass
+    if isinstance(v, dict):
+        # e.g. DatetimeContext object, {"dt": datetime(...)}
+        dt = list(v.values())[0]
+        tz = list(v.values())[1] if len(v) > 1 else None
+    elif isinstance(v, list):
+        dt = v[0]
+        tz = v[1] if len(v) > 1 else None
+    else:
+        dt = v
+        tz = None
+    try:
+        dt = TypeAdapter(datetime).validate_python(dt)
+        if tz and isinstance(tz, str):
+            tz = ZoneInfo(tz)
+        if tz:
+            dt = dt.astimezone(tz)
+        return dt
+    except ValidationError:
+        return v
 
 
 def load_object(v: Any) -> Any:

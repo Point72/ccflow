@@ -7,41 +7,60 @@ from pydantic import field_validator, model_validator
 
 from .base import ContextBase
 from .exttypes import Frequency
-from .validators import normalize_date
+from .validators import normalize_date, normalize_datetime
 
-__all__ = [
+__all__ = (
     "NullContext",
     "GenericContext",
     "DateContext",
     "DatetimeContext",
     "EntryTimeContext",
+    "SourceContext",
     "DateRangeContext",
+    "DatetimeRangeContext",
+    "SeededDateRangeContext",
+    "SeededDatetimeRangeContext",
     "VersionedDateContext",
+    "VersionedDatetimeContext",
     "VersionedDateRangeContext",
+    "VersionedDatetimeRangeContext",
     "FreqContext",
     "FreqDateContext",
+    "FreqDatetimeContext",
     "FreqDateRangeContext",
+    "FreqDatetimeRangeContext",
     "HorizonContext",
     "FreqHorizonContext",
     "FreqHorizonDateContext",
+    "FreqHorizonDatetimeContext",
     "FreqHorizonDateRangeContext",
-    "SeededDateRangeContext",
-    "SourceContext",
+    "FreqHorizonDatetimeRangeContext",
     "UniverseContext",
     "UniverseDateContext",
+    "UniverseDatetimeContext",
     "UniverseDateRangeContext",
+    "UniverseDatetimeRangeContext",
     "UniverseFrequencyDateRangeContext",
+    "UniverseFrequencyDatetimeRangeContext",
     "UniverseFrequencyHorizonDateRangeContext",
+    "UniverseFrequencyHorizonDatetimeRangeContext",
     "VersionedUniverseDateContext",
+    "VersionedUniverseDatetimeContext",
     "VersionedUniverseDateRangeContext",
+    "VersionedUniverseDatetimeRangeContext",
     "ModelContext",
     "ModelDateContext",
+    "ModelDatetimeContext",
     "ModelDateRangeContext",
+    "ModelDatetimeRangeContext",
     "ModelDateRangeSourceContext",
     "ModelFreqDateRangeContext",
+    "ModelFreqDatetimeRangeContext",
     "VersionedModelDateContext",
+    "VersionedModelDatetimeContext",
     "VersionedModelDateRangeContext",
-]
+    "VersionedModelDatetimeRangeContext",
+)
 
 _SEPARATOR = ","
 
@@ -100,6 +119,9 @@ class DateContext(ContextBase):
 class DatetimeContext(ContextBase):
     dt: datetime
 
+    # validators
+    _normalize_dt = field_validator("dt", mode="before")(normalize_datetime)
+
     @model_validator(mode="wrap")
     def _datetime_context_validator(cls, v, handler, info):
         if cls is DatetimeContext and not isinstance(v, (DatetimeContext, dict)):
@@ -126,7 +148,19 @@ class DateRangeContext(ContextBase):
     _normalize_end = field_validator("end_date", mode="before")(normalize_date)
 
 
+class DatetimeRangeContext(ContextBase):
+    start_datetime: datetime
+    end_datetime: datetime
+
+    _normalize_start = field_validator("start_datetime", mode="before")(normalize_datetime)
+    _normalize_end = field_validator("end_datetime", mode="before")(normalize_datetime)
+
+
 class SeededDateRangeContext(DateRangeContext):
+    seed: int = 1234
+
+
+class SeededDatetimeRangeContext(DatetimeRangeContext):
     seed: int = 1234
 
 
@@ -134,7 +168,15 @@ class VersionedDateContext(DateContext, EntryTimeContext):
     pass
 
 
+class VersionedDatetimeContext(DatetimeContext, EntryTimeContext):
+    pass
+
+
 class VersionedDateRangeContext(DateRangeContext, EntryTimeContext):
+    pass
+
+
+class VersionedDatetimeRangeContext(DatetimeRangeContext, EntryTimeContext):
     pass
 
 
@@ -146,7 +188,15 @@ class FreqDateContext(DateContext, FreqContext):
     pass
 
 
+class FreqDatetimeContext(DatetimeContext, FreqContext):
+    pass
+
+
 class FreqDateRangeContext(DateRangeContext, FreqContext):
+    pass
+
+
+class FreqDatetimeRangeContext(DatetimeRangeContext, FreqContext):
     pass
 
 
@@ -162,7 +212,15 @@ class FreqHorizonDateContext(DateContext, HorizonContext, FreqContext):
     pass
 
 
+class FreqHorizonDatetimeContext(DatetimeContext, HorizonContext, FreqContext):
+    pass
+
+
 class FreqHorizonDateRangeContext(DateRangeContext, HorizonContext, FreqContext):
+    pass
+
+
+class FreqHorizonDatetimeRangeContext(DatetimeRangeContext, HorizonContext, FreqContext):
     pass
 
 
@@ -174,7 +232,15 @@ class UniverseDateContext(DateContext, UniverseContext):
     pass
 
 
+class UniverseDatetimeContext(DatetimeContext, UniverseContext):
+    pass
+
+
 class UniverseDateRangeContext(DateRangeContext, UniverseContext):
+    pass
+
+
+class UniverseDatetimeRangeContext(DatetimeRangeContext, UniverseContext):
     pass
 
 
@@ -182,7 +248,15 @@ class UniverseFrequencyDateRangeContext(DateRangeContext, FreqContext, UniverseC
     pass
 
 
+class UniverseFrequencyDatetimeRangeContext(DatetimeRangeContext, FreqContext, UniverseContext):
+    pass
+
+
 class UniverseFrequencyHorizonDateRangeContext(DateRangeContext, HorizonContext, FreqContext, UniverseContext):
+    pass
+
+
+class UniverseFrequencyHorizonDatetimeRangeContext(DatetimeRangeContext, HorizonContext, FreqContext, UniverseContext):
     pass
 
 
@@ -190,7 +264,15 @@ class VersionedUniverseDateContext(VersionedDateContext, UniverseContext):
     pass
 
 
+class VersionedUniverseDatetimeContext(VersionedDatetimeContext, UniverseContext):
+    pass
+
+
 class VersionedUniverseDateRangeContext(VersionedDateRangeContext, UniverseContext):
+    pass
+
+
+class VersionedUniverseDatetimeRangeContext(VersionedDatetimeRangeContext, UniverseContext):
     pass
 
 
@@ -202,7 +284,15 @@ class ModelDateContext(DateContext, ModelContext):
     pass
 
 
+class ModelDatetimeContext(DatetimeContext, ModelContext):
+    pass
+
+
 class ModelDateRangeContext(DateRangeContext, ModelContext):
+    pass
+
+
+class ModelDatetimeRangeContext(DatetimeRangeContext, ModelContext):
     pass
 
 
@@ -214,9 +304,21 @@ class ModelFreqDateRangeContext(FreqDateRangeContext, ModelContext):
     pass
 
 
+class ModelFreqDatetimeRangeContext(FreqDatetimeRangeContext, ModelContext):
+    pass
+
+
 class VersionedModelDateContext(VersionedDateContext, ModelContext):
     pass
 
 
+class VersionedModelDatetimeContext(VersionedDatetimeContext, ModelContext):
+    pass
+
+
 class VersionedModelDateRangeContext(VersionedDateRangeContext, ModelContext):
+    pass
+
+
+class VersionedModelDatetimeRangeContext(VersionedDatetimeRangeContext, ModelContext):
     pass

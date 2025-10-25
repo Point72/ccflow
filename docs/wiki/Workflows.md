@@ -169,19 +169,23 @@ print(GenericContext[str].model_validate(100))
 `ccflow` provides a number of other commonly used contexts for standardization. Below are some examples
 
 ```python
-from datetime import date
+from datetime import date, datetime
 from ccflow import (
     DateContext,
+    DatetimeContext,
     DateRangeContext,
     UniverseContext,
     UniverseDateContext,
     VersionedDateContext,
+    ModelDateContext,
 )
 print(DateContext(date=date.today()))
+print(DatetimeContext(dt=datetime.now()))
 print(DateRangeContext(start_date=date(2022, 1, 1), end_date=date(2023, 2, 2)))
 print(VersionedDateContext(date=date.today(), entry_time_cutoff=datetime.utcnow()))
 print(UniverseContext(universe="US"))
 print(UniverseDateContext(universe="US", date=date.today()))
+print(ModelDateContext(mode="MyModel", date=date.today()))
 ```
 
 Since date-based contexts are particularly popular, `ccflow` also provides additional pydantic validation to make it as easy as possible to construct them from basic types like strings and tuples. This comes in handy when running workflows from the command line.
@@ -267,7 +271,7 @@ To further illustrate this point, if we try to pass an invalid input to the mode
 
 ```python
 model = FizzBuzzModel()
-try:    
+try:
     model("not an integer")
 except ValueError as e:
     print(e)
@@ -296,7 +300,7 @@ A simpler method is to re-implement `context_type` and/or `result_type`.
 from ccflow import CallableModel, Flow, GenericResult, GenericContext
 from typing import Type
 
-class DynamicTypedModel(CallableModel): 
+class DynamicTypedModel(CallableModel):
     input_type: Type
     output_type: Type
 
@@ -515,7 +519,7 @@ with FlowOptionsOverride(options={"cacheable":True, "evaluator": evaluator}):
 Since the model attributes are part of the cache key, changing them will cause the cache to be invalidated:
 
 ```python
-model = FibonacciModel(salt=1) 
+model = FibonacciModel(salt=1)
 with FlowOptionsOverride(options={"cacheable":True, "evaluator": evaluator}):
     print(model(2))
 #> Calling model with GenericContext[int](value=2)
@@ -553,7 +557,7 @@ However, because the later calls will still execute the standard code in the bod
 
 ```python
 from ccflow.evaluators import GraphEvaluator, MemoryCacheEvaluator, MultiEvaluator
-model = FibonacciDepsModel() 
+model = FibonacciDepsModel()
 evaluator = MultiEvaluator(evaluators=[GraphEvaluator(), MemoryCacheEvaluator()])
 with FlowOptionsOverride(options={"cacheable":True, "evaluator": evaluator}):
     print(model(4))
