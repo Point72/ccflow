@@ -556,6 +556,8 @@ class CallableModelGenericType(CallableModel, Generic[ContextType, ResultType]):
 
         if isinstance(m, str):
             m = resolve_str(m)
+        if isinstance(m, dict):
+            m = handler(m)
         # Raise ValueError (not TypeError) as per https://docs.pydantic.dev/latest/errors/errors/
         if not isinstance(m, CallableModel):
             raise ValueError(f"{m} is not a CallableModel: {type(m)}")

@@ -9,6 +9,7 @@ from ccflow import (
     ContextBase,
     ContextType,
     Flow,
+    GenericResult,
     GraphDepList,
     MetaData,
     ModelRegistry,
@@ -315,6 +316,16 @@ class TestCallableModelGenericType(TestCase):
         self.assertEqual(w.model, m)
         self.assertEqual(w.context_type, m.context_type)
         self.assertEqual(w.result_type, m.result_type)
+
+    def test_override_in_subclass(self):
+        class MyCallable(CallableModelGenericType[NullContext, GenericResult]):
+            @Flow.call
+            def __call__(self, context: NullContext) -> GenericResult[int]:
+                return GenericResult[int](value=42)
+
+        m = MyCallable()
+        self.assertEqual(m.context_type, NullContext)
+        self.assertEqual(m.result_type, GenericResult[int])
 
 
 class TestCallableModelDeps(TestCase):
