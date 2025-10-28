@@ -550,6 +550,17 @@ class CallableModelGenericType(CallableModel, Generic[ContextType, ResultType]):
     context and result type will be validated.
     """
 
+    _context_type: ClassVar[Type[ContextType]]
+    _result_type: ClassVar[Type[ResultType]]
+
+    @property
+    def context_type(self) -> Type[ContextType]:
+        return self._context_type
+
+    @property
+    def result_type(self) -> Type[ResultType]:
+        return self._result_type
+
     @model_validator(mode="wrap")
     def _validate_callable_model_generic_type(cls, m, handler, info):
         from ccflow.base import resolve_str
@@ -561,8 +572,26 @@ class CallableModelGenericType(CallableModel, Generic[ContextType, ResultType]):
         # Raise ValueError (not TypeError) as per https://docs.pydantic.dev/latest/errors/errors/
         if not isinstance(m, CallableModel):
             raise ValueError(f"{m} is not a CallableModel: {type(m)}")
-        subtypes = cls.__pydantic_generic_metadata__["args"]
-        if subtypes:
-            TypeAdapter(Type[subtypes[0]]).validate_python(m.context_type)
-            TypeAdapter(Type[subtypes[1]]).validate_python(m.result_type)
+
+        # Extract the generic types from the class definition
+        generic_base = None
+        for base in cls.__mro__[1:]:
+            if issubclass(base, CallableModelGenericType):
+                generic_base = base
+                break
+
+        if generic_base and generic_base.__pydantic_generic_metadata__["args"]:
+            # cls is subclass of generic_base which defines the generic types
+            # so use these as the context and result types
+            subtypes = generic_base.__pydantic_generic_metadata__["args"]
+            if len(subtypes) != 2:
+                raise ValueError("CallableModelGenericType must have exactly two generic type parameters: ContextType and ResultType")
+            cls._context_type = subtypes[0]
+            cls._result_type = subtypes[1]
+
+        else:
+            subtypes = cls.__pydantic_generic_metadata__["args"]
+            if subtypes:
+                TypeAdapter(Type[subtypes[0]]).validate_python(m.context_type)
+                TypeAdapter(Type[subtypes[1]]).validate_python(m.result_type)
         return m

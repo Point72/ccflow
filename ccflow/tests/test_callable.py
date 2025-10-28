@@ -317,8 +317,8 @@ class TestCallableModelGenericType(TestCase):
         self.assertEqual(w.context_type, m.context_type)
         self.assertEqual(w.result_type, m.result_type)
 
-    def test_override_in_subclass(self):
-        class MyCallable(CallableModelGenericType[NullContext, GenericResult]):
+    def test_use_as_base_class(self):
+        class MyCallable(CallableModelGenericType[NullContext, GenericResult[int]]):
             @Flow.call
             def __call__(self, context: NullContext) -> GenericResult[int]:
                 return GenericResult[int](value=42)
@@ -326,6 +326,18 @@ class TestCallableModelGenericType(TestCase):
         m = MyCallable()
         self.assertEqual(m.context_type, NullContext)
         self.assertEqual(m.result_type, GenericResult[int])
+        self.assertEqual(m(NullContext()).value, 42)
+
+    def test_use_as_base_class_no_call_annotations(self):
+        class MyCallable(CallableModelGenericType[NullContext, GenericResult[int]]):
+            @Flow.call
+            def __call__(self, context):
+                return GenericResult[int](value=42)
+
+        m = MyCallable()
+        self.assertEqual(m.context_type, NullContext)
+        self.assertEqual(m.result_type, GenericResult[int])
+        self.assertEqual(m(NullContext()).value, 42)
 
 
 class TestCallableModelDeps(TestCase):
