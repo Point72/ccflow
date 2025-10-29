@@ -577,18 +577,33 @@ class CallableModelGenericType(CallableModel, Generic[ContextType, ResultType]):
         generic_base = None
         for base in cls.__mro__[1:]:
             if issubclass(base, CallableModelGenericType):
-                generic_base = base
-                break
+                # Found the generic base class, it should
+                # have either generic parameters or context/result
+                if hasattr(generic_base, "_context_type") and hasattr(generic_base, "_result_type"):
+                    generic_base = base
+                    break
+                elif base.__pydantic_generic_metadata__["args"]:
+                    generic_base = base
+                    break
+                # else continue
 
-        if generic_base and generic_base.__pydantic_generic_metadata__["args"]:
-            # cls is subclass of generic_base which defines the generic types
-            # so use these as the context and result types
-            subtypes = generic_base.__pydantic_generic_metadata__["args"]
-            if len(subtypes) != 2:
-                raise ValueError("CallableModelGenericType must have exactly two generic type parameters: ContextType and ResultType")
-            cls._context_type = subtypes[0]
-            cls._result_type = subtypes[1]
-
+        if generic_base:
+            if hasattr(generic_base, "_context_type") and hasattr(generic_base, "_result_type"):
+                # cls is subclass of generic_base which defines context_type and result_type
+                cls._context_type = generic_base._context_type
+                cls._result_type = generic_base._result_type
+            elif generic_base.__pydantic_generic_metadata__["args"]:
+                # cls is subclass of generic_base which defines the generic types
+                # so use these as the context and result types
+                subtypes = generic_base.__pydantic_generic_metadata__["args"]
+                if len(subtypes) != 2:
+                    raise ValueError("CallableModelGenericType must have exactly two generic type parameters: ContextType and ResultType")
+                cls._context_type = subtypes[0]
+                cls._result_type = subtypes[1]
+            else:
+                raise ValueError(
+                    "CallableModelGenericType must either define context_type and result_type properties, or have generic type parameters"
+                )
         else:
             subtypes = cls.__pydantic_generic_metadata__["args"]
             if subtypes:
