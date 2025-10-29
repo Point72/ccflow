@@ -546,8 +546,8 @@ class WrapperModel(CallableModel, Generic[CallableModelType], abc.ABC):
 
 
 class CallableModelGenericType(CallableModel, Generic[ContextType, ResultType]):
-    """Special type of callable model to use for type declarations, such that the
-    context and result type will be validated.
+    """Special type of callable model that provides context and result via
+    a generic type instead of annotations on __call__.
     """
 
     _context_type: ClassVar[Type[ContextType]]
