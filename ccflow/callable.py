@@ -590,20 +590,36 @@ class CallableModelGenericType(CallableModel, Generic[ContextType, ResultType]):
         if generic_base:
             if hasattr(generic_base, "_context_type") and hasattr(generic_base, "_result_type"):
                 # cls is subclass of generic_base which defines context_type and result_type
-                cls._context_type = generic_base._context_type
-                cls._result_type = generic_base._result_type
+                new_context_type = generic_base._context_type
+                new_result_type = generic_base._result_type
             elif generic_base.__pydantic_generic_metadata__["args"]:
                 # cls is subclass of generic_base which defines the generic types
                 # so use these as the context and result types
                 subtypes = generic_base.__pydantic_generic_metadata__["args"]
                 if len(subtypes) != 2:
                     raise ValueError("CallableModelGenericType must have exactly two generic type parameters: ContextType and ResultType")
-                cls._context_type = subtypes[0]
-                cls._result_type = subtypes[1]
+                new_context_type = subtypes[0]
+                new_result_type = subtypes[1]
             else:
                 raise ValueError(
                     "CallableModelGenericType must either define context_type and result_type properties, or have generic type parameters"
                 )
+            # Validate that the model's context_type and result_type match
+            orig_context_typ = _cached_signature(cls.__call__).parameters["context"].annotation
+            orig_return_typ = _cached_signature(cls.__call__).return_annotation
+            if orig_context_typ is not Signature.empty and orig_context_typ != new_context_type:
+                raise TypeError(
+                    f"Context type annotation {orig_context_typ} on __call__ does not match context_type {new_context_type} defined by CallableModelGenericType"
+                )
+            if orig_return_typ is not Signature.empty and orig_return_typ != new_result_type:
+                raise TypeError(
+                    f"Return type annotation {orig_return_typ} on __call__ does not match result_type {new_result_type} defined by CallableModelGenericType"
+                )
+
+            # Set on class
+            cls._context_type = new_context_type
+            cls._result_type = new_result_type
+
         else:
             subtypes = cls.__pydantic_generic_metadata__["args"]
             if subtypes:

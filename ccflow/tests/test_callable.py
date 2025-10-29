@@ -365,6 +365,15 @@ class TestCallableModelGenericType(TestCase):
         res2 = m2(NullContext())
         self.assertEqual(res2.value, 42)
 
+    def test_use_as_base_class_conflict(self):
+        class MyCallable(CallableModelGenericType[NullContext, GenericResult[int]]):
+            @Flow.call
+            def __call__(self, context: NullContext) -> GenericResult[float]:
+                return GenericResult[float](value=42.0)
+
+        with self.assertRaises(TypeError):
+            MyCallable()
+
 
 class TestCallableModelDeps(TestCase):
     def test_basic(self):
