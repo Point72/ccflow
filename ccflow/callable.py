@@ -574,55 +574,49 @@ class CallableModelGenericType(CallableModel, Generic[ContextType, ResultType]):
             raise ValueError(f"{m} is not a CallableModel: {type(m)}")
 
         # Extract the generic types from the class definition
-        generic_base = None
-        for base in cls.__mro__[1:]:
-            if issubclass(base, CallableModelGenericType):
-                # Found the generic base class, it should
-                # have either generic parameters or context/result
-                if hasattr(generic_base, "_context_type") and hasattr(generic_base, "_result_type"):
-                    generic_base = base
-                    break
-                elif base.__pydantic_generic_metadata__["args"]:
-                    generic_base = base
-                    break
-                # else continue
+        if not hasattr(cls, "_context_type") or not hasattr(cls, "_result_type"):
+            new_context_type = None
+            new_result_type = None
+            for base in cls.__mro__[1:]:
+                if issubclass(base, CallableModelGenericType):
+                    # Found the generic base class, it should
+                    # have either generic parameters or context/result
+                    if new_context_type is None and hasattr(base, "_context_type") and issubclass(base._context_type, ContextBase):
+                        new_context_type = base._context_type
+                    if new_result_type is None and hasattr(base, "_result_type") and issubclass(base._result_type, ResultBase):
+                        new_result_type = base._result_type
+                    if base.__pydantic_generic_metadata__["args"]:
+                        for arg in base.__pydantic_generic_metadata__["args"]:
+                            if new_context_type is None and isinstance(arg, type) and issubclass(arg, ContextBase):
+                                new_context_type = arg
+                            elif new_result_type is None and isinstance(arg, type) and issubclass(arg, ResultBase):
+                                # NOTE: ContextBase inherits from ResultBase, so order matters here!
+                                new_result_type = arg
+                    if new_context_type and new_result_type:
+                        break
+            if new_context_type is not None:
+                # Validate that the model's context_type match
+                orig_context_typ = _cached_signature(cls.__call__).parameters["context"].annotation
+                if orig_context_typ is not Signature.empty and orig_context_typ != new_context_type:
+                    raise TypeError(
+                        f"Context type annotation {orig_context_typ} on __call__ does not match context_type {new_context_type} defined by CallableModelGenericType"
+                    )
+                # Set on class
+                cls._context_type = new_context_type
 
-        if generic_base:
-            if hasattr(generic_base, "_context_type") and hasattr(generic_base, "_result_type"):
-                # cls is subclass of generic_base which defines context_type and result_type
-                new_context_type = generic_base._context_type
-                new_result_type = generic_base._result_type
-            elif generic_base.__pydantic_generic_metadata__["args"]:
-                # cls is subclass of generic_base which defines the generic types
-                # so use these as the context and result types
-                subtypes = generic_base.__pydantic_generic_metadata__["args"]
-                if len(subtypes) != 2:
-                    raise ValueError("CallableModelGenericType must have exactly two generic type parameters: ContextType and ResultType")
-                new_context_type = subtypes[0]
-                new_result_type = subtypes[1]
-            else:
-                raise ValueError(
-                    "CallableModelGenericType must either define context_type and result_type properties, or have generic type parameters"
-                )
-            # Validate that the model's context_type and result_type match
-            orig_context_typ = _cached_signature(cls.__call__).parameters["context"].annotation
-            orig_return_typ = _cached_signature(cls.__call__).return_annotation
-            if orig_context_typ is not Signature.empty and orig_context_typ != new_context_type:
-                raise TypeError(
-                    f"Context type annotation {orig_context_typ} on __call__ does not match context_type {new_context_type} defined by CallableModelGenericType"
-                )
-            if orig_return_typ is not Signature.empty and orig_return_typ != new_result_type:
-                raise TypeError(
-                    f"Return type annotation {orig_return_typ} on __call__ does not match result_type {new_result_type} defined by CallableModelGenericType"
-                )
+            if new_result_type is not None:
+                # Validate that the model's result_type match
+                orig_return_typ = _cached_signature(cls.__call__).return_annotation
+                if orig_return_typ is not Signature.empty and orig_return_typ != new_result_type:
+                    raise TypeError(
+                        f"Return type annotation {orig_return_typ} on __call__ does not match result_type {new_result_type} defined by CallableModelGenericType"
+                    )
 
-            # Set on class
-            cls._context_type = new_context_type
-            cls._result_type = new_result_type
+                # Set on class
+                cls._result_type = new_result_type
 
-        else:
-            subtypes = cls.__pydantic_generic_metadata__["args"]
-            if subtypes:
-                TypeAdapter(Type[subtypes[0]]).validate_python(m.context_type)
-                TypeAdapter(Type[subtypes[1]]).validate_python(m.result_type)
+        subtypes = cls.__pydantic_generic_metadata__["args"]
+        if subtypes:
+            TypeAdapter(Type[subtypes[0]]).validate_python(m.context_type)
+            TypeAdapter(Type[subtypes[1]]).validate_python(m.result_type)
         return m
