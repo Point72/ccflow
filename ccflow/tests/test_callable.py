@@ -1,4 +1,4 @@
-from typing import List, TypeVar
+from typing import Generic, List, TypeVar
 from unittest import TestCase
 
 from pydantic import ValidationError
@@ -364,6 +364,34 @@ class TestCallableModelGenericType(TestCase):
         self.assertEqual(m2.result_type, GenericResult[int])
         res2 = m2(NullContext())
         self.assertEqual(res2.value, 42)
+
+    def test_use_as_base_class_mixed_annotations(self):
+        class Base(CallableModelGenericType[ContextType, ResultType], Generic[ContextType, ResultType]): ...
+
+        class Next(Base[ContextType, ResultType], Generic[ContextType, ResultType]): ...
+
+        class Partial(Next[NullContext, ResultType], Generic[ResultType]): ...
+
+        class Last(Partial[GenericResult[int]]):
+            @Flow.call
+            def __call__(self, context: NullContext) -> GenericResult[int]:
+                return GenericResult[int](value=42)
+
+        Last()
+
+    def test_use_as_base_class_mixed_annotations_reversed(self):
+        class Base(CallableModelGenericType[ContextType, ResultType], Generic[ContextType, ResultType]): ...
+
+        class Next(Base[ContextType, ResultType], Generic[ContextType, ResultType]): ...
+
+        class Partial(Next[ContextType, GenericResult[int]], Generic[ContextType]): ...
+
+        class Last(Partial[NullContext]):
+            @Flow.call
+            def __call__(self, context: NullContext) -> GenericResult[int]:
+                return GenericResult[int](value=42)
+
+        Last()
 
     def test_use_as_base_class_conflict(self):
         class MyCallable(CallableModelGenericType[NullContext, GenericResult[int]]):
