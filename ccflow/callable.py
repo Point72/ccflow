@@ -609,21 +609,25 @@ class CallableModelGenericType(CallableModel, Generic[ContextType, ResultType]):
                         break
             if new_context_type is not None:
                 # Validate that the model's context_type match
-                orig_context_typ = _cached_signature(cls.__call__).parameters["context"].annotation
-                if orig_context_typ is not Signature.empty and orig_context_typ != new_context_type:
+                annotation_context_type = _cached_signature(cls.__call__).parameters["context"].annotation
+                if annotation_context_type is not Signature.empty and not issubclass(annotation_context_type, new_context_type):
                     raise TypeError(
-                        f"Context type annotation {orig_context_typ} on __call__ does not match context_type {new_context_type} defined by CallableModelGenericType"
+                        f"Context type annotation {annotation_context_type} on __call__ does not match context_type {new_context_type} defined by CallableModelGenericType"
                     )
+                elif issubclass(annotation_context_type, new_context_type):
+                    new_context_type = annotation_context_type
                 # Set on class
                 cls._context_type = new_context_type
 
             if new_result_type is not None:
                 # Validate that the model's result_type match
-                orig_return_typ = _cached_signature(cls.__call__).return_annotation
-                if orig_return_typ is not Signature.empty and orig_return_typ != new_result_type:
+                annotation_result_type = _cached_signature(cls.__call__).return_annotation
+                if annotation_result_type is not Signature.empty and not issubclass(annotation_result_type, new_result_type):
                     raise TypeError(
-                        f"Return type annotation {orig_return_typ} on __call__ does not match result_type {new_result_type} defined by CallableModelGenericType"
+                        f"Return type annotation {annotation_result_type} on __call__ does not match result_type {new_result_type} defined by CallableModelGenericType"
                     )
+                elif issubclass(annotation_result_type, new_result_type):
+                    new_result_type = annotation_result_type
 
                 # Set on class
                 cls._result_type = new_result_type
