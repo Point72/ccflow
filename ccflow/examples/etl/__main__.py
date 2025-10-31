@@ -2,6 +2,8 @@ import hydra
 
 from ccflow.utils.hydra import cfg_run
 
+__all__ = ("main",)
+
 
 @hydra.main(config_path="config", config_name="base", version_base=None)
 def main(cfg):

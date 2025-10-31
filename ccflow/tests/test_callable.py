@@ -1,4 +1,4 @@
-from typing import Generic, List, TypeVar
+from typing import Generic, List, Optional, TypeVar
 from unittest import TestCase
 
 from pydantic import ValidationError
@@ -45,6 +45,13 @@ class MyCallable(CallableModel):
     @Flow.call
     def __call__(self, context: MyContext) -> MyResult:
         return MyResult(x=self.i, y=context.a)
+
+
+class MyCallableOptionalContext(CallableModel):
+    @Flow.call
+    def __call__(self, context: Optional[MyContext] = None) -> MyResult:
+        context = context or MyContext(a="default")
+        return MyResult(x=1, y=context.a)
 
 
 class MyCallableChild(MyCallable):
@@ -214,6 +221,13 @@ class TestCallableModel(TestCase):
         # context and kwargs
         self.assertRaises(TypeError, m, context, a="foo")
         self.assertRaises(TypeError, m, context=context, a="foo")
+
+    def test_signature_optional_context(self):
+        m = MyCallableOptionalContext()
+        context = MyContext(a="foo")
+        target = m(context)
+        self.assertEqual(m(context=context), target)
+        self.assertEqual(m().y, "default")
 
     def test_inheritance(self):
         m = MyCallableChild(i=5)

@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from hydra import compose, initialize
 
 from ccflow.utils.hydra import get_args_parser_default, load_config
 
@@ -218,3 +219,14 @@ def test_cfg_explain_cli(mock_args, mocker, capsys):
 
     else:
         cfg_explain_cli()
+
+
+def test_cfg_run_cli(mocker, capsys):
+    """Test cfg_run cli entrypoint using the ETL example config"""
+    from ccflow.utils.hydra import cfg_run
+
+    # We'll load up the model registry using the normal hydra functions
+    with initialize(version_base=None, config_path="../../examples/etl/config"):
+        cfg = compose(config_name="base", overrides=["+callable=extract", "+context=[]"])
+    # Now run it
+    cfg_run(cfg)

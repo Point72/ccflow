@@ -24,7 +24,7 @@ class RestModel(CallableModel):
     @Flow.call
     def __call__(self, context: Optional[SiteContext] = None) -> GenericResult[str]:
         context = context or SiteContext()
-        resp = Client().get(context.site, follow_redirects=True)
+        resp = Client().get(context.site, headers={"User-Agent": "Safari/537.36"}, follow_redirects=True)
         resp.raise_for_status()
 
         return GenericResult[str](value=resp.text)
