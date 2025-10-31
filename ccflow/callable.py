@@ -15,7 +15,7 @@ import abc
 import logging
 from functools import lru_cache, wraps
 from inspect import Signature, isclass, signature
-from typing import Any, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar
+from typing import Any, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar, Union, get_args, get_origin
 
 from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field, InstanceOf, PrivateAttr, TypeAdapter, field_validator, model_validator
 from typing_extensions import override
@@ -217,7 +217,9 @@ class FlowOptions(BaseModel):
         def wrapper(model, context=Signature.empty, *, _options: Optional[FlowOptions] = None, **kwargs):
             if not isinstance(model, CallableModel):
                 raise TypeError(f"Can only decorate methods on CallableModels (not {type(model)}) with the flow decorator.")
-            if not isclass(model.context_type) or not issubclass(model.context_type, ContextBase):
+            if (not isclass(model.context_type) or not issubclass(model.context_type, ContextBase)) and not (
+                get_origin(model.context_type) is Union and type(None) in get_args(model.context_type)
+            ):
                 raise TypeError(f"Context type {model.context_type} must be a subclass of ContextBase")
             if not isclass(model.result_type) or not issubclass(model.result_type, ResultBase):
                 raise TypeError(f"Result type {model.result_type} must be a subclass of ResultBase")
@@ -237,7 +239,11 @@ class FlowOptions(BaseModel):
 
             # Type coercion on input. We do this here (rather than relying on ModelEvaluationContext) as it produces a nicer traceback/error message
             if not isinstance(context, model.context_type):
-                context = model.context_type.model_validate(context)
+                if get_origin(model.context_type) is Union and type(None) in get_args(model.context_type):
+                    model_context_type = [t for t in get_args(model.context_type) if t is not type(None)][0]
+                else:
+                    model_context_type = model.context_type
+                context = model_context_type.model_validate(context)
 
             if fn != getattr(model.__class__, fn.__name__).__wrapped__:
                 # This happens when super().__call__ is used when implementing a CallableModel that derives from another one.
@@ -385,7 +391,8 @@ class ModelEvaluationContext(
     fn: str = Field("__call__", strict=True)
     options: Dict[str, Any] = Field(default_factory=dict)
     model: InstanceOf[_CallableModel]
-    context: InstanceOf[ContextBase]
+    context: Union[InstanceOf[ContextBase], None]
+
     # Using InstanceOf instead of the actual type will limit Pydantic's validation of the field to instance checking
     # Otherwise, the validation will re-run fully despite the models already being validated on construction
     # TODO: Make the instance check compatible with the generic types instead of the base type
@@ -492,9 +499,15 @@ class CallableModel(_CallableModel):
         typ = _cached_signature(self.__class__.__call__).parameters["context"].annotation
         if typ is Signature.empty:
             raise TypeError("Must either define a type annotation for context on __call__ or implement 'context_type'")
-        if not issubclass(typ, ContextBase):
-            raise TypeError(f"Context type declared in signature of __call__ must be a subclass of ContextBase. Received {typ}.")
 
+        # If optional type, extract inner type
+        if get_origin(typ) is Optional or (get_origin(typ) is Union and type(None) in get_args(typ)):
+            typ_to_check = [t for t in get_args(typ) if t is not type(None)][0]
+        else:
+            typ_to_check = typ
+        # Ensure subclass of ContextBase
+        if not issubclass(typ_to_check, ContextBase):
+            raise TypeError(f"Context type declared in signature of __call__ must be a subclass of ContextBase. Received {typ_to_check}.")
         return typ
 
     @property

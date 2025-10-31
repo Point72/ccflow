@@ -2,14 +2,34 @@ import argparse
 import inspect
 import os
 from dataclasses import dataclass
+from logging import getLogger
 from pathlib import Path
 from pprint import pprint
+from textwrap import dedent
 from typing import Any, Callable, Dict, List, Optional
 
 from hydra._internal.defaults_list import DefaultsList
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, ListConfig, OmegaConf
 
-__all__ = ("load_config",)
+try:
+    import panel as pn
+except ImportError:
+    pn = None
+
+from ..base import ModelRegistry
+from ..callable import FlowOptions, FlowOptionsOverride
+
+_log = getLogger(__name__)
+
+__all__ = (
+    "ConfigLoadResult",
+    "load_config",
+    "get_args_parser_default",
+    "get_args_parser_default_ui",
+    "ui_launcher_default",
+    "cfg_explain_cli",
+    "cfg_run",
+)
 
 
 @dataclass
@@ -217,7 +237,7 @@ def load_config(
     return result
 
 
-def get_args_parser() -> argparse.ArgumentParser:
+def get_args_parser_default() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(add_help=True, description="Hydra Config Audit Tool")
     parser.add_argument(
         "overrides",
@@ -260,6 +280,63 @@ def get_args_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def get_args_parser_default_ui() -> argparse.ArgumentParser:
+    parser = get_args_parser_default()
+    parser.add_argument(
+        "--address",
+        type=str,
+        default="127.0.0.1",
+        help="Address to bind the server to.",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8080,
+        help="Port to bind the server to.",
+    )
+    parser.add_argument(
+        "--allow-websocket-origin",
+        type=str,
+        nargs="+",
+        default=["*"],
+        help=dedent("""\
+            Allow websocket connections from the specified origin.
+            This is useful when running the server behind a reverse proxy.
+            If not specified, only connections from the same origin will be allowed.
+            Multiple origins can be specified by separating them with a comma.
+            """),
+    )
+    parser.add_argument(
+        "--basic-auth",
+        help=dedent("""\
+            Enable basic authentication for the server.
+            The value should be in the format 'username:password'.
+            """),
+        type=str,
+        default=None,
+    )
+    parser.add_argument("--cookie-secret", type=str, default="secret", help="Cookie secret for the server.")
+    parser.epilog = dedent("""\
+        This will launch the server that can be used to view the configuration.
+        The server will be accessible at http://<address>:<port> by default.
+        You can specify the address and port using the --address and --port arguments.
+        You can also specify the allowed websocket origins using the --allow-websocket-origin argument.
+        You can enable basic authentication using the --basic-auth argument.
+        You can specify the cookie secret using the --cookie-secret argument.
+        """)
+    return parser
+
+
+def ui_launcher_default(cfg, **kwargs):
+    if pn is None:
+        raise ImportError("Panel is not installed. Please install panel to use the UI.")
+    pn.extension()
+    pn.extension("jsoneditor")
+    app = pn.widgets.JSONEditor(value=cfg, width=1200, mode="view")
+    app.servable()
+    pn.serve(app, **kwargs)
+
+
 def cfg_explain_cli(
     config_path: str = "",
     config_name: str = "",
@@ -276,8 +353,12 @@ def cfg_explain_cli(
         args_parser: An optionally extended version of the argparser returned by `get_args_parser` to add UI arguments
         ui_launcher: A callable that takes the config dict and the parsed args and launches a custom display.
     """
-    parser = args_parser or get_args_parser()
+    parser = args_parser or get_args_parser_default_ui()
     args = parser.parse_args()
+
+    if not args.no_gui and args_parser is None:
+        parser = get_args_parser_default_ui()
+        args = parser.parse_args()
 
     if args.config_path:
         root_config_dir = args.config_path
@@ -308,8 +389,81 @@ def cfg_explain_cli(
         pprint(merged_cfg, width=120, indent=2)
     elif ui_launcher is not None:
         ui_launcher(merged_cfg, **vars(args))
+    elif pn is not None:
+        ui_launcher_default(merged_cfg, **vars(args))
     else:
-        raise ValueError("Cannot launch UI, no ui_launcher provided. Use --no-gui to print the results.")
+        raise ValueError("Cannot launch UI, no ui_launcher provided and/or panel not installed. Use --no-gui to print the results.")
+
+
+def _load_model_registry(cfg: DictConfig):
+    registry = ModelRegistry.root()
+    registry.load_config(cfg=cfg, overwrite=True)
+
+
+def _run_get(cfg: DictConfig):
+    registry = ModelRegistry.root()
+    out = registry[cfg["get"]]
+    try:
+        _log.info(out.model_dump(by_alias=True))
+    except TypeError:
+        ...
+    return out
+
+
+def _run_model(cfg: DictConfig, log_results: bool = True):
+    registry = ModelRegistry.root()
+
+    if "callable" not in cfg:
+        raise ValueError("No callable specified in the configuration.")
+
+    callable = cfg["callable"]
+    if not isinstance(callable, str):
+        # TODO allow instantiation
+        raise ValueError("Only string callables are supported at the moment.")
+
+    if callable not in registry:
+        raise ValueError(f"Callable '{callable}' not found in the model registry. Available callables: {list(registry.keys())}")
+
+    # Pull out the model
+    model = registry[cfg["callable"]]
+
+    if "context" not in cfg:
+        # TODO check if context is necessary
+        raise ValueError("No context specified in the configuration.")
+
+    # Pull out the context
+    context = cfg["context"]
+
+    # If the context is a DictConfig or ListConfig, convert to a standard dict or list
+    if isinstance(context, (DictConfig, ListConfig)):
+        context = OmegaConf.to_container(context, resolve=True)
+
+    # Run the model within the flow options override context
+    global_options = registry.get("/cli/global", FlowOptions())
+    model_options = registry.get("/cli/model", FlowOptions())
+    with FlowOptionsOverride(options=global_options):
+        with FlowOptionsOverride(options=model_options):
+            out = model(context)
+
+    # Log the results
+    if log_results:
+        try:
+            _log.info(out.model_dump(by_alias=True))
+        except TypeError:
+            ...
+    return out
+
+
+def cfg_run(
+    cfg: DictConfig,
+):
+    if not OmegaConf.is_config(cfg):
+        cfg = OmegaConf.create(cfg)
+    _load_model_registry(cfg)
+    if "get" in cfg:
+        _run_get(cfg)
+    else:
+        return _run_model(cfg)
 
 
 if __name__ == "__main__":
