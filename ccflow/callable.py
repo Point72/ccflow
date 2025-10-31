@@ -546,9 +546,20 @@ class WrapperModel(CallableModel, Generic[CallableModelType], abc.ABC):
 
 
 class CallableModelGenericType(CallableModel, Generic[ContextType, ResultType]):
-    """Special type of callable model to use for type declarations, such that the
-    context and result type will be validated.
+    """Special type of callable model that provides context and result via
+    a generic type instead of annotations on __call__.
     """
+
+    _context_type: ClassVar[Type[ContextType]]
+    _result_type: ClassVar[Type[ResultType]]
+
+    @property
+    def context_type(self) -> Type[ContextType]:
+        return self._context_type
+
+    @property
+    def result_type(self) -> Type[ResultType]:
+        return self._result_type
 
     @model_validator(mode="wrap")
     def _validate_callable_model_generic_type(cls, m, handler, info):
@@ -556,9 +567,54 @@ class CallableModelGenericType(CallableModel, Generic[ContextType, ResultType]):
 
         if isinstance(m, str):
             m = resolve_str(m)
+        if isinstance(m, dict):
+            m = handler(m)
         # Raise ValueError (not TypeError) as per https://docs.pydantic.dev/latest/errors/errors/
         if not isinstance(m, CallableModel):
             raise ValueError(f"{m} is not a CallableModel: {type(m)}")
+
+        # Extract the generic types from the class definition
+        if not hasattr(cls, "_context_type") or not hasattr(cls, "_result_type"):
+            new_context_type = None
+            new_result_type = None
+            for base in cls.__mro__[1:]:
+                if issubclass(base, CallableModelGenericType):
+                    # Found the generic base class, it should
+                    # have either generic parameters or context/result
+                    if new_context_type is None and hasattr(base, "_context_type") and issubclass(base._context_type, ContextBase):
+                        new_context_type = base._context_type
+                    if new_result_type is None and hasattr(base, "_result_type") and issubclass(base._result_type, ResultBase):
+                        new_result_type = base._result_type
+                    if base.__pydantic_generic_metadata__["args"]:
+                        for arg in base.__pydantic_generic_metadata__["args"]:
+                            if new_context_type is None and isinstance(arg, type) and issubclass(arg, ContextBase):
+                                new_context_type = arg
+                            elif new_result_type is None and isinstance(arg, type) and issubclass(arg, ResultBase):
+                                # NOTE: ContextBase inherits from ResultBase, so order matters here!
+                                new_result_type = arg
+                    if new_context_type and new_result_type:
+                        break
+            if new_context_type is not None:
+                # Validate that the model's context_type match
+                orig_context_typ = _cached_signature(cls.__call__).parameters["context"].annotation
+                if orig_context_typ is not Signature.empty and orig_context_typ != new_context_type:
+                    raise TypeError(
+                        f"Context type annotation {orig_context_typ} on __call__ does not match context_type {new_context_type} defined by CallableModelGenericType"
+                    )
+                # Set on class
+                cls._context_type = new_context_type
+
+            if new_result_type is not None:
+                # Validate that the model's result_type match
+                orig_return_typ = _cached_signature(cls.__call__).return_annotation
+                if orig_return_typ is not Signature.empty and orig_return_typ != new_result_type:
+                    raise TypeError(
+                        f"Return type annotation {orig_return_typ} on __call__ does not match result_type {new_result_type} defined by CallableModelGenericType"
+                    )
+
+                # Set on class
+                cls._result_type = new_result_type
+
         subtypes = cls.__pydantic_generic_metadata__["args"]
         if subtypes:
             TypeAdapter(Type[subtypes[0]]).validate_python(m.context_type)
