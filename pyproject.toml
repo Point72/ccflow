@@ -44,7 +44,7 @@ dependencies = [
     "orjson",
     "pandas",
     "pyarrow",
-    "pydantic>=2.35,<3",
+    "pydantic>=2.12,<3",
     "smart_open",
     "tenacity",
 ]
