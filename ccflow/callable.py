@@ -17,7 +17,18 @@ from functools import lru_cache, wraps
 from inspect import Signature, isclass, signature
 from typing import Any, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar
 
-from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field, InstanceOf, PrivateAttr, TypeAdapter, field_validator, model_validator
+from pydantic import (
+    BaseModel as PydanticBaseModel,
+    ConfigDict,
+    Field,
+    InstanceOf,
+    PrivateAttr,
+    SerializerFunctionWrapHandler,
+    TypeAdapter,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 from typing_extensions import override
 
 from .base import (
@@ -425,6 +436,36 @@ class ModelEvaluationContext(
             return result
         else:
             return fn(self.context)
+
+    # When serialize_as_any=True, pydantic may detect repeated object ids in nested graphs
+    # (e.g., shared default lists) and raise a circular reference error during serialization.
+    # For computing cache keys, fall back to a minimal, stable representation if such an error occurs.
+    # This is similar to how we the pydantic docs here:
+    # https://docs.pydantic.dev/latest/concepts/forward_annotations/#cyclic-references
+    # handle cyclic references during serialization.
+    @model_serializer(mode="wrap")
+    def _serialize_model_evaluation_context(self, handler: SerializerFunctionWrapHandler):
+        try:
+            return handler(self)
+        except ValueError as exc:
+            msg = str(exc)
+            if "Circular reference" not in msg and "id repeated" not in msg:
+                raise
+            # Minimal, stable representation sufficient for cache-key tokenization
+            try:
+                model_repr = self.model.model_dump(mode="python", serialize_as_any=True, by_alias=True)
+            except Exception:
+                model_repr = repr(self.model)
+            try:
+                context_repr = self.context.model_dump(mode="python", serialize_as_any=True, by_alias=True)
+            except Exception:
+                context_repr = repr(self.context)
+            return dict(
+                fn=self.fn,
+                model=model_repr,
+                context=context_repr,
+                options=dict(self.options),
+            )
 
 
 class EvaluatorBase(_CallableModel, abc.ABC):
