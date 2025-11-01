@@ -68,7 +68,7 @@ develop = [
     "hatchling",
     "mdformat>=0.7.22,<0.8",
     "mdformat-tables>=1",
-    "ruff>=0.6,<0.14",
+    "ruff>=0.6,<0.15",
     "toml",
     "twine",
     "uv",
