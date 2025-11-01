@@ -1,18 +1,17 @@
 import math
 from io import StringIO
-from typing import Any
+from typing import Annotated, Any
 
 import numpy as np
 import orjson
 import polars as pl
 from packaging import version
-from pydantic import TypeAdapter
 from typing_extensions import Self
 
 __all__ = ("PolarsExpression",)
 
 
-class PolarsExpression(pl.Expr):
+class _PolarsExprPydanticAnnotation:
     """Provides a polars expressions from a string"""
 
     @classmethod
@@ -68,10 +67,6 @@ class PolarsExpression(pl.Expr):
 
         raise ValueError(f"Supplied value '{value}' cannot be converted to a Polars expression")
 
-    @classmethod
-    def validate(cls, value: Any) -> Self:
-        """Try to convert/validate an arbitrary value to a PolarsExpression."""
-        return _TYPE_ADAPTER.validate_python(value)
 
-
-_TYPE_ADAPTER = TypeAdapter(PolarsExpression)
+# Public annotated type for Polars expressions
+PolarsExpression = Annotated[pl.Expr, _PolarsExprPydanticAnnotation]
