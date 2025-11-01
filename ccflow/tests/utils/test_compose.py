@@ -1,10 +1,7 @@
-from pathlib import Path
-
-import pytest
 from pydantic import Field
 
 from ccflow import BaseModel, ModelRegistry
-from ccflow.compose import model_alias_update, model_compose
+from ccflow.compose import model_copy_update
 
 
 class DB(BaseModel):
@@ -32,75 +29,107 @@ def teardown_module(_):
     ModelRegistry.root().clear()
 
 
-def test_model_alias_update_returns_model_from_registry_and_updates():
+def test_model_copy_update_returns_model_from_registry_and_updates():
     # alias + update helper
-    m2 = model_alias_update("db_default", host="h", port=100)
+    m2 = model_copy_update("db_default", update={"host": "h", "port": 100})
     assert isinstance(m2, DB)
     assert m2.host == "h"
     assert m2.port == 100
 
 
-def test_model_alias_update_equivalent():
-    m = model_alias_update("db_default", name="x")
+def test_model_copy_update_equivalent():
+    m = model_copy_update("db_default", update={"name": "x"})
     assert isinstance(m, DB)
     assert m.name == "x"
 
 
-def test_model_compose_updates_without_path():
+def test_model_copy_update_preserves_shared_identity_on_update():
+    # Identity of nested fields preserved when using shallow dict update
+    class Shared(BaseModel):
+        val: int = 1
+
+    class A(BaseModel):
+        s: Shared
+        x: int = 0
+
+    shared = Shared(val=5)
+    base = A(s=shared, x=10)
+    ModelRegistry.root().add("baseA", base, overwrite=True)
+    updated = model_copy_update("baseA", update={"x": 11})
+    assert isinstance(updated, A)
+    assert updated.x == 11
+    assert updated.s is shared
+
+
+def test_model_alias_resolve_by_name():
     base = ModelRegistry.root()["db_default"]
-    out = model_compose("db_default", name="z")
-    assert out.name == "z"
-    assert out.host == base.host
+    out = BaseModel.model_validate("db_default")
+    assert out is base
 
 
-def test_model_compose_with_path_and_keys():
-    # Use existing test data as python source
-    path = "ccflow.tests.data.path_key_resolver_samples.NESTED_CONFIG"
-    out = model_compose("db_default", path=path, keys="database")
-    assert out.host == "localhost"
-    assert out.port == 5432
-    assert out.name == "test_db"
+def test_model_copy_update_with_no_changes_returns_diff_object():
+    base = ModelRegistry.root()["db_default"]
+    out = model_copy_update("db_default")
+    assert out is not base
 
 
-def test_model_compose_merge_semantics():
-    path = "ccflow.tests.data.path_key_resolver_samples.NESTED_CONFIG"
-    # explicit_wins keeps explicit value for host, fills port from mapping
-    out = model_compose("db_default", path=path, keys="database", merge="explicit_wins", host="exp")
-    assert out.host == "exp"
-    assert out.port == 5432
-
-    # resolved_wins overrides explicit value for host
-    out2 = model_compose("db_default", path=path, keys="database", merge="resolved_wins", host="exp")
-    assert out2.host == "localhost"
-
-    # raise_on_conflict errors on conflicting key
-    with pytest.raises(ValueError):
-        model_compose("db_default", path=path, keys="database", merge="raise_on_conflict", host="exp")
+def test_model_copy_update_applies_multiple_updates():
+    out = model_copy_update("db_default", update={"host": "u.local", "port": 9999, "name": "u"})
+    assert out.host == "u.local"
+    assert out.port == 9999
+    assert out.name == "u"
 
 
-def test_model_compose_filter_extras():
-    # mapping contains extra key not present on DB
-    path = "ccflow.tests.data.path_key_resolver_samples.NESTED_CONFIG"
-    out = model_compose("db_default", path=path, keys="database", filter_extras=True)
+def test_model_copy_update_does_not_affect_original():
+    base = ModelRegistry.root()["db_default"]
+    out = model_copy_update("db_default", update={"name": "changed"})
+    assert base.name != out.name
+
+
+def test_model_copy_update_handles_empty_update():
+    out = model_copy_update("db_default", update={})
     assert isinstance(out, DB)
 
 
-def test_model_compose_allowed_prefixes_enforced():
-    path = "ccflow.tests.data.path_key_resolver_samples.NESTED_CONFIG"
-    with pytest.raises(ValueError):
-        model_compose("db_default", path=path, allowed_prefixes=["some.other.module"])
+def test_model_copy_update_hydra_like_call():
+    # Simulate Hydra instantiate of function target using args + update
+    from hydra.utils import instantiate
 
-
-def test_model_compose_with_instance_and_update_dict():
-    inst = ModelRegistry.root()["db_default"]
-    out = model_compose(inst, update={"name": "via_update"})
-    assert out.name == "via_update"
-
-
-def test_hydra_target_usage_like():
-    # Simulate Hydra instantiate by calling function target
-    target = model_compose
-    cfg = dict(model="db_other", path=None, update={"port": 7654})
-    out = target(**cfg)
+    cfg = {
+        "_target_": "ccflow.compose.model_copy_update",
+        "model_name": "db_other",
+        "update": {"port": 7654},
+    }
+    out = instantiate(cfg, _convert_="all")
     assert out.port == 7654
     assert out.host == "override.local"
+
+
+def test_from_python_hydra_like():
+    from ccflow.compose import from_python
+
+    obj = from_python("ccflow.tests.data.path_key_resolver_samples.SIMPLE_CONFIG")
+    assert isinstance(obj, dict)
+
+
+def test_model_copy_update_preserves_type_and_fields():
+    base = ModelRegistry.root()["db_default"]
+    out = model_copy_update("db_default", update={"name": "new"})
+    assert isinstance(out, DB)
+    assert out.host == base.host
+
+
+def test_model_copy_update_multiple_fields():
+    out = model_copy_update("db_default", update={"name": "m", "host": "m.local", "port": 1111})
+    assert out.name == "m"
+    assert out.host == "m.local"
+    assert out.port == 1111
+
+
+def test_model_copy_update_multiple_calls_independent_instances():
+    base = ModelRegistry.root()["db_default"]
+    a = model_copy_update("db_default", update={"name": "a"})
+    b = model_copy_update("db_default", update={"name": "b"})
+    assert a.name == "a"
+    assert b.name == "b"
+    assert base.name != a.name and base.name != b.name

@@ -673,6 +673,14 @@ print("Separator: ", config.separator.object)
 #> Separator:  /
 ```
 
+### Registry Helpers
+
+ccflow.compose offers small, focused helpers for interacting with the registry and Python-backed defaults:
+
+- `model_alias(model_name)`: resolve a model instance by string name from the active registry.
+- `model_copy_update(model_name, update=None)`: return a new instance based on a named model with updates applied; uses a shallow copy to preserve nested object identity.
+- `from_python(py_object_path)`: resolve any Python object by import path. Useful for Hydra `_target_` configs that need to pull defaults from code.
+
 ## Using Configuration
 
 With the ability to define arbitrarily complex configuration structures following the examples above, now arises the question of how best to use all that config information.
