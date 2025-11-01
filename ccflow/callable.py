@@ -582,6 +582,11 @@ class CallableModelGenericType(CallableModel, Generic[ContextType, ResultType]):
             m = resolve_str(m)
         if isinstance(m, dict):
             m = handler(m)
+        if handler.__class__.__name__.lower().startswith("assignmentvalidator"):
+            # NOTE: this is a relatively nuanced problem, where we want to validate
+            # assignment but not generic validation. Unfortunately these classes
+            # are not exposed from the rust side, so we have to do a name check.
+            return handler(m)
         # Raise ValueError (not TypeError) as per https://docs.pydantic.dev/latest/errors/errors/
         if not isinstance(m, CallableModel):
             raise ValueError(f"{m} is not a CallableModel: {type(m)}")
