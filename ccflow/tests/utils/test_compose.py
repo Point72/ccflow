@@ -108,8 +108,9 @@ def test_model_copy_update_hydra_like_call():
 def test_from_python_hydra_like():
     from ccflow.compose import from_python
 
-    obj = from_python("ccflow.tests.data.path_key_resolver_samples.SIMPLE_CONFIG")
+    obj = from_python("ccflow.tests.data.python_object_samples.SHARED_CFG")
     assert isinstance(obj, dict)
+    assert obj == {"x": 1, "y": 2}
 
 
 def test_model_copy_update_preserves_type_and_fields():

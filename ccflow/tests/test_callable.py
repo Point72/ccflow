@@ -1,4 +1,4 @@
-from typing import Generic, List, TypeVar
+from typing import Generic, List, Optional, TypeVar
 from unittest import TestCase
 
 from pydantic import ValidationError
@@ -45,6 +45,13 @@ class MyCallable(CallableModel):
     @Flow.call
     def __call__(self, context: MyContext) -> MyResult:
         return MyResult(x=self.i, y=context.a)
+
+
+class MyCallableOptionalContext(CallableModel):
+    @Flow.call
+    def __call__(self, context: Optional[MyContext] = None) -> MyResult:
+        context = context or MyContext(a="default")
+        return MyResult(x=1, y=context.a)
 
 
 class MyCallableChild(MyCallable):
@@ -215,6 +222,13 @@ class TestCallableModel(TestCase):
         self.assertRaises(TypeError, m, context, a="foo")
         self.assertRaises(TypeError, m, context=context, a="foo")
 
+    def test_signature_optional_context(self):
+        m = MyCallableOptionalContext()
+        context = MyContext(a="foo")
+        target = m(context)
+        self.assertEqual(m(context=context), target)
+        self.assertEqual(m().y, "default")
+
     def test_inheritance(self):
         m = MyCallableChild(i=5)
         self.assertEqual(m(MyContext(a="foo")), MyResult(x=5, y="foo"))
@@ -354,13 +368,31 @@ class TestCallableModelGenericType(TestCase):
             def __call__(self, context: NullContext) -> GenericResult[int]:
                 return GenericResult[int](value=42)
 
-        class DateRangeImplAnalyticDirect(MyCallableBase[NullContext, GenericResult[int]]):
+        m2 = MyCallable()
+        self.assertEqual(m2.context_type, NullContext)
+        self.assertEqual(m2.result_type, GenericResult[int])
+        res2 = m2(NullContext())
+        self.assertEqual(res2.value, 42)
+
+    def test_align_annotation_and_context_class(self):
+        TContext = TypeVar("TContext", bound=ContextBase)
+        TResult = TypeVar("TResult", bound=ResultBase)
+
+        class MyCallableBase(CallableModelGenericType[TContext, TResult]):
+            pass
+
+        class MyCallableImpl(MyCallableBase[NullContext, GenericResult[int]]):
+            pass
+
+        class MyNullContext(NullContext): ...
+
+        class MyCallable(MyCallableImpl):
             @Flow.call
-            def __call__(self, context: NullContext) -> GenericResult[int]:
+            def __call__(self, context: MyNullContext) -> GenericResult[int]:
                 return GenericResult[int](value=42)
 
         m2 = MyCallable()
-        self.assertEqual(m2.context_type, NullContext)
+        self.assertEqual(m2.context_type, MyNullContext)
         self.assertEqual(m2.result_type, GenericResult[int])
         res2 = m2(NullContext())
         self.assertEqual(res2.value, 42)
