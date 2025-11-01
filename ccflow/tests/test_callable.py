@@ -1,4 +1,4 @@
-from typing import List
+from typing import Generic, List, Optional, TypeVar
 from unittest import TestCase
 
 from pydantic import ValidationError
@@ -9,6 +9,7 @@ from ccflow import (
     ContextBase,
     ContextType,
     Flow,
+    GenericResult,
     GraphDepList,
     MetaData,
     ModelRegistry,
@@ -44,6 +45,13 @@ class MyCallable(CallableModel):
     @Flow.call
     def __call__(self, context: MyContext) -> MyResult:
         return MyResult(x=self.i, y=context.a)
+
+
+class MyCallableOptionalContext(CallableModel):
+    @Flow.call
+    def __call__(self, context: Optional[MyContext] = None) -> MyResult:
+        context = context or MyContext(a="default")
+        return MyResult(x=1, y=context.a)
 
 
 class MyCallableChild(MyCallable):
@@ -214,6 +222,13 @@ class TestCallableModel(TestCase):
         self.assertRaises(TypeError, m, context, a="foo")
         self.assertRaises(TypeError, m, context=context, a="foo")
 
+    def test_signature_optional_context(self):
+        m = MyCallableOptionalContext()
+        context = MyContext(a="foo")
+        target = m(context)
+        self.assertEqual(m(context=context), target)
+        self.assertEqual(m().y, "default")
+
     def test_inheritance(self):
         m = MyCallableChild(i=5)
         self.assertEqual(m(MyContext(a="foo")), MyResult(x=5, y="foo"))
@@ -315,6 +330,91 @@ class TestCallableModelGenericType(TestCase):
         self.assertEqual(w.model, m)
         self.assertEqual(w.context_type, m.context_type)
         self.assertEqual(w.result_type, m.result_type)
+
+    def test_use_as_base_class(self):
+        class MyCallable(CallableModelGenericType[NullContext, GenericResult[int]]):
+            @Flow.call
+            def __call__(self, context: NullContext) -> GenericResult[int]:
+                return GenericResult[int](value=42)
+
+        m = MyCallable()
+        self.assertEqual(m.context_type, NullContext)
+        self.assertEqual(m.result_type, GenericResult[int])
+        self.assertEqual(m(NullContext()).value, 42)
+
+    def test_use_as_base_class_no_call_annotations(self):
+        class MyCallable(CallableModelGenericType[NullContext, GenericResult[int]]):
+            @Flow.call
+            def __call__(self, context):
+                return GenericResult[int](value=42)
+
+        m = MyCallable()
+        self.assertEqual(m.context_type, NullContext)
+        self.assertEqual(m.result_type, GenericResult[int])
+        self.assertEqual(m(NullContext()).value, 42)
+
+    def test_use_as_base_class_inheritance(self):
+        TContext = TypeVar("TContext", bound=ContextBase)
+        TResult = TypeVar("TResult", bound=ResultBase)
+
+        class MyCallableBase(CallableModelGenericType[TContext, TResult]):
+            pass
+
+        class MyCallableImpl(MyCallableBase[NullContext, GenericResult[int]]):
+            pass
+
+        class MyCallable(MyCallableImpl):
+            @Flow.call
+            def __call__(self, context: NullContext) -> GenericResult[int]:
+                return GenericResult[int](value=42)
+
+        class DateRangeImplAnalyticDirect(MyCallableBase[NullContext, GenericResult[int]]):
+            @Flow.call
+            def __call__(self, context: NullContext) -> GenericResult[int]:
+                return GenericResult[int](value=42)
+
+        m2 = MyCallable()
+        self.assertEqual(m2.context_type, NullContext)
+        self.assertEqual(m2.result_type, GenericResult[int])
+        res2 = m2(NullContext())
+        self.assertEqual(res2.value, 42)
+
+    def test_use_as_base_class_mixed_annotations(self):
+        class Base(CallableModelGenericType[ContextType, ResultType], Generic[ContextType, ResultType]): ...
+
+        class Next(Base[ContextType, ResultType], Generic[ContextType, ResultType]): ...
+
+        class Partial(Next[NullContext, ResultType], Generic[ResultType]): ...
+
+        class Last(Partial[GenericResult[int]]):
+            @Flow.call
+            def __call__(self, context: NullContext) -> GenericResult[int]:
+                return GenericResult[int](value=42)
+
+        Last()
+
+    def test_use_as_base_class_mixed_annotations_reversed(self):
+        class Base(CallableModelGenericType[ContextType, ResultType], Generic[ContextType, ResultType]): ...
+
+        class Next(Base[ContextType, ResultType], Generic[ContextType, ResultType]): ...
+
+        class Partial(Next[ContextType, GenericResult[int]], Generic[ContextType]): ...
+
+        class Last(Partial[NullContext]):
+            @Flow.call
+            def __call__(self, context: NullContext) -> GenericResult[int]:
+                return GenericResult[int](value=42)
+
+        Last()
+
+    def test_use_as_base_class_conflict(self):
+        class MyCallable(CallableModelGenericType[NullContext, GenericResult[int]]):
+            @Flow.call
+            def __call__(self, context: NullContext) -> GenericResult[float]:
+                return GenericResult[float](value=42.0)
+
+        with self.assertRaises(TypeError):
+            MyCallable()
 
 
 class TestCallableModelDeps(TestCase):

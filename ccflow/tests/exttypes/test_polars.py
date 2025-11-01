@@ -71,26 +71,14 @@ def test_model_field_and_dataframe_filter():
     assert filtered.select("x").to_series().to_list() == [11, 20]
 
 
-# Explicitly test the legacy classmethod validator for backwards compatibility
-def test_polars_expression_validate_passthrough():
-    adapter = TypeAdapter(PolarsExpression)
-    expression = pl.col("Col1") + pl.col("Col2")
-    result = adapter.validate_python(expression)
-    assert result.meta.serialize() == expression.meta.serialize()
+def test_model_field_and_dataframe_with_columns():
+    class DummyExprModel(BaseModel):
+        expr: PolarsExpression
 
+    raw_expr = 'pl.col("x").rolling_max(window_size=2)'
+    m = DummyExprModel(expr=raw_expr)
+    assert isinstance(m.expr, pl.Expr)
 
-def test_polars_expression_validate_from_string():
-    adapter = TypeAdapter(PolarsExpression)
-    result = adapter.validate_python("pl.col('Col1') + pl.col('Col2')")
-    expected_result = pl.col("Col1") + pl.col("Col2")
-    assert result.meta.serialize() == expected_result.meta.serialize()
-
-
-def test_polars_expression_validate_errors():
-    adapter = TypeAdapter(PolarsExpression)
-    with pytest.raises(ValidationError):
-        adapter.validate_python(None)
-    with pytest.raises(ValidationError):
-        adapter.validate_python("pl.DataFrame()")
-    with pytest.raises(ValidationError):
-        adapter.validate_python("invalid_statement")
+    df = pl.DataFrame({"x": [5, 19, 17, 13, 8, 20], "y": [1, 2, 3, 4, 5, 6]})
+    transformed = df.select(m.expr)
+    assert transformed.to_series().to_list() == [None, 19, 19, 17, 13, 20]

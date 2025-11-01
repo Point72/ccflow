@@ -157,3 +157,11 @@ ccflow/labextension
 
 # Rust
 target
+
+# Examples
+outputs
+raw.html
+extracted.csv
+etl.db
+lobsters.html
+lobsters.csv

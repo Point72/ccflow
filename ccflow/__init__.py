@@ -1,4 +1,4 @@
-__version__ = "0.6.4"
+__version__ = "0.6.9"
 
 from .arrow import *
 from .base import *
