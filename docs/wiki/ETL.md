@@ -113,7 +113,7 @@ When we write the configuration files for our `RestModel`, we'll see how this li
 
 The second function here launches a helpful UI to browse the `hydra` configuration hierarchy we've constructed.
 
-> ![NOTE]
+> [!NOTE]
 > These can be run directly from `ccflow`:
 > `python -m ccflow.examples.etl` and `python -m ccflow.examples.etl.explain`
 
@@ -311,7 +311,7 @@ python -m ccflow.examples.etl.explain ++extract.publisher.name=test
 
 ## Appendix - Multiple Files
 
-In `hydra`, its conveniet to have things broken up across multiple files.
+In `hydra`, its convenient to have things broken up across multiple files.
 In our example above, we can do this as follows:
 
 **etl/config/base.yaml**

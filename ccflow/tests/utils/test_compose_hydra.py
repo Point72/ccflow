@@ -42,9 +42,6 @@ def test_hydra_conf_registry_reference_identity():
     assert isinstance(holder.cfg, dict)
 
 
-# Removed: dict identity is not guaranteed by Pydantic; identity preservation is tested for BaseModel fields.
-
-
 def test_update_from_base_shared_identity():
     # Ensure shared sub-fields remain identical objects when alias-update is used
     from hydra.utils import instantiate
