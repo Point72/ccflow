@@ -131,6 +131,20 @@ class BadModel5(CallableModel):
         return context
 
 
+class BadModel6(CallableModel):
+    @property
+    def context_type(self):
+        return NullContext
+
+    @property
+    def result_type(self):
+        return GenericResult
+
+    @Flow.call
+    def __call__(self, context: MyContext) -> MyResult:
+        return context
+
+
 class MyWrapper(WrapperModel[MyCallable]):
     """This wrapper model specifically takes a MyCallable instance for 'model'"""
 
@@ -259,13 +273,11 @@ class TestCallableModel(TestCase):
         self.assertEqual(m.ll, m2.ll)
 
     def test_types(self):
-        m = BadModel1()
-        self.assertRaises(TypeError, lambda: m.context_type)
-        self.assertRaises(TypeError, lambda: m.result_type)
+        error = "Must either define a type annotation for context on __call__ or implement 'context_type'"
+        self.assertRaisesRegex(TypeError, error, BadModel1)
 
-        m = BadModel2()
-        self.assertRaises(TypeError, lambda: m.context_type)
-        self.assertRaises(TypeError, lambda: m.result_type)
+        error = "Context type declared in signature of __call__ must be a subclass of ContextBase. Received ~ContextType"
+        self.assertRaisesRegex(TypeError, error, BadModel2)
 
         error = "__call__ function of CallableModel must be wrapped with the Flow.call decorator"
         self.assertRaisesRegex(ValueError, error, BadModel3)
@@ -275,6 +287,9 @@ class TestCallableModel(TestCase):
 
         error = "__call__ method must take a single argument, named 'context'"
         self.assertRaisesRegex(ValueError, error, BadModel5)
+
+        error = "The context_type <class 'ccflow.context.NullContext'> must match the type of the context accepted by __call__ <class 'ccflow.tests.test_callable.MyContext'>"
+        self.assertRaisesRegex(ValueError, error, BadModel6)
 
     def test_identity(self):
         # Make sure that an "identity" mapping works
@@ -498,7 +513,7 @@ class TestCallableModelDeps(TestCase):
             MyCallableParent_bad_annotation(my_callable=m)
 
         msg = e.exception.errors()[0]["msg"]
-        target = "Value error, The type of the context accepted by __deps__ ~ContextType must match that accepted by __call__ <class 'ccflow.tests.test_callable.MyContext'>!"
+        target = "Value error, The type of the context accepted by __deps__ ~ContextType must match that accepted by __call__ <class 'ccflow.tests.test_callable.MyContext'>"
 
         self.assertEqual(msg, target)
 

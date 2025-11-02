@@ -94,8 +94,23 @@ class _CallableModel(BaseModel, abc.ABC):
             type_deps_arg = _cached_signature(self.__class__.__deps__).parameters["context"].annotation
             if type_call_arg is not type_deps_arg:
                 err_msg_type_mismatch = (
-                    f"The type of the context accepted by __deps__ {type_deps_arg} must match that accepted by __call__ {type_call_arg}!"
+                    f"The type of the context accepted by __deps__ {type_deps_arg} must match that accepted by __call__ {type_call_arg}"
                 )
+                raise ValueError(err_msg_type_mismatch)
+
+        # If context_type or result_type are overridden, ensure they match the signature
+        if hasattr(self, "context_type"):
+            type_call_arg = _cached_signature(self.__class__.__call__).parameters["context"].annotation
+            if not isinstance(type_call_arg, TypeVar) and type_call_arg is not Signature.empty and type_call_arg is not self.context_type:
+                err_msg_type_mismatch = (
+                    f"The context_type {self.context_type} must match the type of the context accepted by __call__ {type_call_arg}"
+                )
+                raise ValueError(err_msg_type_mismatch)
+
+        if hasattr(self, "result_type"):
+            type_call_return = _cached_signature(self.__class__.__call__).return_annotation
+            if not isinstance(type_call_return, TypeVar) and type_call_return is not Signature.empty and type_call_return is not self.result_type:
+                err_msg_type_mismatch = f"The result_type {self.result_type} must match the return type of __call__ {type_call_return}"
                 raise ValueError(err_msg_type_mismatch)
 
         return self
@@ -506,7 +521,7 @@ class CallableModel(_CallableModel):
         else:
             typ_to_check = typ
         # Ensure subclass of ContextBase
-        if not issubclass(typ_to_check, ContextBase):
+        if not isclass(typ_to_check) or not issubclass(typ_to_check, ContextBase):
             raise TypeError(f"Context type declared in signature of __call__ must be a subclass of ContextBase. Received {typ_to_check}.")
         return typ
 
@@ -520,7 +535,7 @@ class CallableModel(_CallableModel):
         typ = _cached_signature(self.__class__.__call__).return_annotation
         if typ is Signature.empty:
             raise TypeError("Must either define a return type annotation on __call__ or implement 'result_type'")
-        if not issubclass(typ, ResultBase):
+        if not isclass(typ) or not issubclass(typ, ResultBase):
             raise TypeError(f"Return type declared in signature of __call__ must be a subclass of ResultBase (i.e. GenericResult). Received {typ}.")
         return typ
 
