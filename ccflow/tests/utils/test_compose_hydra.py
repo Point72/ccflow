@@ -32,7 +32,7 @@ def test_hydra_conf_registry_reference_identity():
     assert isinstance(consumer, Consumer)
     # Identity: consumer.shared should be the same instance as registry shared_model
     assert consumer.shared is shared
-    # model_copy_update preserves shared identity and applies field updates
+    # update_from_base preserves shared identity and applies field updates
     assert consumer_updated.shared is shared
     assert consumer_updated.tag == "consumer2"
 
@@ -45,7 +45,7 @@ def test_hydra_conf_registry_reference_identity():
 # Removed: dict identity is not guaranteed by Pydantic; identity preservation is tested for BaseModel fields.
 
 
-def test_model_copy_update_shared_identity():
+def test_update_from_base_shared_identity():
     # Ensure shared sub-fields remain identical objects when alias-update is used
     from hydra.utils import instantiate
 
@@ -64,11 +64,11 @@ def test_model_copy_update_shared_identity():
     ModelRegistry.root().add("shared", shared, overwrite=True)
     ModelRegistry.root().add("base", base, overwrite=True)
 
-    # Compose a config that uses model_copy_update to update only a primitive field
+    # Compose a config that uses update_from_base to update only a primitive field
     cfg = {
         "updated": {
-            "_target_": "ccflow.compose.model_copy_update",
-            "model_name": "base",
+            "_target_": "ccflow.compose.update_from_base",
+            "base": {"_target_": "ccflow.compose.model_alias", "model_name": "base"},
             "update": {"x": 99},
         }
     }
@@ -80,6 +80,6 @@ def test_model_copy_update_shared_identity():
     # Ensure the shared sub-field refers to the same object as in the registry
     assert obj.s is shared
 
-    # Additional: Using model_copy_update without changing shared should preserve identity
+    # Additional: Using update_from_base without changing shared should preserve identity
     obj2 = instantiate(cfg["updated"], _convert_="all")
     assert obj2.s is shared

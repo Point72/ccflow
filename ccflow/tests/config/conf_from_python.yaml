@@ -15,9 +15,9 @@ holder:
     _target_: ccflow.compose.from_python
     py_object_path: ccflow.tests.data.python_object_samples.SHARED_CFG
 
-# Use model_copy_update to update a field while preserving shared identity
+# Use update_from_base to update a field while preserving shared identity
 consumer_updated:
-  _target_: ccflow.compose.model_copy_update
-  model_name: consumer
+  _target_: ccflow.compose.update_from_base
+  base: consumer
   update:
     tag: consumer2

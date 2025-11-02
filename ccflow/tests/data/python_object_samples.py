@@ -9,6 +9,11 @@ SHARED_CFG: Dict[str, int] = {"x": 1, "y": 2}
 OTHER_CFG: Dict[str, int] = {"x": 10, "y": 20}
 """Dict samples; identity for dicts is not guaranteed by Pydantic."""
 
+NESTED_CFG = {
+    "db": {"host": "seed.local", "port": 7000, "name": "seed"},
+    "meta": {"env": "dev"},
+}
+
 
 class SharedHolder(BaseModel):
     name: str

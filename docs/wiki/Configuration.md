@@ -678,8 +678,11 @@ print("Separator: ", config.separator.object)
 ccflow.compose offers small, focused helpers for interacting with the registry and Python-backed defaults:
 
 - `model_alias(model_name)`: resolve a model instance by string name from the active registry.
-- `model_copy_update(model_name, update=None)`: return a new instance based on a named model with updates applied; uses a shallow copy to preserve nested object identity.
-- `from_python(py_object_path)`: resolve any Python object by import path. Useful for Hydra `_target_` configs that need to pull defaults from code.
+- `update_from_base(base, update=None, target_class=None)`: construct a new instance or dict by shallow-copying `base` and applying updates.
+  - If `base` is a registry alias, you can pass either the alias string directly (e.g., `base: "my_model"`) or use `_target_: ccflow.compose.model_alias` form.
+  - If `base` is a dict, returns the updated dict. If `target_class` is provided (type or import path), constructs that type with the updated fields.
+  - Shallow copy ensures nested BaseModel identity is preserved.
+- `from_python(py_object_path, indexer=None)`: resolve any Python object by import path. Optionally provide `indexer` (a list of keys) to index into the object in order; no safety checks are performed and indexing errors will propagate.
 
 ## Using Configuration
 
