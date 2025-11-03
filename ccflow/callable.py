@@ -603,20 +603,12 @@ class CallableModelGenericType(CallableModel, Generic[ContextType, ResultType]):
     def result_type(self) -> Type[ResultType]:
         return self._result_type
 
-    @model_validator(mode="wrap")
-    def _validate_callable_model_generic_type(cls, m, handler, info):
-        from ccflow.base import resolve_str
+    def __setstate__(self, state):
+        super().__setstate__(state)
+        self._determine_context_result()
 
-        if isinstance(m, str):
-            m = resolve_str(m)
-
-        if isinstance(m, dict):
-            m = handler(m)
-
-        # Raise ValueError (not TypeError) as per https://docs.pydantic.dev/latest/errors/errors/
-        if not isinstance(m, CallableModel):
-            raise ValueError(f"{m} is not a CallableModel: {type(m)}")
-
+    @classmethod
+    def _determine_context_result(cls):
         # Extract the generic types from the class definition
         if not hasattr(cls, "_context_type") or not hasattr(cls, "_result_type"):
             new_context_type = None
@@ -686,8 +678,24 @@ class CallableModelGenericType(CallableModel, Generic[ContextType, ResultType]):
                 # Set on class
                 cls._result_type = new_result_type
 
+    @model_validator(mode="wrap")
+    def _validate_callable_model_generic_type(cls, m, handler, info):
+        from ccflow.base import resolve_str
+
+        if isinstance(m, str):
+            m = resolve_str(m)
+
+        if isinstance(m, dict):
+            m = handler(m)
+            cls._determine_context_result()
+
+        # Raise ValueError (not TypeError) as per https://docs.pydantic.dev/latest/errors/errors/
+        if not isinstance(m, CallableModel):
+            raise ValueError(f"{m} is not a CallableModel: {type(m)}")
+
         subtypes = cls.__pydantic_generic_metadata__["args"]
         if subtypes:
             TypeAdapter(Type[subtypes[0]]).validate_python(m.context_type)
             TypeAdapter(Type[subtypes[1]]).validate_python(m.result_type)
+
         return m
