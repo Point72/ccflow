@@ -101,7 +101,16 @@ class _CallableModel(BaseModel, abc.ABC):
         # If context_type or result_type are overridden, ensure they match the signature
         if hasattr(self, "context_type"):
             type_call_arg = _cached_signature(self.__class__.__call__).parameters["context"].annotation
-            if not isinstance(type_call_arg, TypeVar) and type_call_arg is not Signature.empty and type_call_arg is not self.context_type:
+
+            # If optional type, extract inner type
+            if get_origin(type_call_arg) is Optional or (get_origin(type_call_arg) is Union and type(None) in get_args(type_call_arg)):
+                type_call_arg = [t for t in get_args(type_call_arg) if t is not type(None)][0]
+
+            if (
+                not isinstance(type_call_arg, TypeVar)
+                and type_call_arg is not Signature.empty
+                and (not isclass(type_call_arg) or not issubclass(type_call_arg, self.context_type))
+            ):
                 err_msg_type_mismatch = (
                     f"The context_type {self.context_type} must match the type of the context accepted by __call__ {type_call_arg}"
                 )
@@ -109,7 +118,11 @@ class _CallableModel(BaseModel, abc.ABC):
 
         if hasattr(self, "result_type"):
             type_call_return = _cached_signature(self.__class__.__call__).return_annotation
-            if not isinstance(type_call_return, TypeVar) and type_call_return is not Signature.empty and type_call_return is not self.result_type:
+            if (
+                not isinstance(type_call_return, TypeVar)
+                and type_call_return is not Signature.empty
+                and (not isclass(type_call_return) or not issubclass(type_call_return, self.result_type))
+            ):
                 err_msg_type_mismatch = f"The result_type {self.result_type} must match the return type of __call__ {type_call_return}"
                 raise ValueError(err_msg_type_mismatch)
 
@@ -520,6 +533,7 @@ class CallableModel(_CallableModel):
             typ_to_check = [t for t in get_args(typ) if t is not type(None)][0]
         else:
             typ_to_check = typ
+
         # Ensure subclass of ContextBase
         if not isclass(typ_to_check) or not issubclass(typ_to_check, ContextBase):
             raise TypeError(f"Context type declared in signature of __call__ must be a subclass of ContextBase. Received {typ_to_check}.")
@@ -595,8 +609,10 @@ class CallableModelGenericType(CallableModel, Generic[ContextType, ResultType]):
 
         if isinstance(m, str):
             m = resolve_str(m)
+
         if isinstance(m, dict):
             m = handler(m)
+
         # Raise ValueError (not TypeError) as per https://docs.pydantic.dev/latest/errors/errors/
         if not isinstance(m, CallableModel):
             raise ValueError(f"{m} is not a CallableModel: {type(m)}")
@@ -614,17 +630,31 @@ class CallableModelGenericType(CallableModel, Generic[ContextType, ResultType]):
                     if new_result_type is None and hasattr(base, "_result_type") and issubclass(base._result_type, ResultBase):
                         new_result_type = base._result_type
                     if base.__pydantic_generic_metadata__["args"]:
-                        for arg in base.__pydantic_generic_metadata__["args"]:
-                            if new_context_type is None and isinstance(arg, type) and issubclass(arg, ContextBase):
-                                new_context_type = arg
-                            elif new_result_type is None and isinstance(arg, type) and issubclass(arg, ResultBase):
+                        if len(base.__pydantic_generic_metadata__["args"]) >= 2:
+                            # Assume order is ContextType, ResultType
+                            arg0, arg1 = base.__pydantic_generic_metadata__["args"][:2]
+                            if new_context_type is None and isinstance(arg0, type) and issubclass(arg0, ContextBase):
+                                new_context_type = arg0
+                            if new_result_type is None and isinstance(arg1, type) and issubclass(arg1, ResultBase):
                                 # NOTE: ContextBase inherits from ResultBase, so order matters here!
-                                new_result_type = arg
+                                new_result_type = arg1
+                        else:
+                            for arg in base.__pydantic_generic_metadata__["args"]:
+                                if new_context_type is None and isinstance(arg, type) and issubclass(arg, ContextBase):
+                                    new_context_type = arg
+                                elif new_result_type is None and isinstance(arg, type) and issubclass(arg, ResultBase):
+                                    # NOTE: ContextBase inherits from ResultBase, so order matters here!
+                                    new_result_type = arg
                     if new_context_type and new_result_type:
                         break
+
             if new_context_type is not None:
                 # Validate that the model's context_type match
                 annotation_context_type = _cached_signature(cls.__call__).parameters["context"].annotation
+                if get_origin(annotation_context_type) is Optional or (
+                    get_origin(annotation_context_type) is Union and type(None) in get_args(annotation_context_type)
+                ):
+                    annotation_context_type = [t for t in get_args(annotation_context_type) if t is not type(None)][0]
                 if (
                     annotation_context_type is not Signature.empty
                     and not isinstance(annotation_context_type, TypeVar)
@@ -635,6 +665,7 @@ class CallableModelGenericType(CallableModel, Generic[ContextType, ResultType]):
                     )
                 elif isclass(annotation_context_type) and issubclass(annotation_context_type, new_context_type):
                     new_context_type = annotation_context_type
+
                 # Set on class
                 cls._context_type = new_context_type
 

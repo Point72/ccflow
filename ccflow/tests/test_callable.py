@@ -104,36 +104,75 @@ class IdentityCallable(CallableModel):
         return context
 
 
-class BadModel1(CallableModel):
+class BadModelNoContextNoResult(CallableModel):
     @Flow.call
     def __call__(self, context):
         return None
 
 
-class BadModel2(CallableModel):
+class BadModelNeedRealTypes(CallableModel):
     @Flow.call
     def __call__(self, context: ContextType) -> ResultType:
         return None
 
 
-class BadModel3(CallableModel):
+class BadModelMissingFlowCallDecorator(CallableModel):
+    """Model missing Flow.call decorator"""
+
     def __call__(self, context: MyContext) -> MyResult:
         return MyResult(x=1, y="foo")
 
 
-class BadModel4(CallableModel):
+class BadModelMissingFlowDepsDecorator(CallableModel):
+    """Model missing Flow.deps decorator"""
+
+    def __deps__(self, context: MyContext) -> GraphDepList:
+        return []
+
+    @Flow.call
+    def __call__(self, context: MyContext) -> MyResult:
+        return MyResult(x=1, y="foo")
+
+
+class BadModelMissingContextArg(CallableModel):
     @Flow.call
     def __call__(self, custom_arg: MyContext) -> MyResult:
         return custom_arg
 
 
-class BadModel5(CallableModel):
+class BadModelDoubleContextArg(CallableModel):
     @Flow.call
     def __call__(self, context: MyContext, context2: MyContext) -> MyResult:
         return context
 
 
-class BadModel6(CallableModel):
+class BadModelMismatchedContextAndCall(CallableModel):
+    """Model with mismatched context_type and __call__ annotation"""
+
+    @property
+    def context_type(self):
+        return NullContext
+
+    @property
+    def result_type(self):
+        return MyResult
+
+    @Flow.call
+    def __call__(self, context: MyContext) -> MyResult:
+        return context
+
+
+class BadModelGenericMismatchedContextAndCall(CallableModelGenericType[NullContext, MyResult]):
+    """Model with mismatched context_type and __call__ annotation"""
+
+    @Flow.call
+    def __call__(self, context: MyContext) -> MyResult:
+        return context
+
+
+class BadModelMismatchedResultAndCall(CallableModel):
+    """Model with mismatched result_type and __call__ annotation"""
+
     @property
     def context_type(self):
         return NullContext
@@ -143,7 +182,15 @@ class BadModel6(CallableModel):
         return GenericResult
 
     @Flow.call
-    def __call__(self, context: MyContext) -> MyResult:
+    def __call__(self, context: NullContext) -> MyResult:
+        return context
+
+
+class BadModelGenericMismatchedResultAndCall(CallableModelGenericType[NullContext, GenericResult]):
+    """Model with mismatched result_type and __call__ annotation"""
+
+    @Flow.call
+    def __call__(self, context: NullContext) -> MyResult:
         return context
 
 
@@ -327,22 +374,34 @@ class TestCallableModel(TestCase):
 
     def test_types(self):
         error = "Must either define a type annotation for context on __call__ or implement 'context_type'"
-        self.assertRaisesRegex(TypeError, error, BadModel1)
+        self.assertRaisesRegex(TypeError, error, BadModelNoContextNoResult)
 
         error = "Context type declared in signature of __call__ must be a subclass of ContextBase. Received ~ContextType"
-        self.assertRaisesRegex(TypeError, error, BadModel2)
+        self.assertRaisesRegex(TypeError, error, BadModelNeedRealTypes)
 
         error = "__call__ function of CallableModel must be wrapped with the Flow.call decorator"
-        self.assertRaisesRegex(ValueError, error, BadModel3)
+        self.assertRaisesRegex(ValueError, error, BadModelMissingFlowCallDecorator)
+
+        error = "__deps__ function of CallableModel must be wrapped with the Flow.deps decorator"
+        self.assertRaisesRegex(ValueError, error, BadModelMissingFlowDepsDecorator)
 
         error = "__call__ method must take a single argument, named 'context'"
-        self.assertRaisesRegex(ValueError, error, BadModel4)
+        self.assertRaisesRegex(ValueError, error, BadModelMissingContextArg)
 
         error = "__call__ method must take a single argument, named 'context'"
-        self.assertRaisesRegex(ValueError, error, BadModel5)
+        self.assertRaisesRegex(ValueError, error, BadModelDoubleContextArg)
 
         error = "The context_type <class 'ccflow.context.NullContext'> must match the type of the context accepted by __call__ <class 'ccflow.tests.test_callable.MyContext'>"
-        self.assertRaisesRegex(ValueError, error, BadModel6)
+        self.assertRaisesRegex(ValueError, error, BadModelMismatchedContextAndCall)
+
+        error = "Context type annotation <class 'ccflow.tests.test_callable.MyContext'> on __call__ does not match context_type <class 'ccflow.context.NullContext'> defined by CallableModelGenericType"
+        self.assertRaisesRegex(TypeError, error, BadModelGenericMismatchedContextAndCall)
+
+        error = "The result_type <class 'ccflow.result.generic.GenericResult'> must match the return type of __call__ <class 'ccflow.tests.test_callable.MyResult'>"
+        self.assertRaisesRegex(ValueError, error, BadModelMismatchedResultAndCall)
+
+        error = "Return type annotation <class 'ccflow.tests.test_callable.MyResult'> on __call__ does not match result_type <class 'ccflow.result.generic.GenericResult'> defined by CallableModelGenericType"
+        self.assertRaisesRegex(TypeError, error, BadModelGenericMismatchedResultAndCall)
 
     def test_identity(self):
         # Make sure that an "identity" mapping works
