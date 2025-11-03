@@ -28,8 +28,6 @@ from pydantic import (
 from pydantic.fields import Field
 from typing_extensions import Self
 
-# Imported for backwards compatibility
-from .compose import model_alias  # noqa: F401
 from .exttypes.pyobjectpath import PyObjectPath
 
 log = logging.getLogger(__name__)
@@ -322,6 +320,16 @@ def _is_config_subregistry(value):
                 if _is_config_subregistry(v):
                     return True
     return False
+
+
+def model_alias(model_name: str) -> BaseModel:
+    """Alias a BaseModel by name (backward compatible).
+
+    Delegates to `ccflow.compose.model_alias` and preserves the original signature.
+    """
+    from .compose import model_alias as _model_alias
+
+    return _model_alias(model_name)
 
 
 ModelType = TypeVar("ModelType", bound=BaseModel)

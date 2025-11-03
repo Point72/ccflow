@@ -1,10 +1,7 @@
-from typing import TYPE_CHECKING, Any, Dict, Optional, Type, Union
+from typing import Any, Dict, Optional, Type, Union
 
 from .base import BaseModel
 from .exttypes.pyobjectpath import _TYPE_ADAPTER as PyObjectPathTA
-
-if TYPE_CHECKING:
-    from ccflow.base import BaseModel
 
 __all__ = (
     "model_alias",
@@ -13,7 +10,7 @@ __all__ = (
 )
 
 
-def model_alias(model_name: str) -> "BaseModel":
+def model_alias(model_name: str) -> BaseModel:
     """Return a model by alias from the registry.
 
     Hydra-friendly: `_target_: ccflow.compose.model_alias` with `model_name`.
@@ -64,7 +61,7 @@ def from_python(py_object_path: str, indexer: Optional[list] = None) -> Any:
 
 
 def update_from_template(
-    base: Optional[Union[str, Dict[str, Any], "BaseModel"]] = None,
+    base: Optional[Union[str, Dict[str, Any], BaseModel]] = None,
     *,
     target_class: Optional[Union[str, Type]] = None,
     update: Optional[Dict[str, Any]] = None,
