@@ -36,7 +36,6 @@ dependencies = [
     "cloudpathlib",
     "cloudpickle",
     "dask",
-    "deprecation",
     "hydra-core",
     "IPython",
     "jinja2",
