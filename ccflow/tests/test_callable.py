@@ -1,6 +1,8 @@
+from pickle import dumps as pdumps, loads as ploads
 from typing import Generic, List, Optional, TypeVar
 from unittest import TestCase
 
+from cloudpickle import dumps as cpdumps, loads as cploads
 from pydantic import ValidationError
 
 from ccflow import (
@@ -151,6 +153,57 @@ class MyWrapperGeneric(WrapperModel):
 
 class MyTest(ContextBase):
     c: MyContext
+
+
+TContext = TypeVar("TContext", bound=ContextBase)
+TResult = TypeVar("TResult", bound=ResultBase)
+
+
+class MyCallableBase(CallableModelGenericType[TContext, TResult]):
+    pass
+
+
+class MyCallableImpl(MyCallableBase[NullContext, GenericResult[int]]):
+    pass
+
+
+class MyCallableFromGeneric(MyCallableImpl):
+    @Flow.call
+    def __call__(self, context: NullContext) -> GenericResult[int]:
+        return GenericResult[int](value=42)
+
+
+class MyNullContext(NullContext): ...
+
+
+class MyCallableFromGenericNullContext(MyCallableImpl):
+    @Flow.call
+    def __call__(self, context: MyNullContext) -> GenericResult[int]:
+        return GenericResult[int](value=42)
+
+
+class BaseGeneric(CallableModelGenericType[ContextType, ResultType], Generic[ContextType, ResultType]): ...
+
+
+class NextGeneric(BaseGeneric[ContextType, ResultType], Generic[ContextType, ResultType]): ...
+
+
+class PartialGeneric(NextGeneric[NullContext, ResultType], Generic[ResultType]): ...
+
+
+class LastGeneric(PartialGeneric[GenericResult[int]]):
+    @Flow.call
+    def __call__(self, context: NullContext) -> GenericResult[int]:
+        return GenericResult[int](value=42)
+
+
+class PartialGenericReversed(NextGeneric[ContextType, GenericResult[int]], Generic[ContextType]): ...
+
+
+class LastGenericReversed(PartialGenericReversed[NullContext]):
+    @Flow.call
+    def __call__(self, context: NullContext) -> GenericResult[int]:
+        return GenericResult[int](value=42)
 
 
 class TestContext(TestCase):
@@ -354,76 +407,60 @@ class TestCallableModelGenericType(TestCase):
         self.assertEqual(m(NullContext()).value, 42)
 
     def test_use_as_base_class_inheritance(self):
-        TContext = TypeVar("TContext", bound=ContextBase)
-        TResult = TypeVar("TResult", bound=ResultBase)
-
-        class MyCallableBase(CallableModelGenericType[TContext, TResult]):
-            pass
-
-        class MyCallableImpl(MyCallableBase[NullContext, GenericResult[int]]):
-            pass
-
-        class MyCallable(MyCallableImpl):
-            @Flow.call
-            def __call__(self, context: NullContext) -> GenericResult[int]:
-                return GenericResult[int](value=42)
-
-        m2 = MyCallable()
+        m2 = MyCallableFromGeneric()
         self.assertEqual(m2.context_type, NullContext)
         self.assertEqual(m2.result_type, GenericResult[int])
         res2 = m2(NullContext())
         self.assertEqual(res2.value, 42)
 
+        # test pickling
+        for dump, load in [(pdumps, ploads), (cpdumps, cploads)]:
+            dumped = dump(m2)
+            m3 = load(dumped)
+            self.assertEqual(m3.context_type, NullContext)
+            self.assertEqual(m3.result_type, GenericResult[int])
+            res3 = m3(NullContext())
+            self.assertEqual(res3.value, 42)
+
     def test_align_annotation_and_context_class(self):
-        TContext = TypeVar("TContext", bound=ContextBase)
-        TResult = TypeVar("TResult", bound=ResultBase)
-
-        class MyCallableBase(CallableModelGenericType[TContext, TResult]):
-            pass
-
-        class MyCallableImpl(MyCallableBase[NullContext, GenericResult[int]]):
-            pass
-
-        class MyNullContext(NullContext): ...
-
-        class MyCallable(MyCallableImpl):
-            @Flow.call
-            def __call__(self, context: MyNullContext) -> GenericResult[int]:
-                return GenericResult[int](value=42)
-
-        m2 = MyCallable()
+        m2 = MyCallableFromGenericNullContext()
         self.assertEqual(m2.context_type, MyNullContext)
         self.assertEqual(m2.result_type, GenericResult[int])
         res2 = m2(NullContext())
         self.assertEqual(res2.value, 42)
 
+        # test pickling
+        for dump, load in [(pdumps, ploads), (cpdumps, cploads)]:
+            dumped = dump(m2)
+            m3 = load(dumped)
+            self.assertEqual(m3.context_type, MyNullContext)
+            self.assertEqual(m3.result_type, GenericResult[int])
+            res3 = m3(NullContext())
+            self.assertEqual(res3.value, 42)
+
     def test_use_as_base_class_mixed_annotations(self):
-        class Base(CallableModelGenericType[ContextType, ResultType], Generic[ContextType, ResultType]): ...
+        m = LastGeneric()
 
-        class Next(Base[ContextType, ResultType], Generic[ContextType, ResultType]): ...
-
-        class Partial(Next[NullContext, ResultType], Generic[ResultType]): ...
-
-        class Last(Partial[GenericResult[int]]):
-            @Flow.call
-            def __call__(self, context: NullContext) -> GenericResult[int]:
-                return GenericResult[int](value=42)
-
-        Last()
+        # test pickling
+        for dump, load in [(pdumps, ploads), (cpdumps, cploads)]:
+            dumped = dump(m)
+            m2 = load(dumped)
+            self.assertEqual(m2.context_type, NullContext)
+            self.assertEqual(m2.result_type, GenericResult[int])
+            res2 = m2(NullContext())
+            self.assertEqual(res2.value, 42)
 
     def test_use_as_base_class_mixed_annotations_reversed(self):
-        class Base(CallableModelGenericType[ContextType, ResultType], Generic[ContextType, ResultType]): ...
+        m = LastGenericReversed()
 
-        class Next(Base[ContextType, ResultType], Generic[ContextType, ResultType]): ...
-
-        class Partial(Next[ContextType, GenericResult[int]], Generic[ContextType]): ...
-
-        class Last(Partial[NullContext]):
-            @Flow.call
-            def __call__(self, context: NullContext) -> GenericResult[int]:
-                return GenericResult[int](value=42)
-
-        Last()
+        # test pickling
+        for dump, load in [(pdumps, ploads), (cpdumps, cploads)]:
+            dumped = dump(m)
+            m2 = load(dumped)
+            self.assertEqual(m2.context_type, NullContext)
+            self.assertEqual(m2.result_type, GenericResult[int])
+            res2 = m2(NullContext())
+            self.assertEqual(res2.value, 42)
 
     def test_use_as_base_class_conflict(self):
         class MyCallable(CallableModelGenericType[NullContext, GenericResult[int]]):
