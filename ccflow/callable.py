@@ -506,7 +506,7 @@ class CallableModel(_CallableModel):
         else:
             typ_to_check = typ
         # Ensure subclass of ContextBase
-        if not issubclass(typ_to_check, ContextBase):
+        if not isclass(typ_to_check) or not issubclass(typ_to_check, ContextBase):
             raise TypeError(f"Context type declared in signature of __call__ must be a subclass of ContextBase. Received {typ_to_check}.")
         return typ
 
@@ -520,7 +520,7 @@ class CallableModel(_CallableModel):
         typ = _cached_signature(self.__class__.__call__).return_annotation
         if typ is Signature.empty:
             raise TypeError("Must either define a return type annotation on __call__ or implement 'result_type'")
-        if not issubclass(typ, ResultBase):
+        if not isclass(typ) or not issubclass(typ, ResultBase):
             raise TypeError(f"Return type declared in signature of __call__ must be a subclass of ResultBase (i.e. GenericResult). Received {typ}.")
         return typ
 
@@ -590,7 +590,7 @@ class CallableModelGenericType(CallableModel, Generic[ContextType, ResultType]):
         if not hasattr(cls, "_context_type") or not hasattr(cls, "_result_type"):
             new_context_type = None
             new_result_type = None
-            for base in cls.__mro__[1:]:
+            for base in cls.__mro__:
                 if issubclass(base, CallableModelGenericType):
                     # Found the generic base class, it should
                     # have either generic parameters or context/result
@@ -610,11 +610,15 @@ class CallableModelGenericType(CallableModel, Generic[ContextType, ResultType]):
             if new_context_type is not None:
                 # Validate that the model's context_type match
                 annotation_context_type = _cached_signature(cls.__call__).parameters["context"].annotation
-                if annotation_context_type is not Signature.empty and not issubclass(annotation_context_type, new_context_type):
+                if (
+                    annotation_context_type is not Signature.empty
+                    and not isinstance(annotation_context_type, TypeVar)
+                    and not issubclass(annotation_context_type, new_context_type)
+                ):
                     raise TypeError(
                         f"Context type annotation {annotation_context_type} on __call__ does not match context_type {new_context_type} defined by CallableModelGenericType"
                     )
-                elif issubclass(annotation_context_type, new_context_type):
+                elif isclass(annotation_context_type) and issubclass(annotation_context_type, new_context_type):
                     new_context_type = annotation_context_type
                 # Set on class
                 cls._context_type = new_context_type
@@ -622,11 +626,15 @@ class CallableModelGenericType(CallableModel, Generic[ContextType, ResultType]):
             if new_result_type is not None:
                 # Validate that the model's result_type match
                 annotation_result_type = _cached_signature(cls.__call__).return_annotation
-                if annotation_result_type is not Signature.empty and not issubclass(annotation_result_type, new_result_type):
+                if (
+                    annotation_result_type is not Signature.empty
+                    and not isinstance(annotation_result_type, TypeVar)
+                    and not issubclass(annotation_result_type, new_result_type)
+                ):
                     raise TypeError(
                         f"Return type annotation {annotation_result_type} on __call__ does not match result_type {new_result_type} defined by CallableModelGenericType"
                     )
-                elif issubclass(annotation_result_type, new_result_type):
+                elif isclass(annotation_result_type) and issubclass(annotation_result_type, new_result_type):
                     new_result_type = annotation_result_type
 
                 # Set on class
