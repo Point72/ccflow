@@ -11,6 +11,7 @@ import warnings
 from types import GenericAlias, MappingProxyType
 from typing import Any, Callable, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar, Union, get_args, get_origin
 
+from deprecation import deprecated
 from omegaconf import DictConfig
 from packaging import version
 from pydantic import (
@@ -322,8 +323,9 @@ def _is_config_subregistry(value):
     return False
 
 
+@deprecated(details="Use ccflow.compose.model_alias, or ccflow.model_alias instead.")
 def model_alias(model_name: str) -> BaseModel:
-    """Alias a BaseModel by name (backward compatible).
+    """Alias a BaseModel by name (backward compatible to avoid circular imports).
 
     Delegates to `ccflow.compose.model_alias` and preserves the original signature.
     """
