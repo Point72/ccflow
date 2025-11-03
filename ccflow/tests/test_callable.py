@@ -2,8 +2,9 @@ from pickle import dumps as pdumps, loads as ploads
 from typing import Generic, List, Optional, TypeVar
 from unittest import TestCase
 
-from cloudpickle import dumps as cpdumps, loads as cploads
+import ray
 from pydantic import ValidationError
+from ray.cloudpickle import dumps as rcpdumps, loads as rcploads
 
 from ccflow import (
     CallableModel,
@@ -488,8 +489,8 @@ class TestCallableModelGenericType(TestCase):
         self.assertEqual(res2.value, 42)
 
         # test pickling
-        for dump, load in [(pdumps, ploads), (cpdumps, cploads)]:
-            dumped = dump(m2)
+        for dump, load in [(pdumps, ploads), (rcpdumps, rcploads)]:
+            dumped = dump(m2, protocol=5)
             m3 = load(dumped)
             self.assertEqual(m3.context_type, NullContext)
             self.assertEqual(m3.result_type, GenericResult[int])
@@ -504,8 +505,8 @@ class TestCallableModelGenericType(TestCase):
         self.assertEqual(res2.value, 42)
 
         # test pickling
-        for dump, load in [(pdumps, ploads), (cpdumps, cploads)]:
-            dumped = dump(m2)
+        for dump, load in [(pdumps, ploads), (rcpdumps, rcploads)]:
+            dumped = dump(m2, protocol=5)
             m3 = load(dumped)
             self.assertEqual(m3.context_type, MyNullContext)
             self.assertEqual(m3.result_type, GenericResult[int])
@@ -516,25 +517,45 @@ class TestCallableModelGenericType(TestCase):
         m = LastGeneric()
 
         # test pickling
-        for dump, load in [(pdumps, ploads), (cpdumps, cploads)]:
-            dumped = dump(m)
+        for dump, load in [(pdumps, ploads), (rcpdumps, rcploads)]:
+            dumped = dump(m, protocol=5)
             m2 = load(dumped)
             self.assertEqual(m2.context_type, NullContext)
             self.assertEqual(m2.result_type, GenericResult[int])
             res2 = m2(NullContext())
             self.assertEqual(res2.value, 42)
+
+        # test ray
+        @ray.remote
+        def calc(x) -> int:
+            return x(NullContext()).value
+
+        with ray.init(num_cpus=1):
+            res = ray.get(calc.remote(m))
+
+        self.assertEqual(res, 42)
 
     def test_use_as_base_class_mixed_annotations_reversed(self):
         m = LastGenericReversed()
 
         # test pickling
-        for dump, load in [(pdumps, ploads), (cpdumps, cploads)]:
-            dumped = dump(m)
+        for dump, load in [(pdumps, ploads), (rcpdumps, rcploads)]:
+            dumped = dump(m, protocol=5)
             m2 = load(dumped)
             self.assertEqual(m2.context_type, NullContext)
             self.assertEqual(m2.result_type, GenericResult[int])
             res2 = m2(NullContext())
             self.assertEqual(res2.value, 42)
+
+        # test ray
+        @ray.remote
+        def calc(x) -> int:
+            return x(NullContext()).value
+
+        with ray.init(num_cpus=1):
+            res = ray.get(calc.remote(m))
+
+        self.assertEqual(res, 42)
 
     def test_use_as_base_class_conflict(self):
         class MyCallable(CallableModelGenericType[NullContext, GenericResult[int]]):
