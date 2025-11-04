@@ -33,7 +33,6 @@ from .exttypes.pyobjectpath import PyObjectPath
 log = logging.getLogger(__name__)
 
 __all__ = (
-    "model_alias",
     "BaseModel",
     "ModelRegistry",
     "ModelType",
@@ -321,20 +320,6 @@ def _is_config_subregistry(value):
                 if _is_config_subregistry(v):
                     return True
     return False
-
-
-def model_alias(model_name: str) -> BaseModel:
-    """Function to alias a BaseModel by name in the root registry.
-
-    Useful for configs in hydra where we want a config object to point directly to another config object.
-
-    Args:
-        model_name: The name of the underlying model to point to in the registry
-    Example:
-        _target_: ccflow.model_alias
-        model_name: foo
-    """
-    return BaseModel.model_validate(model_name)
 
 
 ModelType = TypeVar("ModelType", bound=BaseModel)

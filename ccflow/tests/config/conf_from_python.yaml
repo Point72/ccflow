@@ -1,0 +1,23 @@
+shared_model:
+  _target_: ccflow.compose.from_python
+  py_object_path: ccflow.tests.data.python_object_samples.SHARED_MODEL
+
+consumer:
+  _target_: ccflow.tests.data.python_object_samples.Consumer
+  shared: shared_model
+  tag: consumer1
+
+# Demonstrate from_python returning a dict (non-BaseModel)
+holder:
+  _target_: ccflow.tests.data.python_object_samples.SharedHolder
+  name: holder1
+  cfg:
+    _target_: ccflow.compose.from_python
+    py_object_path: ccflow.tests.data.python_object_samples.SHARED_CFG
+
+# Use update_from_template to update a field while preserving shared identity
+consumer_updated:
+  _target_: ccflow.compose.update_from_template
+  base: consumer
+  update:
+    tag: consumer2
