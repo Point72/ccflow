@@ -1,5 +1,5 @@
 from pickle import dumps as pdumps, loads as ploads
-from typing import Generic, List, Optional, Tuple, Type, TypeVar
+from typing import Generic, List, Optional, Tuple, Type, TypeVar, Union
 from unittest import TestCase
 
 import ray
@@ -268,6 +268,46 @@ class LastGenericReversed(PartialGenericReversed[NullContext]):
         return GenericResult[int](value=42)
 
 
+class AResult(ResultBase):
+    a: int
+
+
+class BResult(ResultBase):
+    b: str
+
+
+class UnionReturn(CallableModel):
+    @property
+    def result_type(self) -> Type[ResultType]:
+        return AResult
+
+    @Flow.call
+    def __call__(self, context: NullContext) -> Union[AResult, BResult]:
+        # Return one branch of the Union
+        return AResult(a=1)
+
+
+class BadModelUnionReturnNoProperty(CallableModel):
+    @Flow.call
+    def __call__(self, context: NullContext) -> Union[AResult, BResult]:
+        # Return one branch of the Union
+        return AResult(a=1)
+
+
+class UnionReturnGeneric(CallableModelGenericType[NullContext, AResult]):
+    @Flow.call
+    def __call__(self, context: NullContext) -> Union[AResult, BResult]:
+        # Return one branch of the Union
+        return AResult(a=1)
+
+
+class BadModelUnionReturnGeneric(CallableModelGenericType[NullContext, Union[AResult, BResult]]):
+    @Flow.call
+    def __call__(self, context: NullContext) -> Union[AResult, BResult]:
+        # Return one branch of the Union
+        return AResult(a=1)
+
+
 class MyGenericContext(ContextBase, Generic[TContext]):
     value: TContext
 
@@ -419,14 +459,11 @@ class TestCallableModel(TestCase):
         error = "The context_type <class 'ccflow.context.NullContext'> must match the type of the context accepted by __call__ <class 'ccflow.tests.test_callable.MyContext'>"
         self.assertRaisesRegex(ValueError, error, BadModelMismatchedContextAndCall)
 
-        error = "Context type annotation <class 'ccflow.tests.test_callable.MyContext'> on __call__ does not match context_type <class 'ccflow.context.NullContext'> defined by CallableModelGenericType"
-        self.assertRaisesRegex(TypeError, error, BadModelGenericMismatchedContextAndCall)
-
         error = "The result_type <class 'ccflow.result.generic.GenericResult'> must match the return type of __call__ <class 'ccflow.tests.test_callable.MyResult'>"
         self.assertRaisesRegex(ValueError, error, BadModelMismatchedResultAndCall)
 
-        error = "Return type annotation <class 'ccflow.tests.test_callable.MyResult'> on __call__ does not match result_type <class 'ccflow.result.generic.GenericResult'> defined by CallableModelGenericType"
-        self.assertRaisesRegex(TypeError, error, BadModelGenericMismatchedResultAndCall)
+        error = "Model __call__ signature result type cannot be a Union type without a concrete property. Please define a property 'result_type' on the model."
+        self.assertRaisesRegex(TypeError, error, BadModelUnionReturnNoProperty)
 
     def test_identity(self):
         # Make sure that an "identity" mapping works
@@ -440,6 +477,12 @@ class TestCallableModel(TestCase):
     def test_context_call_match_enforcement_generic_base(self):
         # This should not raise
         _ = ModelMixedGenericsEnforceContextMatch(model=IdentityCallable())
+
+    def test_union_return(self):
+        m = UnionReturn()
+        result = m(NullContext())
+        self.assertIsInstance(result, AResult)
+        self.assertEqual(result.a, 1)
 
 
 class TestWrapperModel(TestCase):
@@ -593,6 +636,22 @@ class TestCallableModelGenericType(TestCase):
 
         with self.assertRaises(TypeError):
             MyCallable()
+
+    def test_types_generic(self):
+        error = "Context type annotation <class 'ccflow.tests.test_callable.MyContext'> on __call__ does not match context_type <class 'ccflow.context.NullContext'> defined by CallableModelGenericType"
+        self.assertRaisesRegex(TypeError, error, BadModelGenericMismatchedContextAndCall)
+
+        error = "Return type annotation <class 'ccflow.tests.test_callable.MyResult'> on __call__ does not match result_type <class 'ccflow.result.generic.GenericResult'> defined by CallableModelGenericType"
+        self.assertRaisesRegex(TypeError, error, BadModelGenericMismatchedResultAndCall)
+
+        error = "Return type annotation for __call__ cannot be union on a CallableModelGenericType with union `result_type`"
+        self.assertRaisesRegex(TypeError, error, BadModelUnionReturnGeneric)
+
+    def test_union_return_generic(self):
+        m = UnionReturnGeneric()
+        result = m(NullContext())
+        self.assertIsInstance(result, AResult)
+        self.assertEqual(result.a, 1)
 
 
 class TestCallableModelDeps(TestCase):
