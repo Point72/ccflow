@@ -294,7 +294,11 @@ class BadModelUnionReturnNoProperty(CallableModel):
         return AResult(a=1)
 
 
-class UnionReturnGeneric(CallableModelGenericType[NullContext, AResult]):
+class UnionReturnGeneric(CallableModelGenericType[NullContext, Union[AResult, BResult]]):
+    @property
+    def result_type(self) -> Type[ResultType]:
+        return AResult
+
     @Flow.call
     def __call__(self, context: NullContext) -> Union[AResult, BResult]:
         # Return one branch of the Union
@@ -644,7 +648,7 @@ class TestCallableModelGenericType(TestCase):
         error = "Return type annotation <class 'ccflow.tests.test_callable.MyResult'> on __call__ does not match result_type <class 'ccflow.result.generic.GenericResult'> defined by CallableModelGenericType"
         self.assertRaisesRegex(TypeError, error, BadModelGenericMismatchedResultAndCall)
 
-        error = "Return type annotation for __call__ cannot be union on a CallableModelGenericType with union `result_type`"
+        error = "Model __call__ signature result type cannot be a Union type without a concrete property. Please define a property 'result_type' on the model."
         self.assertRaisesRegex(TypeError, error, BadModelUnionReturnGeneric)
 
     def test_union_return_generic(self):
@@ -652,6 +656,19 @@ class TestCallableModelGenericType(TestCase):
         result = m(NullContext())
         self.assertIsInstance(result, AResult)
         self.assertEqual(result.a, 1)
+
+    def test_generic_validates_assignment(self):
+        class MyCallable(CallableModelGenericType[NullContext, GenericResult[int]]):
+            x: int = 1
+
+            @Flow.call
+            def __call__(self, context: NullContext) -> GenericResult[int]:
+                self.x = 5
+                assert self.x == 5
+                return GenericResult[float](value=self.x)
+
+        m = MyCallable()
+        self.assertEqual(m(NullContext()).value, 5)
 
 
 class TestCallableModelDeps(TestCase):
