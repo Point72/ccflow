@@ -1,5 +1,5 @@
 from pickle import dumps as pdumps, loads as ploads
-from typing import Generic, List, Optional, TypeVar
+from typing import Generic, List, Optional, Tuple, Type, TypeVar
 from unittest import TestCase
 
 import ray
@@ -268,6 +268,30 @@ class LastGenericReversed(PartialGenericReversed[NullContext]):
         return GenericResult[int](value=42)
 
 
+class MyGenericContext(ContextBase, Generic[TContext]):
+    value: TContext
+
+
+class ModelMixedGenericsEnforceContextMatch(CallableModel, Generic[TContext, TResult]):
+    model: CallableModelGenericType[TContext, TResult]
+
+    @property
+    def context_type(self) -> Type[ContextType]:
+        return MyGenericContext[self.model.context_type]
+
+    @property
+    def result_type(self) -> Type[ResultType]:
+        return GenericResult[self.model.result_type]
+
+    @Flow.deps
+    def __deps__(self, context: MyGenericContext[TContext]) -> List[Tuple[CallableModelGenericType[TContext, TResult], List[ContextType]]]:
+        return []
+
+    @Flow.call
+    def __call__(self, context: MyGenericContext[TContext]) -> TResult:
+        return GenericResult(value=None)
+
+
 class TestContext(TestCase):
     def test_immutable(self):
         x = MyContext(a="foo")
@@ -412,6 +436,10 @@ class TestCallableModel(TestCase):
         # the return value is a copy of the input.
         self.assertEqual(ident(context), context)
         self.assertIsNot(ident(context), context)
+
+    def test_context_call_match_enforcement_generic_base(self):
+        # This should not raise
+        _ = ModelMixedGenericsEnforceContextMatch(model=IdentityCallable())
 
 
 class TestWrapperModel(TestCase):

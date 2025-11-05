@@ -110,6 +110,7 @@ class _CallableModel(BaseModel, abc.ABC):
                 not isinstance(type_call_arg, TypeVar)
                 and type_call_arg is not Signature.empty
                 and (not isclass(type_call_arg) or not issubclass(type_call_arg, self.context_type))
+                and (not isclass(self.context_type) or not issubclass(self.context_type, type_call_arg))
             ):
                 err_msg_type_mismatch = (
                     f"The context_type {self.context_type} must match the type of the context accepted by __call__ {type_call_arg}"
@@ -122,6 +123,7 @@ class _CallableModel(BaseModel, abc.ABC):
                 not isinstance(type_call_return, TypeVar)
                 and type_call_return is not Signature.empty
                 and (not isclass(type_call_return) or not issubclass(type_call_return, self.result_type))
+                and (not isclass(self.result_type) or not issubclass(self.result_type, type_call_return))
             ):
                 err_msg_type_mismatch = f"The result_type {self.result_type} must match the return type of __call__ {type_call_return}"
                 raise ValueError(err_msg_type_mismatch)
