@@ -9,7 +9,7 @@ description = "ccflow is a collection of tools for workflow configuration, orche
 readme = "README.md"
 license = { text = "Apache-2.0" }
 version = "0.6.10"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 keywords = [
     "configuration",
     "flow",
@@ -17,6 +17,7 @@ keywords = [
     "hydra",
     "pydantic",
 ]
+
 classifiers = [
     "Development Status :: 4 - Beta",
     "License :: OSI Approved :: Apache Software License",
@@ -24,7 +25,6 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: Implementation :: PyPy",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
