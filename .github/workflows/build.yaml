@@ -27,13 +27,8 @@ jobs:
 
     strategy:
       matrix:
-<<<<<<< before updating
         os: [ubuntu-latest, macos-latest]
         python-version: ['3.10']
-=======
-        os: [ubuntu-latest]
-        python-version: ["3.11"]
->>>>>>> after updating
 
     steps:
     - uses: actions/checkout@v5
