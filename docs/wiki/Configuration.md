@@ -673,6 +673,17 @@ print("Separator: ", config.separator.object)
 #> Separator:  /
 ```
 
+### Registry Helpers
+
+ccflow.compose offers small, focused helpers for interacting with the registry and Python-backed defaults:
+
+- `model_alias(model_name)`: resolve a model instance by string name from the active registry.
+- `update_from_template(base, update=None, target_class=None)`: construct a new instance or dict by shallow-copying `base` and applying updates.
+  - If `base` is a registry alias, you can pass either the alias string directly (e.g., `base: "my_model"`) or use `_target_: ccflow.compose.model_alias` form.
+  - If `base` is a dict, returns the updated dict. If `target_class` is provided (type or import path), constructs that type with the updated fields.
+  - Shallow copy ensures nested BaseModel identity is preserved.
+- `from_python(py_object_path, indexer=None)`: resolve any Python object by import path. Optionally provide `indexer` (a list of keys) to index into the object in order; no safety checks are performed and indexing errors will propagate.
+
 ## Using Configuration
 
 With the ability to define arbitrarily complex configuration structures following the examples above, now arises the question of how best to use all that config information.

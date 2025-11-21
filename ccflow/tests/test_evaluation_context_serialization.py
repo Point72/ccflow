@@ -6,10 +6,6 @@ from ccflow.callable import ModelEvaluationContext
 from ccflow.evaluators import GraphEvaluator, LoggingEvaluator, MultiEvaluator
 from ccflow.tests.evaluators.util import NodeModel
 
-# NOTE: for these tests, round-tripping via JSON does not work
-# because the ModelEvaluationContext just has an InstanceOf validation check
-# and so we do not actually construct a full MEC on load.
-
 
 def _make_nested_mec(model):
     ctx = DateContext(date=date(2022, 1, 1))

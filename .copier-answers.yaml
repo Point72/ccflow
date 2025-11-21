@@ -1,5 +1,5 @@
 # Changes here will be overwritten by Copier
-_commit: f812aaa
+_commit: 973c39c
 _src_path: https://github.com/python-project-templates/base.git
 add_docs: false
 add_extension: python
@@ -9,5 +9,5 @@ github: Point72
 project_description: ccflow is a collection of tools for workflow configuration, orchestration,
     and dependency injection
 project_name: ccflow
-python_version_primary: '3.9'
+python_version_primary: '3.11'
 team: Point72, L.P.

@@ -1,7 +1,10 @@
-from typing import Generic, List, TypeVar
+from pickle import dumps as pdumps, loads as ploads
+from typing import Generic, List, Optional, Tuple, Type, TypeVar, Union
 from unittest import TestCase
 
+import ray
 from pydantic import ValidationError
+from ray.cloudpickle import dumps as rcpdumps, loads as rcploads
 
 from ccflow import (
     CallableModel,
@@ -45,6 +48,13 @@ class MyCallable(CallableModel):
     @Flow.call
     def __call__(self, context: MyContext) -> MyResult:
         return MyResult(x=self.i, y=context.a)
+
+
+class MyCallableOptionalContext(CallableModel):
+    @Flow.call
+    def __call__(self, context: Optional[MyContext] = None) -> MyResult:
+        context = context or MyContext(a="default")
+        return MyResult(x=1, y=context.a)
 
 
 class MyCallableChild(MyCallable):
@@ -95,32 +105,93 @@ class IdentityCallable(CallableModel):
         return context
 
 
-class BadModel1(CallableModel):
+class BadModelNoContextNoResult(CallableModel):
     @Flow.call
     def __call__(self, context):
         return None
 
 
-class BadModel2(CallableModel):
+class BadModelNeedRealTypes(CallableModel):
     @Flow.call
     def __call__(self, context: ContextType) -> ResultType:
         return None
 
 
-class BadModel3(CallableModel):
+class BadModelMissingFlowCallDecorator(CallableModel):
+    """Model missing Flow.call decorator"""
+
     def __call__(self, context: MyContext) -> MyResult:
         return MyResult(x=1, y="foo")
 
 
-class BadModel4(CallableModel):
+class BadModelMissingFlowDepsDecorator(CallableModel):
+    """Model missing Flow.deps decorator"""
+
+    def __deps__(self, context: MyContext) -> GraphDepList:
+        return []
+
+    @Flow.call
+    def __call__(self, context: MyContext) -> MyResult:
+        return MyResult(x=1, y="foo")
+
+
+class BadModelMissingContextArg(CallableModel):
     @Flow.call
     def __call__(self, custom_arg: MyContext) -> MyResult:
         return custom_arg
 
 
-class BadModel5(CallableModel):
+class BadModelDoubleContextArg(CallableModel):
     @Flow.call
     def __call__(self, context: MyContext, context2: MyContext) -> MyResult:
+        return context
+
+
+class BadModelMismatchedContextAndCall(CallableModel):
+    """Model with mismatched context_type and __call__ annotation"""
+
+    @property
+    def context_type(self):
+        return NullContext
+
+    @property
+    def result_type(self):
+        return MyResult
+
+    @Flow.call
+    def __call__(self, context: MyContext) -> MyResult:
+        return context
+
+
+class BadModelGenericMismatchedContextAndCall(CallableModelGenericType[NullContext, MyResult]):
+    """Model with mismatched context_type and __call__ annotation"""
+
+    @Flow.call
+    def __call__(self, context: MyContext) -> MyResult:
+        return context
+
+
+class BadModelMismatchedResultAndCall(CallableModel):
+    """Model with mismatched result_type and __call__ annotation"""
+
+    @property
+    def context_type(self):
+        return NullContext
+
+    @property
+    def result_type(self):
+        return GenericResult
+
+    @Flow.call
+    def __call__(self, context: NullContext) -> MyResult:
+        return context
+
+
+class BadModelGenericMismatchedResultAndCall(CallableModelGenericType[NullContext, GenericResult]):
+    """Model with mismatched result_type and __call__ annotation"""
+
+    @Flow.call
+    def __call__(self, context: NullContext) -> MyResult:
         return context
 
 
@@ -144,6 +215,125 @@ class MyWrapperGeneric(WrapperModel):
 
 class MyTest(ContextBase):
     c: MyContext
+
+
+TContext = TypeVar("TContext", bound=ContextBase)
+TResult = TypeVar("TResult", bound=ResultBase)
+
+
+class MyCallableBase(CallableModelGenericType[TContext, TResult]):
+    pass
+
+
+class MyCallableImpl(MyCallableBase[NullContext, GenericResult[int]]):
+    pass
+
+
+class MyCallableFromGeneric(MyCallableImpl):
+    @Flow.call
+    def __call__(self, context: NullContext) -> GenericResult[int]:
+        return GenericResult[int](value=42)
+
+
+class MyNullContext(NullContext): ...
+
+
+class MyCallableFromGenericNullContext(MyCallableImpl):
+    @Flow.call
+    def __call__(self, context: MyNullContext) -> GenericResult[int]:
+        return GenericResult[int](value=42)
+
+
+class BaseGeneric(CallableModelGenericType[ContextType, ResultType], Generic[ContextType, ResultType]): ...
+
+
+class NextGeneric(BaseGeneric[ContextType, ResultType], Generic[ContextType, ResultType]): ...
+
+
+class PartialGeneric(NextGeneric[NullContext, ResultType], Generic[ResultType]): ...
+
+
+class LastGeneric(PartialGeneric[GenericResult[int]]):
+    @Flow.call
+    def __call__(self, context: NullContext) -> GenericResult[int]:
+        return GenericResult[int](value=42)
+
+
+class PartialGenericReversed(NextGeneric[ContextType, GenericResult[int]], Generic[ContextType]): ...
+
+
+class LastGenericReversed(PartialGenericReversed[NullContext]):
+    @Flow.call
+    def __call__(self, context: NullContext) -> GenericResult[int]:
+        return GenericResult[int](value=42)
+
+
+class AResult(ResultBase):
+    a: int
+
+
+class BResult(ResultBase):
+    b: str
+
+
+class UnionReturn(CallableModel):
+    @property
+    def result_type(self) -> Type[ResultType]:
+        return AResult
+
+    @Flow.call
+    def __call__(self, context: NullContext) -> Union[AResult, BResult]:
+        # Return one branch of the Union
+        return AResult(a=1)
+
+
+class BadModelUnionReturnNoProperty(CallableModel):
+    @Flow.call
+    def __call__(self, context: NullContext) -> Union[AResult, BResult]:
+        # Return one branch of the Union
+        return AResult(a=1)
+
+
+class UnionReturnGeneric(CallableModelGenericType[NullContext, Union[AResult, BResult]]):
+    @property
+    def result_type(self) -> Type[ResultType]:
+        return AResult
+
+    @Flow.call
+    def __call__(self, context: NullContext) -> Union[AResult, BResult]:
+        # Return one branch of the Union
+        return AResult(a=1)
+
+
+class BadModelUnionReturnGeneric(CallableModelGenericType[NullContext, Union[AResult, BResult]]):
+    @Flow.call
+    def __call__(self, context: NullContext) -> Union[AResult, BResult]:
+        # Return one branch of the Union
+        return AResult(a=1)
+
+
+class MyGenericContext(ContextBase, Generic[TContext]):
+    value: TContext
+
+
+class ModelMixedGenericsEnforceContextMatch(CallableModel, Generic[TContext, TResult]):
+    model: CallableModelGenericType[TContext, TResult]
+
+    @property
+    def context_type(self) -> Type[ContextType]:
+        return MyGenericContext[self.model.context_type]
+
+    @property
+    def result_type(self) -> Type[ResultType]:
+        return GenericResult[self.model.result_type]
+
+    @Flow.deps
+    def __deps__(self, context: MyGenericContext[TContext]) -> List[Tuple[CallableModelGenericType[TContext, TResult], List[ContextType]]]:
+        return []
+
+    @Flow.call
+    def __call__(self, context: MyGenericContext[TContext]) -> TResult:
+        return GenericResult(value=None)
 
 
 class TestContext(TestCase):
@@ -215,6 +405,13 @@ class TestCallableModel(TestCase):
         self.assertRaises(TypeError, m, context, a="foo")
         self.assertRaises(TypeError, m, context=context, a="foo")
 
+    def test_signature_optional_context(self):
+        m = MyCallableOptionalContext()
+        context = MyContext(a="foo")
+        target = m(context)
+        self.assertEqual(m(context=context), target)
+        self.assertEqual(m().y, "default")
+
     def test_inheritance(self):
         m = MyCallableChild(i=5)
         self.assertEqual(m(MyContext(a="foo")), MyResult(x=5, y="foo"))
@@ -245,22 +442,32 @@ class TestCallableModel(TestCase):
         self.assertEqual(m.ll, m2.ll)
 
     def test_types(self):
-        m = BadModel1()
-        self.assertRaises(TypeError, lambda: m.context_type)
-        self.assertRaises(TypeError, lambda: m.result_type)
+        error = "Must either define a type annotation for context on __call__ or implement 'context_type'"
+        self.assertRaisesRegex(TypeError, error, BadModelNoContextNoResult)
 
-        m = BadModel2()
-        self.assertRaises(TypeError, lambda: m.context_type)
-        self.assertRaises(TypeError, lambda: m.result_type)
+        error = "Context type declared in signature of __call__ must be a subclass of ContextBase. Received ~ContextType"
+        self.assertRaisesRegex(TypeError, error, BadModelNeedRealTypes)
 
         error = "__call__ function of CallableModel must be wrapped with the Flow.call decorator"
-        self.assertRaisesRegex(ValueError, error, BadModel3)
+        self.assertRaisesRegex(ValueError, error, BadModelMissingFlowCallDecorator)
+
+        error = "__deps__ function of CallableModel must be wrapped with the Flow.deps decorator"
+        self.assertRaisesRegex(ValueError, error, BadModelMissingFlowDepsDecorator)
 
         error = "__call__ method must take a single argument, named 'context'"
-        self.assertRaisesRegex(ValueError, error, BadModel4)
+        self.assertRaisesRegex(ValueError, error, BadModelMissingContextArg)
 
         error = "__call__ method must take a single argument, named 'context'"
-        self.assertRaisesRegex(ValueError, error, BadModel5)
+        self.assertRaisesRegex(ValueError, error, BadModelDoubleContextArg)
+
+        error = "The context_type <class 'ccflow.context.NullContext'> must match the type of the context accepted by __call__ <class 'ccflow.tests.test_callable.MyContext'>"
+        self.assertRaisesRegex(ValueError, error, BadModelMismatchedContextAndCall)
+
+        error = "The result_type <class 'ccflow.result.generic.GenericResult'> must match the return type of __call__ <class 'ccflow.tests.test_callable.MyResult'>"
+        self.assertRaisesRegex(ValueError, error, BadModelMismatchedResultAndCall)
+
+        error = "Model __call__ signature result type cannot be a Union type without a concrete property. Please define a property 'result_type' on the model."
+        self.assertRaisesRegex(TypeError, error, BadModelUnionReturnNoProperty)
 
     def test_identity(self):
         # Make sure that an "identity" mapping works
@@ -270,6 +477,16 @@ class TestCallableModel(TestCase):
         # the return value is a copy of the input.
         self.assertEqual(ident(context), context)
         self.assertIsNot(ident(context), context)
+
+    def test_context_call_match_enforcement_generic_base(self):
+        # This should not raise
+        _ = ModelMixedGenericsEnforceContextMatch(model=IdentityCallable())
+
+    def test_union_return(self):
+        m = UnionReturn()
+        result = m(NullContext())
+        self.assertIsInstance(result, AResult)
+        self.assertEqual(result.a, 1)
 
 
 class TestWrapperModel(TestCase):
@@ -340,58 +557,80 @@ class TestCallableModelGenericType(TestCase):
         self.assertEqual(m(NullContext()).value, 42)
 
     def test_use_as_base_class_inheritance(self):
-        TContext = TypeVar("TContext", bound=ContextBase)
-        TResult = TypeVar("TResult", bound=ResultBase)
-
-        class MyCallableBase(CallableModelGenericType[TContext, TResult]):
-            pass
-
-        class MyCallableImpl(MyCallableBase[NullContext, GenericResult[int]]):
-            pass
-
-        class MyCallable(MyCallableImpl):
-            @Flow.call
-            def __call__(self, context: NullContext) -> GenericResult[int]:
-                return GenericResult[int](value=42)
-
-        class DateRangeImplAnalyticDirect(MyCallableBase[NullContext, GenericResult[int]]):
-            @Flow.call
-            def __call__(self, context: NullContext) -> GenericResult[int]:
-                return GenericResult[int](value=42)
-
-        m2 = MyCallable()
+        m2 = MyCallableFromGeneric()
         self.assertEqual(m2.context_type, NullContext)
         self.assertEqual(m2.result_type, GenericResult[int])
         res2 = m2(NullContext())
         self.assertEqual(res2.value, 42)
 
+        # test pickling
+        for dump, load in [(pdumps, ploads), (rcpdumps, rcploads)]:
+            dumped = dump(m2, protocol=5)
+            m3 = load(dumped)
+            self.assertEqual(m3.context_type, NullContext)
+            self.assertEqual(m3.result_type, GenericResult[int])
+            res3 = m3(NullContext())
+            self.assertEqual(res3.value, 42)
+
+    def test_align_annotation_and_context_class(self):
+        m2 = MyCallableFromGenericNullContext()
+        self.assertEqual(m2.context_type, MyNullContext)
+        self.assertEqual(m2.result_type, GenericResult[int])
+        res2 = m2(NullContext())
+        self.assertEqual(res2.value, 42)
+
+        # test pickling
+        for dump, load in [(pdumps, ploads), (rcpdumps, rcploads)]:
+            dumped = dump(m2, protocol=5)
+            m3 = load(dumped)
+            self.assertEqual(m3.context_type, MyNullContext)
+            self.assertEqual(m3.result_type, GenericResult[int])
+            res3 = m3(NullContext())
+            self.assertEqual(res3.value, 42)
+
     def test_use_as_base_class_mixed_annotations(self):
-        class Base(CallableModelGenericType[ContextType, ResultType], Generic[ContextType, ResultType]): ...
+        m = LastGeneric()
 
-        class Next(Base[ContextType, ResultType], Generic[ContextType, ResultType]): ...
+        # test pickling
+        for dump, load in [(pdumps, ploads), (rcpdumps, rcploads)]:
+            dumped = dump(m, protocol=5)
+            m2 = load(dumped)
+            self.assertEqual(m2.context_type, NullContext)
+            self.assertEqual(m2.result_type, GenericResult[int])
+            res2 = m2(NullContext())
+            self.assertEqual(res2.value, 42)
 
-        class Partial(Next[NullContext, ResultType], Generic[ResultType]): ...
+        # test ray
+        @ray.remote
+        def calc(x) -> int:
+            return x(NullContext()).value
 
-        class Last(Partial[GenericResult[int]]):
-            @Flow.call
-            def __call__(self, context: NullContext) -> GenericResult[int]:
-                return GenericResult[int](value=42)
+        with ray.init(num_cpus=1):
+            res = ray.get(calc.remote(m))
 
-        Last()
+        self.assertEqual(res, 42)
 
     def test_use_as_base_class_mixed_annotations_reversed(self):
-        class Base(CallableModelGenericType[ContextType, ResultType], Generic[ContextType, ResultType]): ...
+        m = LastGenericReversed()
 
-        class Next(Base[ContextType, ResultType], Generic[ContextType, ResultType]): ...
+        # test pickling
+        for dump, load in [(pdumps, ploads), (rcpdumps, rcploads)]:
+            dumped = dump(m, protocol=5)
+            m2 = load(dumped)
+            self.assertEqual(m2.context_type, NullContext)
+            self.assertEqual(m2.result_type, GenericResult[int])
+            res2 = m2(NullContext())
+            self.assertEqual(res2.value, 42)
 
-        class Partial(Next[ContextType, GenericResult[int]], Generic[ContextType]): ...
+        # test ray
+        @ray.remote
+        def calc(x) -> int:
+            return x(NullContext()).value
 
-        class Last(Partial[NullContext]):
-            @Flow.call
-            def __call__(self, context: NullContext) -> GenericResult[int]:
-                return GenericResult[int](value=42)
+        with ray.init(num_cpus=1):
+            res = ray.get(calc.remote(m))
 
-        Last()
+        self.assertEqual(res, 42)
 
     def test_use_as_base_class_conflict(self):
         class MyCallable(CallableModelGenericType[NullContext, GenericResult[int]]):
@@ -401,6 +640,35 @@ class TestCallableModelGenericType(TestCase):
 
         with self.assertRaises(TypeError):
             MyCallable()
+
+    def test_types_generic(self):
+        error = "Context type annotation <class 'ccflow.tests.test_callable.MyContext'> on __call__ does not match context_type <class 'ccflow.context.NullContext'> defined by CallableModelGenericType"
+        self.assertRaisesRegex(TypeError, error, BadModelGenericMismatchedContextAndCall)
+
+        error = "Return type annotation <class 'ccflow.tests.test_callable.MyResult'> on __call__ does not match result_type <class 'ccflow.result.generic.GenericResult'> defined by CallableModelGenericType"
+        self.assertRaisesRegex(TypeError, error, BadModelGenericMismatchedResultAndCall)
+
+        error = "Model __call__ signature result type cannot be a Union type without a concrete property. Please define a property 'result_type' on the model."
+        self.assertRaisesRegex(TypeError, error, BadModelUnionReturnGeneric)
+
+    def test_union_return_generic(self):
+        m = UnionReturnGeneric()
+        result = m(NullContext())
+        self.assertIsInstance(result, AResult)
+        self.assertEqual(result.a, 1)
+
+    def test_generic_validates_assignment(self):
+        class MyCallable(CallableModelGenericType[NullContext, GenericResult[int]]):
+            x: int = 1
+
+            @Flow.call
+            def __call__(self, context: NullContext) -> GenericResult[int]:
+                self.x = 5
+                assert self.x == 5
+                return GenericResult[float](value=self.x)
+
+        m = MyCallable()
+        self.assertEqual(m(NullContext()).value, 5)
 
 
 class TestCallableModelDeps(TestCase):
@@ -466,7 +734,7 @@ class TestCallableModelDeps(TestCase):
             MyCallableParent_bad_annotation(my_callable=m)
 
         msg = e.exception.errors()[0]["msg"]
-        target = "Value error, The type of the context accepted by __deps__ ~ContextType must match that accepted by __call__ <class 'ccflow.tests.test_callable.MyContext'>!"
+        target = "Value error, The type of the context accepted by __deps__ ~ContextType must match that accepted by __call__ <class 'ccflow.tests.test_callable.MyContext'>"
 
         self.assertEqual(msg, target)
 

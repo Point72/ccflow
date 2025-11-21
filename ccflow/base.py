@@ -30,7 +30,6 @@ from .exttypes.pyobjectpath import PyObjectPath
 log = logging.getLogger(__name__)
 
 __all__ = (
-    "model_alias",
     "BaseModel",
     "ModelRegistry",
     "ModelType",
@@ -118,18 +117,9 @@ class BaseModel(PydanticBaseModel, _RegistryMixin):
         # where the default behavior is just to drop the mis-named value. This prevents that
         extra="forbid",
         ser_json_timedelta="float",
+        # Polymorphic serialization is the behavior of allowing a subclass of a model (or Pydantic dataclass) to override serialization so that the subclass' serialization is used, rather than the original model types's serialization. This will expose all the data defined on the subclass in the serialized payload.
+        polymorphic_serialization=True,
     )
-
-    # https://docs.pydantic.dev/latest/concepts/serialization/#overriding-the-serialize_as_any-default-false
-    def model_dump(self, **kwargs) -> dict[str, Any]:
-        if not kwargs.get("serialize_as_any"):
-            kwargs["serialize_as_any"] = True
-        return super().model_dump(**kwargs)
-
-    def model_dump_json(self, **kwargs) -> str:
-        if not kwargs.get("serialize_as_any"):
-            kwargs["serialize_as_any"] = True
-        return super().model_dump_json(**kwargs)
 
     def __str__(self):
         # Because the standard string representation does not include class name
@@ -200,7 +190,7 @@ class BaseModel(PydanticBaseModel, _RegistryMixin):
 
         if isinstance(v, PydanticBaseModel):
             # Coerce from one BaseModel type to another (because it worked automatically in v1)
-            v = v.model_dump(serialize_as_any=True, exclude={"type_"})
+            v = v.model_dump(exclude={"type_"})
 
         return handler(v)
 
@@ -272,20 +262,6 @@ def _is_config_subregistry(value):
     return False
 
 
-def model_alias(model_name: str) -> BaseModel:
-    """Function to alias a BaseModel by name in the root registry.
-
-    Useful for configs in hydra where we want a config object to point directly to another config object.
-
-    Args:
-        model_name: The name of the underlying model to point to in the registry
-    Example:
-        _target_: ccflow.model_alias
-        model_name: foo
-    """
-    return BaseModel.model_validate(model_name)
-
-
 ModelType = TypeVar("ModelType", bound=BaseModel)
 
 
@@ -325,8 +301,7 @@ class ModelRegistry(BaseModel, collections.abc.Mapping):
     @model_serializer(mode="wrap")
     def _registry_serializer(self, handler):
         values = handler(self)
-        models_serialized = {k: model.model_dump(serialize_as_any=True, by_alias=True) for k, model in self._models.items()}
-        values["models"] = models_serialized
+        values["models"] = self._models
         return values
 
     @property
