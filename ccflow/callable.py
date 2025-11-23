@@ -17,7 +17,16 @@ from functools import lru_cache, wraps
 from inspect import Signature, isclass, signature
 from typing import Any, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar, Union, get_args, get_origin
 
-from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field, InstanceOf, PrivateAttr, TypeAdapter, field_validator, model_validator
+from pydantic import (
+    BaseModel as PydanticBaseModel,
+    ConfigDict,
+    Field,
+    InstanceOf,
+    PrivateAttr,
+    TypeAdapter,
+    field_validator,
+    model_validator,
+)
 from typing_extensions import override
 
 from .base import (

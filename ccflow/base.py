@@ -2,17 +2,14 @@
 
 import collections.abc
 import copy
-import inspect
 import logging
 import pathlib
-import platform
 import sys
 import warnings
-from types import GenericAlias, MappingProxyType
-from typing import Any, Callable, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar, Union, get_args, get_origin
+from types import MappingProxyType
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type, TypeVar
 
 from omegaconf import DictConfig
-from packaging import version
 from pydantic import (
     BaseModel as PydanticBaseModel,
     ConfigDict,
@@ -88,66 +85,7 @@ class _RegistryMixin:
         return deps
 
 
-# Pydantic 2 has different handling of serialization.
-# This requires some workarounds at the moment until the feature is added to easily get a mode that
-# is compatible with Pydantic 1
-# This is done by adjusting annotations via a MetaClass for any annotation that includes a BaseModel,
-# such that the new annotation contains SerializeAsAny
-# https://docs.pydantic.dev/latest/concepts/serialization/#serializing-with-duck-typing
-# https://github.com/pydantic/pydantic/issues/6423
-# https://github.com/pydantic/pydantic-core/pull/740
-# See https://github.com/pydantic/pydantic/issues/6381 for inspiration on implementation
-# NOTE: For this logic to be removed, require https://github.com/pydantic/pydantic-core/pull/1478
-from pydantic._internal._model_construction import ModelMetaclass  # noqa: E402
-
-_IS_PY39 = version.parse(platform.python_version()) < version.parse("3.10")
-
-
-def _adjust_annotations(annotation):
-    origin = get_origin(annotation)
-    args = get_args(annotation)
-    if not _IS_PY39:
-        from types import UnionType
-
-        if origin is UnionType:
-            origin = Union
-
-    if isinstance(annotation, GenericAlias) or (inspect.isclass(annotation) and issubclass(annotation, PydanticBaseModel)):
-        return SerializeAsAny[annotation]
-    elif origin and args:
-        # Filter out typing.Type and generic types
-        if origin is type or (inspect.isclass(origin) and issubclass(origin, Generic)):
-            return annotation
-        elif origin is ClassVar:  # ClassVar doesn't accept a tuple of length 1 in py39
-            return ClassVar[_adjust_annotations(args[0])]
-        else:
-            try:
-                return origin[tuple(_adjust_annotations(arg) for arg in args)]
-            except TypeError:
-                raise TypeError(f"Could not adjust annotations for {origin}")
-    else:
-        return annotation
-
-
-class _SerializeAsAnyMeta(ModelMetaclass):
-    def __new__(self, name: str, bases: Tuple[type], namespaces: Dict[str, Any], **kwargs):
-        annotations: dict = namespaces.get("__annotations__", {})
-
-        for base in bases:
-            for base_ in base.__mro__:
-                if base_ is PydanticBaseModel:
-                    annotations.update(base_.__annotations__)
-
-        for field, annotation in annotations.items():
-            if not field.startswith("__"):
-                annotations[field] = _adjust_annotations(annotation)
-
-        namespaces["__annotations__"] = annotations
-
-        return super().__new__(self, name, bases, namespaces, **kwargs)
-
-
-class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta):
+class BaseModel(PydanticBaseModel, _RegistryMixin):
     """BaseModel is a base class for all pydantic models within the cubist flow framework.
 
     This gives us a way to add functionality to the framework, including
@@ -179,6 +117,8 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
         # where the default behavior is just to drop the mis-named value. This prevents that
         extra="forbid",
         ser_json_timedelta="float",
+        # Polymorphic serialization is the behavior of allowing a subclass of a model (or Pydantic dataclass) to override serialization so that the subclass' serialization is used, rather than the original model types's serialization. This will expose all the data defined on the subclass in the serialized payload.
+        polymorphic_serialization=True,
     )
 
     def __str__(self):
