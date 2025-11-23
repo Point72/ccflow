@@ -15,7 +15,7 @@ __all__ = ("RestModel", "LinksModel", "DBModel", "SiteContext")
 class SiteContext(ContextBase):
     """An example of a context object, passed into and between callable models from the command line."""
 
-    site: str = Field(default="https://en.wikipedia.org/wiki/Main_Page")
+    site: str = Field(default="https://news.ycombinator.com")
 
 
 class RestModel(CallableModel):

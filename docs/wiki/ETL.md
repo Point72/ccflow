@@ -52,14 +52,14 @@ from ccflow import ContextBase
 from pydantic import Field
 
 class SiteContext(ContextBase):
-    site: str = Field(default="https://en.wikipedia.org/wiki/Main_Page")
+    site: str = Field(default="https://news.ycombinator.com")
 ```
 
 This class has a single attribute, `site`.
 When we finish writing our ETL CLI, we will be able to pass in different contexts at runtime:
 
 ```bash
-etl-cli +context=[]  # use default wikipedia
+etl-cli +context=[]  # use default hacker news
 etl-cli +context=["http://lobste.rs"]  # query lobste.rs instead
 ```
 
