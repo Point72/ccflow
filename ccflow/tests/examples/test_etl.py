@@ -9,10 +9,10 @@ from ccflow.examples.etl.models import DBModel, LinksModel, RestModel, SiteConte
 class TestEtl:
     def test_rest_model(self):
         rest = RestModel()
-        context = SiteContext(site="https://en.wikipedia.org/wiki/Main_Page")
+        context = SiteContext(site="https://news.ycombinator.com")
         result = rest(context)
         assert result.value is not None
-        assert "Wikipedia" in result.value
+        assert "Hacker News" in result.value
 
     def test_links_model(self):
         with NamedTemporaryFile(suffix=".html") as file:
