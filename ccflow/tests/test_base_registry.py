@@ -36,6 +36,10 @@ class MyClass:
         self.q = q
 
 
+def my_list() -> List[str]:
+    return ["i", "j"]
+
+
 class MyNestedModel(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)  # To allow z = MyClass, even though there is no validator
 
@@ -319,6 +323,30 @@ class TestRegistryLoading(TestCase):
 
         self.assertRaises(ValueError, r.load_config, cfg)
         r.load_config(cfg, overwrite=True)
+        self.assertEqual(r["foo"], m)
+
+    def test_load_config_with_function(self):
+        cfg = OmegaConf.create(
+            {
+                "bar": {  # This is not a callable model to register, but a function call to be used in an interpolation elsewhere
+                    "_target_": "ccflow.tests.test_base_registry.my_list",
+                },
+                "foo": {
+                    "_target_": "ccflow.tests.test_base_registry.MyTestModel",
+                    "a": "test",
+                    "b": 0.0,
+                    "c": "${bar}",
+                    "d": {"k": 2.0},
+                },
+                "baz": {"qux": "garbage"},  # i.e. a helper dictionary (not a subregistry!)
+            }
+        )
+        r = ModelRegistry(name="test")
+        r.load_config(cfg)
+        self.assertNotIn("bar", r.models)
+        self.assertNotIn("baz", r.models)
+
+        m = MyTestModel(a="test", b=0.0, c=["i", "j"], d={"k": 2.0})
         self.assertEqual(r["foo"], m)
 
     def test_config_round_trip(self):
