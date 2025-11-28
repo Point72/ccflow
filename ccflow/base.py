@@ -11,7 +11,8 @@ import warnings
 from types import GenericAlias, MappingProxyType
 from typing import Any, Callable, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar, Union, get_args, get_origin
 
-from omegaconf import DictConfig
+import omegaconf
+from omegaconf import DictConfig, OmegaConf
 from packaging import version
 from pydantic import (
     BaseModel as PydanticBaseModel,
@@ -629,6 +630,14 @@ class _ModelRegistryLoader:
                         elif not skip_exceptions:
                             raise e
                         continue
+                # If model is a simple type or a config, don't try to add it to the registry (which would raise an error)
+                # It could be a config value that was programmatically generated via _target_ and which used elsewhere via interpolation
+                if not isinstance(model, BaseModel):
+                    try:
+                        OmegaConf.create([model])
+                        continue
+                    except omegaconf.UnsupportedValueType:
+                        pass
 
                 if hasattr(model, "meta") and hasattr(model.meta, "name") and model.meta.name == "":
                     model.meta.name = k
