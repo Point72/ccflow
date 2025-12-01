@@ -11,7 +11,7 @@
 [![Build Status](https://github.com/Point72/ccflow/actions/workflows/build.yaml/badge.svg?branch=main&event=push)](https://github.com/Point72/ccflow/actions/workflows/build.yaml)
 [![codecov](https://codecov.io/gh/Point72/ccflow/branch/main/graph/badge.svg)](https://codecov.io/gh/Point72/ccflow)
 [![GitHub issues](https://img.shields.io/github/issues/point72/ccflow.svg)](https://github.com/point72/ccflow/issues)
-[![License](https://img.shields.io/github/license/Point72/ccflow)](https://github.com/Point72/ccflow)
+[![License](https://img.shields.io/github/license/Point72/ccflow)](https://github.com/Point72/ccflow/blob/main/LICENSE)
 [![PyPI Version](https://img.shields.io/pypi/v/ccflow.svg)](https://pypi.python.org/pypi/ccflow)
 
 `ccflow` (Composable Configuration Flow) is a collection of tools for workflow configuration, orchestration, and dependency injection.
