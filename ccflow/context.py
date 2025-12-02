@@ -147,6 +147,12 @@ class DateRangeContext(ContextBase):
     _normalize_start = field_validator("start_date", mode="before")(normalize_date)
     _normalize_end = field_validator("end_date", mode="before")(normalize_date)
 
+    @model_validator(mode="wrap")
+    def _date_context_validator(cls, v, handler, info):
+        if isinstance(v, DateContext):
+            v = dict(start_date=v.date, end_date=v.date)
+        return handler(v)
+
 
 class DatetimeRangeContext(ContextBase):
     start_datetime: datetime

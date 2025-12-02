@@ -96,6 +96,11 @@ class TestContexts(TestCase):
         self.assertEqual(TypeAdapter(DateRangeContext).validate_python(["-1d", "0d"]), c)
         self.assertEqual(TypeAdapter(DateRangeContext).validate_python(["-1d", datetime.now()]), c)
 
+    def test_date_range_from_date(self):
+        # Test validation from a DateContext
+        d0 = date.today()
+        self.assertEqual(TypeAdapter(DateRangeContext).validate_python(DateContext(date=d0)), DateRangeContext(start_date=d0, end_date=d0))
+
     def test_freq(self):
         self.assertEqual(
             FreqDateContext.model_validate("5min,2022-01-01"),
