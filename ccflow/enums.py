@@ -16,7 +16,7 @@ Notes:
 
 import inspect
 from os import environ
-from typing import Any, Callable, Dict, List, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Union
 
 from pydantic import GetJsonSchemaHandler
 from pydantic.json_schema import JsonSchemaValue
@@ -34,7 +34,7 @@ BaseEnum.auto = auto
 
 _CSP_ENUM = False
 
-if environ.get("CCFLOW_NO_CSP", "0") != "1":
+if not TYPE_CHECKING and environ.get("CCFLOW_NO_CSP", "0") != "1":
     try:
         from csp import DynamicEnum, Enum as BaseEnum
 
