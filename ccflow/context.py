@@ -210,23 +210,39 @@ class HorizonContext(ContextBase):
     horizon: Frequency
 
 
+class HorizonDateContext(DateContext, HorizonContext):
+    pass
+
+
+class HorizonDatetimeContext(DatetimeContext, HorizonContext):
+    pass
+
+
+class HorizonDateRangeContext(DateRangeContext, HorizonContext):
+    pass
+
+
+class HorizonDatetimeRangeContext(DatetimeRangeContext, HorizonContext):
+    pass
+
+
 class FreqHorizonContext(HorizonContext, FreqContext):
     pass
 
 
-class FreqHorizonDateContext(DateContext, HorizonContext, FreqContext):
+class FreqHorizonDateContext(HorizonDateContext, FreqDateContext):
     pass
 
 
-class FreqHorizonDatetimeContext(DatetimeContext, HorizonContext, FreqContext):
+class FreqHorizonDatetimeContext(HorizonDatetimeContext, FreqDatetimeContext):
     pass
 
 
-class FreqHorizonDateRangeContext(DateRangeContext, HorizonContext, FreqContext):
+class FreqHorizonDateRangeContext(HorizonDateRangeContext, FreqDateRangeContext):
     pass
 
 
-class FreqHorizonDatetimeRangeContext(DatetimeRangeContext, HorizonContext, FreqContext):
+class FreqHorizonDatetimeRangeContext(HorizonDatetimeRangeContext, FreqDatetimeRangeContext):
     pass
 
 
@@ -250,35 +266,35 @@ class UniverseDatetimeRangeContext(DatetimeRangeContext, UniverseContext):
     pass
 
 
-class UniverseFrequencyDateRangeContext(DateRangeContext, FreqContext, UniverseContext):
+class UniverseFrequencyDateRangeContext(UniverseDateRangeContext, FreqDateRangeContext):
     pass
 
 
-class UniverseFrequencyDatetimeRangeContext(DatetimeRangeContext, FreqContext, UniverseContext):
+class UniverseFrequencyDatetimeRangeContext(UniverseDatetimeRangeContext, FreqDatetimeRangeContext):
     pass
 
 
-class UniverseFrequencyHorizonDateRangeContext(DateRangeContext, HorizonContext, FreqContext, UniverseContext):
+class UniverseFrequencyHorizonDateRangeContext(UniverseFrequencyDateRangeContext, FreqHorizonDateRangeContext):
     pass
 
 
-class UniverseFrequencyHorizonDatetimeRangeContext(DatetimeRangeContext, HorizonContext, FreqContext, UniverseContext):
+class UniverseFrequencyHorizonDatetimeRangeContext(UniverseFrequencyDatetimeRangeContext, FreqHorizonDatetimeRangeContext):
     pass
 
 
-class VersionedUniverseDateContext(VersionedDateContext, UniverseContext):
+class VersionedUniverseDateContext(VersionedDateContext, UniverseDateContext):
     pass
 
 
-class VersionedUniverseDatetimeContext(VersionedDatetimeContext, UniverseContext):
+class VersionedUniverseDatetimeContext(VersionedDatetimeContext, UniverseDatetimeContext):
     pass
 
 
-class VersionedUniverseDateRangeContext(VersionedDateRangeContext, UniverseContext):
+class VersionedUniverseDateRangeContext(VersionedDateRangeContext, UniverseDateRangeContext):
     pass
 
 
-class VersionedUniverseDatetimeRangeContext(VersionedDatetimeRangeContext, UniverseContext):
+class VersionedUniverseDatetimeRangeContext(VersionedDatetimeRangeContext, UniverseDatetimeRangeContext):
     pass
 
 
@@ -306,25 +322,25 @@ class ModelDateRangeSourceContext(SourceContext, ModelDateRangeContext):
     pass
 
 
-class ModelFreqDateRangeContext(FreqDateRangeContext, ModelContext):
+class ModelFreqDateRangeContext(FreqDateRangeContext, ModelDateRangeContext):
     pass
 
 
-class ModelFreqDatetimeRangeContext(FreqDatetimeRangeContext, ModelContext):
+class ModelFreqDatetimeRangeContext(FreqDatetimeRangeContext, ModelDatetimeRangeContext):
     pass
 
 
-class VersionedModelDateContext(VersionedDateContext, ModelContext):
+class VersionedModelDateContext(VersionedDateContext, ModelDateContext):
     pass
 
 
-class VersionedModelDatetimeContext(VersionedDatetimeContext, ModelContext):
+class VersionedModelDatetimeContext(VersionedDatetimeContext, ModelDatetimeContext):
     pass
 
 
-class VersionedModelDateRangeContext(VersionedDateRangeContext, ModelContext):
+class VersionedModelDateRangeContext(VersionedDateRangeContext, ModelDateRangeContext):
     pass
 
 
-class VersionedModelDatetimeRangeContext(VersionedDatetimeRangeContext, ModelContext):
+class VersionedModelDatetimeRangeContext(VersionedDatetimeRangeContext, ModelDatetimeRangeContext):
     pass

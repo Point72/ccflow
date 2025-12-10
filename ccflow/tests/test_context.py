@@ -214,3 +214,22 @@ class TestGenericContext(TestCase):
         self.assertEqual(GenericContext[int](value=GenericResult[int](value=v)), GenericContext[int](value=v))
 
         self.assertEqual(GenericContext[str].model_validate(GenericResult(value=5)), GenericContext[str](value="5"))
+
+
+class TestContextInheritance(TestCase):
+    def test_field_ordering(self):
+        # Just a test on a subsample of contexts to ensure field ordering is as expected
+        self.assertListEqual(list(DateRangeContext.model_fields.keys()), ["start_date", "end_date"])
+        self.assertListEqual(list(FreqDateRangeContext.model_fields.keys()), ["freq", "start_date", "end_date"])
+        self.assertListEqual(list(UniverseDateRangeContext.model_fields.keys()), ["universe", "start_date", "end_date"])
+        self.assertListEqual(list(ModelDateRangeContext.model_fields.keys()), ["model", "start_date", "end_date"])
+        self.assertListEqual(list(ModelFreqDateRangeContext.model_fields.keys()), ["model", "freq", "start_date", "end_date"])
+
+    def test_subclass(self):
+        # Test that ModelFreqDateRangeContext is a subclass of all its parent contexts
+        # Other contexts that follow the same pattern will have the same behavior
+        self.assertTrue(issubclass(ModelFreqDateRangeContext, DateRangeContext))
+        self.assertTrue(issubclass(ModelFreqDateRangeContext, FreqDateRangeContext))
+        self.assertTrue(issubclass(ModelFreqDateRangeContext, ModelDateRangeContext))
+        self.assertTrue(issubclass(ModelFreqDateRangeContext, FreqContext))
+        self.assertTrue(issubclass(ModelFreqDateRangeContext, ModelContext))
