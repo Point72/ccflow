@@ -1,10 +1,15 @@
+import importlib
+import inspect
+import re
 from datetime import date, datetime, timedelta, timezone
 from unittest import TestCase
 
 import pandas as pd
 from pydantic import TypeAdapter, ValidationError
 
+import ccflow.context as ctx
 from ccflow.context import (
+    ContextBase,
     DateContext,
     DateRangeContext,
     DatetimeContext,
@@ -217,19 +222,96 @@ class TestGenericContext(TestCase):
 
 
 class TestContextInheritance(TestCase):
-    def test_field_ordering(self):
-        # Just a test on a subsample of contexts to ensure field ordering is as expected
-        self.assertListEqual(list(DateRangeContext.model_fields.keys()), ["start_date", "end_date"])
-        self.assertListEqual(list(FreqDateRangeContext.model_fields.keys()), ["freq", "start_date", "end_date"])
-        self.assertListEqual(list(UniverseDateRangeContext.model_fields.keys()), ["universe", "start_date", "end_date"])
-        self.assertListEqual(list(ModelDateRangeContext.model_fields.keys()), ["model", "start_date", "end_date"])
-        self.assertListEqual(list(ModelFreqDateRangeContext.model_fields.keys()), ["model", "freq", "start_date", "end_date"])
+    def setUp(self):
+        self.classes = {
+            name: obj
+            for name, obj in inspect.getmembers(ctx, inspect.isclass)
+            if obj.__module__ == ctx.__name__ and issubclass(obj, ContextBase) and not getattr(obj, "__deprecated__", False)
+        }
+        # TODO - remove NullContext until we fix the inheritance
+        self.classes.pop("NullContext")
 
-    def test_subclass(self):
-        # Test that ModelFreqDateRangeContext is a subclass of all its parent contexts
-        # Other contexts that follow the same pattern will have the same behavior
-        self.assertTrue(issubclass(ModelFreqDateRangeContext, DateRangeContext))
-        self.assertTrue(issubclass(ModelFreqDateRangeContext, FreqDateRangeContext))
-        self.assertTrue(issubclass(ModelFreqDateRangeContext, ModelDateRangeContext))
-        self.assertTrue(issubclass(ModelFreqDateRangeContext, FreqContext))
-        self.assertTrue(issubclass(ModelFreqDateRangeContext, ModelContext))
+    def test_field_ordering(self):
+        """Test that complex contexts have fields in the same order as the basic contexts they are composed of."""
+
+        def split_camel(name: str):
+            return re.findall(r"[A-Z][a-z]*", name)
+
+        basic_contexts = {}
+        complex_contexts = {}
+
+        for name, cls in self.classes.items():
+            if ContextBase in cls.__bases__:
+                basic_contexts[name] = cls
+            else:
+                complex_contexts[name] = cls
+
+        basic_contexts_map = {
+            name.replace("Context", "").replace("EntryTime", "Versioned").replace("Range", "range"): list(cls.model_fields.keys())
+            for name, cls in basic_contexts.items()
+        }
+
+        complex_contexts_map = {
+            name.replace("Context", "").replace("Range", "range"): list(cls.model_fields.keys()) for name, cls in complex_contexts.items()
+        }
+
+        for complex_context, complex_context_fields in complex_contexts_map.items():
+            expected_fields = []
+            for basic_context in split_camel(complex_context):
+                expected_fields.extend(basic_contexts_map[basic_context])
+            self.assertEqual(
+                expected_fields, complex_context_fields, f"{expected_fields} do not match {complex_context_fields} for context {complex_context}."
+            )
+
+    def test_inheritance(self):
+        """Test that if a context has a superset of fields of another context, it is a subclass of that context."""
+
+        for parent_name, parent_class in self.classes.items():
+            for child_name, child_class in self.classes.items():
+                if parent_class is child_class:
+                    continue
+
+                parent_fields = set(parent_class.model_fields.keys())
+                child_fields = set(child_class.model_fields.keys())
+                if parent_fields.issubset(child_fields):
+                    self.assertTrue(
+                        issubclass(child_class, parent_class),
+                        f"ERROR: {child_name} has a superset of {parent_name}'s fields but is NOT a subclass of {parent_name}",
+                    )
+
+
+class TestDeprecated(TestCase):
+    # TODO - remove once deprecated contexts are removed
+    def test_deprecated(self):
+        """
+        Tests that all deprecated context classes are:
+        1. importable,
+        2. marked with __deprecated__ = True,
+        3. accompanied by a DeprecationWarning when instantiated.
+        """
+
+        deprecated_class_names = [
+            "UniverseFrequencyDateRangeContext",
+            "UniverseFrequencyDatetimeRangeContext",
+            "UniverseFrequencyHorizonDateRangeContext",
+            "UniverseFrequencyHorizonDatetimeRangeContext",
+            "VersionedUniverseDateContext",
+            "VersionedUniverseDatetimeContext",
+            "VersionedUniverseDateRangeContext",
+            "VersionedUniverseDatetimeRangeContext",
+            "VersionedModelDateContext",
+            "VersionedModelDatetimeContext",
+            "VersionedModelDateRangeContext",
+            "VersionedModelDatetimeRangeContext",
+            "VersionedDateContext",
+            "VersionedDatetimeContext",
+            "VersionedDateRangeContext",
+            "VersionedDatetimeRangeContext",
+        ]
+
+        module = importlib.import_module("ccflow.context")
+        for cls_name in deprecated_class_names:
+            cls = getattr(module, cls_name)
+            self.assertTrue(cls.__deprecated__)
+            with self.assertWarns(DeprecationWarning):
+                cls.model_construct()
