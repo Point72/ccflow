@@ -20,16 +20,16 @@ __all__ = (
     "DateContext",
     "DatetimeContext",
     "EntryTimeContext",
-    "SeededContext",
+    "SeedContext",
     "SourceContext",
     "DateRangeContext",
     "DatetimeRangeContext",
-    "SeededDateRangeContext",
-    "SeededDatetimeRangeContext",
-    "DateVersionedContext",
-    "DatetimeVersionedContext",
-    "DateRangeVersionedContext",
-    "DatetimeRangeVersionedContext",
+    "SeedDateRangeContext",
+    "SeedDatetimeRangeContext",
+    "DateEntryTimeContext",
+    "DatetimeEntryTimeContext",
+    "DateRangeEntryTimeContext",
+    "DatetimeRangeEntryTimeContext",
     "FreqContext",
     "FreqDateContext",
     "FreqDatetimeContext",
@@ -50,10 +50,10 @@ __all__ = (
     "UniverseFreqDatetimeRangeContext",
     "UniverseFreqHorizonDateRangeContext",
     "UniverseFreqHorizonDatetimeRangeContext",
-    "UniverseDateVersionedContext",
-    "UniverseDatetimeVersionedContext",
-    "UniverseDateRangeVersionedContext",
-    "UniverseDatetimeRangeVersionedContext",
+    "UniverseDateEntryTimeContext",
+    "UniverseDatetimeEntryTimeContext",
+    "UniverseDateRangeEntryTimeContext",
+    "UniverseDatetimeRangeEntryTimeContext",
     "ModelContext",
     "ModelDateContext",
     "ModelDatetimeContext",
@@ -62,11 +62,14 @@ __all__ = (
     "ModelDateRangeSourceContext",
     "ModelFreqDateRangeContext",
     "ModelFreqDatetimeRangeContext",
-    "ModelDateVersionedContext",
-    "ModelDatetimeVersionedContext",
-    "ModelDateRangeVersionedContext",
-    "ModelDatetimeRangeVersionedContext",
+    "ModelDateEntryTimeContext",
+    "ModelDatetimeEntryTimeContext",
+    "ModelDateRangeEntryTimeContext",
+    "ModelDatetimeRangeEntryTimeContext",
     # deprecated aliases
+    "SeededContext",
+    "SeededDateRangeContext",
+    "SeededDatetimeRangeContext",
     "UniverseFrequencyDateRangeContext",
     "UniverseFrequencyDatetimeRangeContext",
     "UniverseFrequencyHorizonDateRangeContext",
@@ -159,7 +162,7 @@ class EntryTimeContext(ContextBase):
     entry_time_cutoff: Optional[datetime] = None
 
 
-class SeededContext(ContextBase):
+class SeedContext(ContextBase):
     seed: int = 1234
 
 
@@ -189,27 +192,27 @@ class DatetimeRangeContext(ContextBase):
     _normalize_end = field_validator("end_datetime", mode="before")(normalize_datetime)
 
 
-class SeededDateRangeContext(DateRangeContext, SeededContext):
+class SeedDateRangeContext(DateRangeContext, SeedContext):
     pass
 
 
-class SeededDatetimeRangeContext(DatetimeRangeContext, SeededContext):
+class SeedDatetimeRangeContext(DatetimeRangeContext, SeedContext):
     pass
 
 
-class DateVersionedContext(EntryTimeContext, DateContext):
+class DateEntryTimeContext(EntryTimeContext, DateContext):
     pass
 
 
-class DatetimeVersionedContext(EntryTimeContext, DatetimeContext):
+class DatetimeEntryTimeContext(EntryTimeContext, DatetimeContext):
     pass
 
 
-class DateRangeVersionedContext(EntryTimeContext, DateRangeContext):
+class DateRangeEntryTimeContext(EntryTimeContext, DateRangeContext):
     pass
 
 
-class DatetimeRangeVersionedContext(EntryTimeContext, DatetimeRangeContext):
+class DatetimeRangeEntryTimeContext(EntryTimeContext, DatetimeRangeContext):
     pass
 
 
@@ -309,19 +312,19 @@ class UniverseFreqHorizonDatetimeRangeContext(UniverseFreqDatetimeRangeContext, 
     pass
 
 
-class UniverseDateVersionedContext(DateVersionedContext, UniverseDateContext):
+class UniverseDateEntryTimeContext(DateEntryTimeContext, UniverseDateContext):
     pass
 
 
-class UniverseDatetimeVersionedContext(DatetimeVersionedContext, UniverseDatetimeContext):
+class UniverseDatetimeEntryTimeContext(DatetimeEntryTimeContext, UniverseDatetimeContext):
     pass
 
 
-class UniverseDateRangeVersionedContext(DateRangeVersionedContext, UniverseDateRangeContext):
+class UniverseDateRangeEntryTimeContext(DateRangeEntryTimeContext, UniverseDateRangeContext):
     pass
 
 
-class UniverseDatetimeRangeVersionedContext(DatetimeRangeVersionedContext, UniverseDatetimeRangeContext):
+class UniverseDatetimeRangeEntryTimeContext(DatetimeRangeEntryTimeContext, UniverseDatetimeRangeContext):
     pass
 
 
@@ -357,23 +360,41 @@ class ModelFreqDatetimeRangeContext(FreqDatetimeRangeContext, ModelDatetimeRange
     pass
 
 
-class ModelDateVersionedContext(DateVersionedContext, ModelDateContext):
+class ModelDateEntryTimeContext(DateEntryTimeContext, ModelDateContext):
     pass
 
 
-class ModelDatetimeVersionedContext(DatetimeVersionedContext, ModelDatetimeContext):
+class ModelDatetimeEntryTimeContext(DatetimeEntryTimeContext, ModelDatetimeContext):
     pass
 
 
-class ModelDateRangeVersionedContext(DateRangeVersionedContext, ModelDateRangeContext):
+class ModelDateRangeEntryTimeContext(DateRangeEntryTimeContext, ModelDateRangeContext):
     pass
 
 
-class ModelDatetimeRangeVersionedContext(DatetimeRangeVersionedContext, ModelDatetimeRangeContext):
+class ModelDatetimeRangeEntryTimeContext(DatetimeRangeEntryTimeContext, ModelDatetimeRangeContext):
     pass
 
 
 # TODO - remove later to avoid breaking changes for now
+@deprecated(version="0.8.0", reason="Use SeedContext instead")
+class SeededContext(SeedContext):
+    __deprecated__ = True
+    pass
+
+
+@deprecated(version="0.8.0", reason="Use SeedDateRangeContext instead")
+class SeededDateRangeContext(SeedDateRangeContext):
+    __deprecated__ = True
+    pass
+
+
+@deprecated(version="0.8.0", reason="Use SeedDatetimeRangeContext instead")
+class SeededDatetimeRangeContext(SeedDatetimeRangeContext):
+    __deprecated__ = True
+    pass
+
+
 @deprecated(version="0.8.0", reason="Use UniverseFreqDateRangeContext instead")
 class UniverseFrequencyDateRangeContext(UniverseFreqDateRangeContext):
     __deprecated__ = True
@@ -398,73 +419,73 @@ class UniverseFrequencyHorizonDatetimeRangeContext(UniverseFreqHorizonDatetimeRa
     pass
 
 
-@deprecated(version="0.8.0", reason="Use UniverseDateVersionedContext instead")
-class VersionedUniverseDateContext(UniverseDateVersionedContext):
+@deprecated(version="0.8.0", reason="Use UniverseDateEntryTimeContext instead")
+class VersionedUniverseDateContext(UniverseDateEntryTimeContext):
     __deprecated__ = True
     pass
 
 
-@deprecated(version="0.8.0", reason="Use UniverseDatetimeVersionedContext instead")
-class VersionedUniverseDatetimeContext(UniverseDatetimeVersionedContext):
+@deprecated(version="0.8.0", reason="Use UniverseDatetimeEntryTimeContext instead")
+class VersionedUniverseDatetimeContext(UniverseDatetimeEntryTimeContext):
     __deprecated__ = True
     pass
 
 
-@deprecated(version="0.8.0", reason="Use UniverseDateRangeVersionedContext instead")
-class VersionedUniverseDateRangeContext(UniverseDateRangeVersionedContext):
+@deprecated(version="0.8.0", reason="Use UniverseDateRangeEntryTimeContext instead")
+class VersionedUniverseDateRangeContext(UniverseDateRangeEntryTimeContext):
     __deprecated__ = True
     pass
 
 
-@deprecated(version="0.8.0", reason="Use UniverseDatetimeRangeVersionedContext instead")
-class VersionedUniverseDatetimeRangeContext(UniverseDatetimeRangeVersionedContext):
+@deprecated(version="0.8.0", reason="Use UniverseDatetimeRangeEntryTimeContext instead")
+class VersionedUniverseDatetimeRangeContext(UniverseDatetimeRangeEntryTimeContext):
     __deprecated__ = True
     pass
 
 
-@deprecated(version="0.8.0", reason="Use ModelDateVersionedContext instead")
-class VersionedModelDateContext(ModelDateVersionedContext):
+@deprecated(version="0.8.0", reason="Use ModelDateEntryTimeContext instead")
+class VersionedModelDateContext(ModelDateEntryTimeContext):
     __deprecated__ = True
     pass
 
 
-@deprecated(version="0.8.0", reason="Use ModelDatetimeVersionedContext instead")
-class VersionedModelDatetimeContext(ModelDatetimeVersionedContext):
+@deprecated(version="0.8.0", reason="Use ModelDatetimeEntryTimeContext instead")
+class VersionedModelDatetimeContext(ModelDatetimeEntryTimeContext):
     __deprecated__ = True
     pass
 
 
-@deprecated(version="0.8.0", reason="Use ModelDateRangeVersionedContext instead")
-class VersionedModelDateRangeContext(ModelDateRangeVersionedContext):
+@deprecated(version="0.8.0", reason="Use ModelDateRangeEntryTimeContext instead")
+class VersionedModelDateRangeContext(ModelDateRangeEntryTimeContext):
     __deprecated__ = True
     pass
 
 
-@deprecated(version="0.8.0", reason="Use ModelDatetimeRangeVersionedContext instead")
-class VersionedModelDatetimeRangeContext(ModelDatetimeRangeVersionedContext):
+@deprecated(version="0.8.0", reason="Use ModelDatetimeRangeEntryTimeContext instead")
+class VersionedModelDatetimeRangeContext(ModelDatetimeRangeEntryTimeContext):
     __deprecated__ = True
     pass
 
 
-@deprecated(version="0.8.0", reason="Use DateVersionedContext instead")
+@deprecated(version="0.8.0", reason="Use DateEntryTimeContext instead")
 class VersionedDateContext(EntryTimeContext, DateContext):
     __deprecated__ = True
     pass
 
 
-@deprecated(version="0.8.0", reason="Use DatetimeVersionedContext instead")
+@deprecated(version="0.8.0", reason="Use DatetimeEntryTimeContext instead")
 class VersionedDatetimeContext(EntryTimeContext, DatetimeContext):
     __deprecated__ = True
     pass
 
 
-@deprecated(version="0.8.0", reason="Use DateRangeVersionedContext instead")
+@deprecated(version="0.8.0", reason="Use DateRangeEntryTimeContext instead")
 class VersionedDateRangeContext(EntryTimeContext, DateRangeContext):
     __deprecated__ = True
     pass
 
 
-@deprecated(version="0.8.0", reason="Use DatetimeRangeVersionedContext instead")
+@deprecated(version="0.8.0", reason="Use DatetimeRangeEntryTimeContext instead")
 class VersionedDatetimeRangeContext(EntryTimeContext, DatetimeRangeContext):
     __deprecated__ = True
     pass

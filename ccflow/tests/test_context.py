@@ -237,23 +237,15 @@ class TestContextInheritance(TestCase):
         def split_camel(name: str):
             return re.findall(r"[A-Z][a-z]*", name)
 
-        basic_contexts = {}
-        complex_contexts = {}
+        basic_contexts_map = {}
+        complex_contexts_map = {}
 
         for name, cls in self.classes.items():
+            name_noralized = name.replace("Context", "").replace("EntryTime", "Entrytime").replace("Range", "range")
             if ContextBase in cls.__bases__:
-                basic_contexts[name] = cls
+                basic_contexts_map[name_noralized] = list(cls.model_fields.keys())
             else:
-                complex_contexts[name] = cls
-
-        basic_contexts_map = {
-            name.replace("Context", "").replace("EntryTime", "Versioned").replace("Range", "range"): list(cls.model_fields.keys())
-            for name, cls in basic_contexts.items()
-        }
-
-        complex_contexts_map = {
-            name.replace("Context", "").replace("Range", "range"): list(cls.model_fields.keys()) for name, cls in complex_contexts.items()
-        }
+                complex_contexts_map[name_noralized] = list(cls.model_fields.keys())
 
         for complex_context, complex_context_fields in complex_contexts_map.items():
             expected_fields = []
@@ -291,6 +283,9 @@ class TestDeprecated(TestCase):
         """
 
         deprecated_class_names = [
+            "SeededContext",
+            "SeededDateRangeContext",
+            "SeededDatetimeRangeContext",
             "UniverseFrequencyDateRangeContext",
             "UniverseFrequencyDatetimeRangeContext",
             "UniverseFrequencyHorizonDateRangeContext",
