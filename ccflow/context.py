@@ -90,15 +90,8 @@ __all__ = (
 
 _SEPARATOR = ","
 
-
-class NullContext(ContextBase):
-    """A Null Context that is used when no context is provided."""
-
-    @model_validator(mode="wrap")
-    def _validate_none(cls, v, handler, info):
-        v = v or {}
-        return handler(v)
-
+# Starting 0.8.0 Nullcontext is an alias to ContextBase
+NullContext = ContextBase
 
 C = TypeVar("C", bound=Hashable)
 

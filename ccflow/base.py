@@ -829,6 +829,9 @@ class ContextBase(ResultBase):
 
     @model_validator(mode="wrap")
     def _context_validator(cls, v, handler, info):
+        if v is None:
+            return handler({})
+
         # Add deepcopy for v2 because it doesn't support copy_on_model_validation
         v = copy.deepcopy(v)
 

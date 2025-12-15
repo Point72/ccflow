@@ -228,8 +228,6 @@ class TestContextInheritance(TestCase):
             for name, obj in inspect.getmembers(ctx, inspect.isclass)
             if obj.__module__ == ctx.__name__ and issubclass(obj, ContextBase) and not getattr(obj, "__deprecated__", False)
         }
-        # TODO - remove NullContext until we fix the inheritance
-        self.classes.pop("NullContext")
 
     def test_field_ordering(self):
         """Test that complex contexts have fields in the same order as the basic contexts they are composed of."""
