@@ -12,12 +12,23 @@ which all need to be defined together so that pydantic (especially V1) can resol
 """
 
 import abc
+import inspect
 import logging
-from functools import lru_cache, wraps
+from functools import lru_cache, partial, wraps
 from inspect import Signature, isclass, signature
-from typing import Any, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar, Union, get_args, get_origin
+from typing import Any, Callable, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar, Union, get_args, get_origin
 
-from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field, InstanceOf, PrivateAttr, TypeAdapter, field_validator, model_validator
+from pydantic import (
+    BaseModel as PydanticBaseModel,
+    ConfigDict,
+    Field,
+    InstanceOf,
+    PrivateAttr,
+    TypeAdapter,
+    create_model,
+    field_validator,
+    model_validator,
+)
 from typing_extensions import override
 
 from .base import (
@@ -44,6 +55,7 @@ __all__ = (
     "EvaluatorBase",
     "Evaluator",
     "WrapperModel",
+    "dynamic_context",
 )
 
 log = logging.getLogger(__name__)
@@ -268,14 +280,34 @@ class FlowOptions(BaseModel):
         def wrapper(model, context=Signature.empty, *, _options: Optional[FlowOptions] = None, **kwargs):
             if not isinstance(model, CallableModel):
                 raise TypeError(f"Can only decorate methods on CallableModels (not {type(model)}) with the flow decorator.")
-            if (not isclass(model.context_type) or not issubclass(model.context_type, ContextBase)) and not (
-                get_origin(model.context_type) is Union and type(None) in get_args(model.context_type)
+
+            # Determine the context type for this specific method
+            # If the function has a __dynamic_context__ attribute (from @dynamic_context decorator),
+            # use that instead of the model's context_type
+            has_dynamic_context = hasattr(fn, "__dynamic_context__")
+            if has_dynamic_context:
+                method_context_type = fn.__dynamic_context__
+            else:
+                method_context_type = model.context_type
+
+            # Validate context type (skip for dynamic contexts which are always valid ContextBase subclasses)
+            if not has_dynamic_context:
+                if (not isclass(model.context_type) or not issubclass(model.context_type, ContextBase)) and not (
+                    get_origin(model.context_type) is Union and type(None) in get_args(model.context_type)
+                ):
+                    raise TypeError(f"Context type {model.context_type} must be a subclass of ContextBase")
+
+            # Always validate result type (applies to both regular and dynamic context methods)
+            # For dynamic contexts, use __result_type__ if available, otherwise fall back to model.result_type
+            if has_dynamic_context and hasattr(fn, "__result_type__"):
+                method_result_type = fn.__result_type__
+            else:
+                method_result_type = model.result_type
+            if (not isclass(method_result_type) or not issubclass(method_result_type, ResultBase)) and not (
+                get_origin(method_result_type) is Union and all(isclass(t) and issubclass(t, ResultBase) for t in get_args(method_result_type))
             ):
-                raise TypeError(f"Context type {model.context_type} must be a subclass of ContextBase")
-            if (not isclass(model.result_type) or not issubclass(model.result_type, ResultBase)) and not (
-                get_origin(model.result_type) is Union and all(isclass(t) and issubclass(t, ResultBase) for t in get_args(model.result_type))
-            ):
-                raise TypeError(f"Result type {model.result_type} must be a subclass of ResultBase")
+                raise TypeError(f"Result type {method_result_type} must be a subclass of ResultBase")
+
             if self._deps and fn.__name__ != "__deps__":
                 raise ValueError("Can only apply Flow.deps decorator to __deps__")
             if context is Signature.empty:
@@ -285,18 +317,18 @@ class FlowOptions(BaseModel):
                         context = kwargs
                     else:
                         raise TypeError(
-                            f"{fn.__name__}() missing 1 required positional argument: 'context' of type {model.context_type}, or kwargs to construct it"
+                            f"{fn.__name__}() missing 1 required positional argument: 'context' of type {method_context_type}, or kwargs to construct it"
                         )
             elif kwargs:  # Kwargs passed in as well as context. Not allowed
                 raise TypeError(f"{fn.__name__}() was passed a context and got an unexpected keyword argument '{next(iter(kwargs.keys()))}'")
 
             # Type coercion on input. We do this here (rather than relying on ModelEvaluationContext) as it produces a nicer traceback/error message
-            if not isinstance(context, model.context_type):
-                if get_origin(model.context_type) is Union and type(None) in get_args(model.context_type):
-                    model_context_type = [t for t in get_args(model.context_type) if t is not type(None)][0]
+            if not isinstance(context, method_context_type):
+                if get_origin(method_context_type) is Union and type(None) in get_args(method_context_type):
+                    coercion_context_type = [t for t in get_args(method_context_type) if t is not type(None)][0]
                 else:
-                    model_context_type = model.context_type
-                context = model_context_type.model_validate(context)
+                    coercion_context_type = method_context_type
+                context = coercion_context_type.model_validate(context)
 
             if fn != getattr(model.__class__, fn.__name__).__wrapped__:
                 # This happens when super().__call__ is used when implementing a CallableModel that derives from another one.
@@ -417,6 +449,163 @@ class Flow(PydanticBaseModel):
             # Note that the code below is executed only once
             return FlowOptionsDeps(**kwargs)
 
+    @staticmethod
+    def dynamic_call(*args, **kwargs):
+        """Decorator for methods on callable models that creates a dynamic context from the function signature.
+
+        This allows defining the context inline in the function signature instead of creating
+        a separate context class. The decorator extracts the function parameters and creates
+        a dynamic ContextBase subclass.
+
+        Example:
+            class MyModel(CallableModel):
+                @Flow.dynamic_call
+                def __call__(self, *, a: int, b: str = "default") -> GenericResult:
+                    print(f"Called with a={a}, b={b}")
+                    return GenericResult(value=None)
+
+            model = MyModel()
+            model(a=42)  # Works with kwargs
+            model(a=42, b="test")  # Works with kwargs
+
+        Args:
+            *args: When used without arguments, the decorated function
+            **kwargs: FlowOptions parameters (log_level, verbose, validate_result, etc.)
+                      plus dynamic_context options:
+                      - parent: Optional parent context class to inherit from
+        """
+        # Extract dynamic_context-specific options
+        parent = kwargs.pop("parent", None)
+
+        if len(args) == 1 and callable(args[0]):
+            # No arguments to decorator (@Flow.dynamic_call)
+            fn = args[0]
+            wrapped = dynamic_context(fn, parent=parent)
+            impl = FlowOptions(**kwargs)
+            # Use wraps(wrapped) not wraps(fn) so that __wrapped__ points to the dynamic_context
+            # wrapper. This is important because FlowOptions.__call__ checks if fn == __wrapped__
+            # to determine whether to use the evaluator (line 333). Using wraps(fn) would set
+            # __wrapped__ to the original function, causing the check to fail and skip evaluation.
+            result = wraps(wrapped)(impl(wrapped))
+            # Preserve the dynamic context class and result type for introspection
+            result.__dynamic_context__ = wrapped.__dynamic_context__
+            result.__result_type__ = wrapped.__result_type__
+            return result
+        else:
+            # Arguments to decorator (@Flow.dynamic_call(...))
+            def decorator(fn: Callable) -> Callable:
+                wrapped = dynamic_context(fn, parent=parent)
+                impl = FlowOptions(**kwargs)
+                # Use wraps(wrapped) not wraps(fn) - see comment above
+                result = wraps(wrapped)(impl(wrapped))
+                # Preserve the dynamic context class and result type for introspection
+                result.__dynamic_context__ = wrapped.__dynamic_context__
+                result.__result_type__ = wrapped.__result_type__
+                return result
+
+            return decorator
+
+
+def dynamic_context(func: Callable = None, *, parent: Type[ContextBase] = None) -> Callable:
+    """Decorator that creates a dynamic context class from function parameters.
+
+    This decorator extracts the parameters from a function signature and creates
+    a dynamic Pydantic model (ContextBase subclass) whose fields correspond to
+    those parameters. The decorated function is then wrapped to accept the context
+    object and unpack it into keyword arguments.
+
+    Args:
+        func: The function to decorate. If None, returns a partial for use with arguments.
+        parent: Optional parent context class to inherit from. Defaults to ContextBase.
+            Note: Function parameters cannot collide with fields from the parent class.
+
+    Returns:
+        A wrapped function that accepts a context object matching the dynamically
+        created context type.
+
+    Raises:
+        ValueError: If the function is missing a return type annotation, if any parameter
+            is missing a type annotation, if *args or **kwargs are used, or if a parameter
+            name collides with a field from the parent context class.
+
+    Example:
+        @dynamic_context
+        def my_method(self, *, a: int, b: str = "default") -> GenericResult:
+            print(f"a={a}, b={b}")
+
+        # The wrapper now accepts a context object with fields 'a' and 'b'
+        # my_method.__dynamic_context__ is the dynamically created context class
+    """
+    if func is None:
+        return partial(dynamic_context, parent=parent)
+
+    # Extract signature and parameters
+    sig = signature(func)
+    result_type = sig.return_annotation
+
+    # Validate return annotation exists
+    if result_type is inspect.Parameter.empty:
+        raise ValueError(f"Function '{func.__name__}' must have a return type annotation")
+
+    # Build fields from parameters (skip 'self')
+    fields = {}
+    for name, param in sig.parameters.items():
+        if name == "self":
+            continue
+
+        # Disallow **kwargs
+        if param.kind == inspect.Parameter.VAR_KEYWORD:
+            raise ValueError(f"Parameter '{name}' in function '{func.__name__}' cannot be **kwargs")
+
+        # Disallow *args
+        if param.kind == inspect.Parameter.VAR_POSITIONAL:
+            raise ValueError(f"Parameter '{name}' in function '{func.__name__}' cannot be *args")
+
+        # Require type annotation
+        if param.annotation is inspect.Parameter.empty:
+            raise ValueError(f"Parameter '{name}' in function '{func.__name__}' must have a type annotation")
+
+        # Build field tuple: (type, default) - use ... for required fields
+        if param.default is inspect.Parameter.empty:
+            fields[name] = (param.annotation, ...)
+        else:
+            fields[name] = (param.annotation, param.default)
+
+    # Check for field collisions with parent context
+    base_class = parent if parent is not None else ContextBase
+    if parent is not None:
+        parent_fields = set(parent.model_fields.keys())
+        new_fields = set(fields.keys())
+        collision = parent_fields & new_fields
+        if collision:
+            raise ValueError(f"Parameter(s) {collision} in function '{func.__name__}' collide with fields from parent context '{parent.__name__}'")
+
+    # Create dynamic context class with informative name using __qualname__
+    context_name = f"{func.__qualname__}_DynamicContext"
+    dyn_context = create_model(context_name, __base__=base_class, **fields)
+
+    @wraps(func)
+    def wrapper(self, context: dyn_context) -> result_type:  # noqa: F821
+        # Unpack context fields as kwargs to the original function
+        # Using dict(context) rather than model_dump() to avoid triggering computed field serialization
+        # which can fail for dynamically created context classes that aren't importable
+        return func(self, **dict(context))
+
+    # Update wrapper signature to reflect the context parameter
+    wrapper.__signature__ = inspect.Signature(
+        parameters=[
+            inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+            inspect.Parameter("context", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=dyn_context),
+        ],
+        return_annotation=result_type,
+    )
+
+    # Attach the dynamic context class and result type for introspection
+    wrapper.__dynamic_context__ = dyn_context
+    wrapper.__result_type__ = result_type
+
+    return wrapper
+
 
 # *****************************************************************************
 # Define "Evaluators" and associated types
@@ -455,9 +644,12 @@ class ModelEvaluationContext(
         """Override _context_validator from parent"""
 
         # Validate the context with the model, if possible
+        # Skip validation if the context is already an instance of ContextBase - this handles
+        # dynamic contexts where the context type may differ from model.context_type
         model = values.get("model")
-        if model and isinstance(model, CallableModel) and not isinstance(values.get("context"), model.context_type):
-            values["context"] = model.context_type.model_validate(values.get("context"))
+        context = values.get("context")
+        if model and isinstance(model, CallableModel) and not isinstance(context, ContextBase) and not isinstance(context, model.context_type):
+            values["context"] = model.context_type.model_validate(context)
 
         # Apply standard pydantic validation
         context = handler(values)
@@ -479,11 +671,20 @@ class ModelEvaluationContext(
                 # Instead, we can flag that validation is requested, and have it done after evaluation
                 elif hasattr(result, "_lazy_is_delayed"):
                     object.__setattr__(result, "_lazy_validation_requested", True)
-                elif hasattr(self.model, "result_type"):
-                    result_type = self.model.result_type
-                    if not isclass(result_type) or not issubclass(result_type, ResultBase):
-                        raise TypeError(f"Model result_type {result_type} is not a subclass of ResultBase")
-                    result = result_type.model_validate(result)
+                else:
+                    # Get result type: prefer method-specific __result_type__ (for dynamic contexts),
+                    # fall back to model.result_type
+                    if hasattr(fn, "__result_type__"):
+                        result_type = fn.__result_type__
+                    elif hasattr(self.model, "result_type"):
+                        result_type = self.model.result_type
+                    else:
+                        result_type = None
+
+                    if result_type is not None:
+                        if not isclass(result_type) or not issubclass(result_type, ResultBase):
+                            raise TypeError(f"Model result_type {result_type} is not a subclass of ResultBase")
+                        result = result_type.model_validate(result)
 
             return result
         else:
