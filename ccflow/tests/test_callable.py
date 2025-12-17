@@ -32,6 +32,10 @@ class MyExtendedContext(MyContext):
     c: bool
 
 
+class MyOtherContext(ContextBase):
+    a: int
+
+
 class ListContext(ContextBase):
     ll: List[str] = []
 
@@ -152,7 +156,7 @@ class BadModelMismatchedContextAndCall(CallableModel):
 
     @property
     def context_type(self):
-        return NullContext
+        return MyOtherContext
 
     @property
     def result_type(self):
@@ -163,7 +167,7 @@ class BadModelMismatchedContextAndCall(CallableModel):
         return context
 
 
-class BadModelGenericMismatchedContextAndCall(CallableModelGenericType[NullContext, MyResult]):
+class BadModelGenericMismatchedContextAndCall(CallableModelGenericType[MyOtherContext, MyResult]):
     """Model with mismatched context_type and __call__ annotation"""
 
     @Flow.call
@@ -460,7 +464,7 @@ class TestCallableModel(TestCase):
         error = "__call__ method must take a single argument, named 'context'"
         self.assertRaisesRegex(ValueError, error, BadModelDoubleContextArg)
 
-        error = "The context_type <class 'ccflow.context.NullContext'> must match the type of the context accepted by __call__ <class 'ccflow.tests.test_callable.MyContext'>"
+        error = "The context_type <class 'ccflow.tests.test_callable.MyOtherContext'> must match the type of the context accepted by __call__ <class 'ccflow.tests.test_callable.MyContext'>"
         self.assertRaisesRegex(ValueError, error, BadModelMismatchedContextAndCall)
 
         error = "The result_type <class 'ccflow.result.generic.GenericResult'> must match the return type of __call__ <class 'ccflow.tests.test_callable.MyResult'>"
@@ -642,7 +646,7 @@ class TestCallableModelGenericType(TestCase):
             MyCallable()
 
     def test_types_generic(self):
-        error = "Context type annotation <class 'ccflow.tests.test_callable.MyContext'> on __call__ does not match context_type <class 'ccflow.context.NullContext'> defined by CallableModelGenericType"
+        error = "Context type annotation <class 'ccflow.tests.test_callable.MyContext'> on __call__ does not match context_type <class 'ccflow.tests.test_callable.MyOtherContext'> defined by CallableModelGenericType"
         self.assertRaisesRegex(TypeError, error, BadModelGenericMismatchedContextAndCall)
 
         error = "Return type annotation <class 'ccflow.tests.test_callable.MyResult'> on __call__ does not match result_type <class 'ccflow.result.generic.GenericResult'> defined by CallableModelGenericType"
