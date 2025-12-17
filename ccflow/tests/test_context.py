@@ -30,6 +30,11 @@ from ccflow.context import (
 from ccflow.result import GenericResult
 
 
+class MyDefaultContext(ContextBase):
+    b: float = 3.14
+    c: bool = False
+
+
 class TestContexts(TestCase):
     def test_null_context(self):
         n1 = NullContext()
@@ -38,10 +43,24 @@ class TestContexts(TestCase):
         self.assertEqual(hash(n1), hash(n2))
 
     def test_null_context_validation(self):
+        # Context creation is based on two main assumptions:
+        # 1. If there is enough information to create a context, it should be created.
+        # 2. Since NullContext has no required fields, it can be created from None,
+        #    empty containers ({} or []), or any other context.
         self.assertEqual(NullContext.model_validate([]), NullContext())
         self.assertEqual(NullContext.model_validate({}), NullContext())
         self.assertEqual(NullContext.model_validate(None), NullContext())
+        self.assertIsInstance(NullContext.model_validate(DateContext(date="0d")), NullContext)
         self.assertRaises(ValueError, NullContext.model_validate, [True])
+
+    def test_context_with_defaults(self):
+        # Contexts may define default values. Extending the assumptions above:
+        # Any context inherits the behavior from NullContext, and can be
+        # created as long as all required fields (if any) are satisfied.
+        self.assertEqual(TypeAdapter(MyDefaultContext).validate_python(None), MyDefaultContext(b=3.14, c=False))
+        self.assertEqual(TypeAdapter(MyDefaultContext).validate_python({}), MyDefaultContext(b=3.14, c=False))
+        self.assertEqual(TypeAdapter(MyDefaultContext).validate_python([]), MyDefaultContext(b=3.14, c=False))
+        self.assertEqual(TypeAdapter(MyDefaultContext).validate_python({"b": 10.0}), MyDefaultContext(b=10.0, c=False))
 
     def test_date_validation(self):
         c = DateContext(date=date.today())
