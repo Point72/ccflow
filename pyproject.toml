@@ -8,7 +8,7 @@ authors = [{name = "Point72, L.P.", email = "OpenSource@point72.com"}]
 description = "ccflow is a collection of tools for workflow configuration, orchestration, and dependency injection"
 readme = "README.md"
 license = { text = "Apache-2.0" }
-version = "0.7.0"
+version = "0.8.0"
 requires-python = ">=3.10"
 keywords = [
     "configuration",
@@ -109,7 +109,7 @@ Repository = "https://github.com/Point72/ccflow"
 Homepage = "https://github.com/Point72/ccflow"
 
 [tool.bumpversion]
-current_version = "0.7.0"
+current_version = "0.8.0"
 commit = true
 tag = false
 commit_args = "-s"
