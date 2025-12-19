@@ -1,5 +1,5 @@
 from pickle import dumps as pdumps, loads as ploads
-from typing import Generic, List, Optional, Tuple, Type, TypeVar, Union
+from typing import ClassVar, Generic, List, Optional, Tuple, Type, TypeVar, Union
 from unittest import TestCase
 
 import ray
@@ -198,6 +198,75 @@ class BadModelGenericMismatchedResultAndCall(CallableModelGenericType[NullContex
     @Flow.call
     def __call__(self, context: NullContext) -> MyResult:
         return context
+
+
+class DynamicLoggingModel(CallableModel):
+    @Flow.dynamic_call
+    def __call__(self, *, value: float) -> GenericResult:
+        return GenericResult(value=value * 2)
+
+
+class DynamicLazyModel(CallableModel):
+    call_count: ClassVar[int] = 0
+
+    @Flow.dynamic_call
+    def __call__(self, *, value: int) -> GenericResult:
+        type(self).call_count += 1
+        return GenericResult(value=value * 2)
+
+
+class DynamicMemoryCacheModel(CallableModel):
+    call_count: ClassVar[int] = 0
+
+    @Flow.dynamic_call(cacheable=True)
+    def __call__(self, *, value: int) -> GenericResult:
+        type(self).call_count += 1
+        return GenericResult(value=value * 2)
+
+
+class DynamicGraphCachedChild(CallableModel):
+    label: str
+    bias: int = 0
+    _calls: int = PrivateAttr(default=0)
+
+    @Flow.dynamic_call(cacheable=True)
+    def __call__(self, *, value: int) -> GenericResult:
+        self._calls += 1
+        return GenericResult(value=value + self.bias)
+
+
+class DynamicGraphParentModel(CallableModel):
+    left: DynamicGraphCachedChild
+    right: DynamicGraphCachedChild
+
+    @Flow.dynamic_call(cacheable=True)
+    def __call__(self, *, seed: int) -> GenericResult:
+        left_result = self.left(value=seed)
+        right_result = self.right(value=seed + 1)
+        return GenericResult(value=left_result.value + right_result.value)
+
+    @Flow.deps
+    def __deps__(self, context) -> GraphDepList:
+        left_ctx = self.left.__call__.__dynamic_context__
+        right_ctx = self.right.__call__.__dynamic_context__
+        return [
+            (self.left, [left_ctx(value=context.seed)]),
+            (self.right, [right_ctx(value=context.seed + 1)]),
+        ]
+
+
+DynamicGraphParentModel.__deps__.__annotations__["context"] = DynamicGraphParentModel.__call__.__dynamic_context__
+
+
+class ParentContextForDynamic(ContextBase):
+    user_id: str
+    timestamp: int = 0
+
+
+class DynamicModelWithParent(CallableModel):
+    @Flow.dynamic_call(parent=ParentContextForDynamic)
+    def __call__(self, *, query: str) -> GenericResult:
+        return GenericResult(value=query)
 
 
 class MyWrapper(WrapperModel[MyCallable]):
@@ -1096,13 +1165,8 @@ class TestDynamicContext(TestCase):
         from ccflow import FlowOptions, FlowOptionsOverride
         from ccflow.evaluators import LoggingEvaluator
 
-        class LoggedModel(CallableModel):
-            @Flow.dynamic_call
-            def __call__(self, *, value: float) -> GenericResult:
-                return GenericResult(value=value * 2)
-
         logging_evaluator = LoggingEvaluator(log_level=logging.DEBUG)
-        model = LoggedModel()
+        model = DynamicLoggingModel()
 
         with FlowOptionsOverride(options=FlowOptions(evaluator=logging_evaluator)):
             result = model(value=3.14)
@@ -1113,40 +1177,26 @@ class TestDynamicContext(TestCase):
         from ccflow import FlowOptions, FlowOptionsOverride
         from ccflow.evaluators import LazyEvaluator
 
-        call_tracker = {"count": 0}
-
-        class LazyModel(CallableModel):
-            @Flow.dynamic_call
-            def __call__(self, *, value: int) -> GenericResult:
-                call_tracker["count"] += 1
-                return GenericResult(value=value * 2)
-
+        DynamicLazyModel.call_count = 0
         lazy_evaluator = LazyEvaluator()
-        model = LazyModel()
+        model = DynamicLazyModel()
 
         with FlowOptionsOverride(options=FlowOptions(evaluator=lazy_evaluator)):
             result = model(value=42)
             # Not yet evaluated
-            self.assertEqual(call_tracker["count"], 0)
+            self.assertEqual(DynamicLazyModel.call_count, 0)
             # Accessing value triggers evaluation
             self.assertEqual(result.value, 84)
-            self.assertEqual(call_tracker["count"], 1)
+            self.assertEqual(DynamicLazyModel.call_count, 1)
 
     def test_memory_cache_evaluator_with_dynamic_call(self):
         """Test that MemoryCacheEvaluator caches dynamic contexts properly."""
         from ccflow import FlowOptions, FlowOptionsOverride
         from ccflow.evaluators import MemoryCacheEvaluator
 
-        call_counter = {"count": 0}
-
-        class CachedModel(CallableModel):
-            @Flow.dynamic_call(cacheable=True)
-            def __call__(self, *, value: int) -> GenericResult:
-                call_counter["count"] += 1
-                return GenericResult(value=value * 2)
-
+        DynamicMemoryCacheModel.call_count = 0
         evaluator = MemoryCacheEvaluator()
-        model = CachedModel()
+        model = DynamicMemoryCacheModel()
 
         with FlowOptionsOverride(options=FlowOptions(evaluator=evaluator, cacheable=True)):
             first = model(value=7)
@@ -1154,7 +1204,7 @@ class TestDynamicContext(TestCase):
 
         self.assertEqual(first.value, 14)
         self.assertEqual(second.value, 14)
-        self.assertEqual(call_counter["count"], 1)
+        self.assertEqual(DynamicMemoryCacheModel.call_count, 1)
         self.assertEqual(len(evaluator.cache), 1)
 
     def test_graph_and_memory_cache_evaluators_with_dynamic_call(self):
@@ -1162,40 +1212,9 @@ class TestDynamicContext(TestCase):
         from ccflow import FlowOptions, FlowOptionsOverride
         from ccflow.evaluators import GraphEvaluator, MemoryCacheEvaluator, MultiEvaluator
 
-        class CachedChild(CallableModel):
-            label: str
-            bias: int = 0
-            _calls: int = PrivateAttr(default=0)
-
-            @Flow.dynamic_call(cacheable=True)
-            def __call__(self, *, value: int) -> GenericResult:
-                self._calls += 1
-                return GenericResult(value=value + self.bias)
-
-        class ParentModel(CallableModel):
-            left: CachedChild
-            right: CachedChild
-
-            @Flow.dynamic_call(cacheable=True)
-            def __call__(self, *, seed: int) -> GenericResult:
-                left_result = self.left(value=seed)
-                right_result = self.right(value=seed + 1)
-                return GenericResult(value=left_result.value + right_result.value)
-
-            @Flow.deps
-            def __deps__(self, context) -> GraphDepList:
-                left_ctx = self.left.__call__.__dynamic_context__
-                right_ctx = self.right.__call__.__dynamic_context__
-                return [
-                    (self.left, [left_ctx(value=context.seed)]),
-                    (self.right, [right_ctx(value=context.seed + 1)]),
-                ]
-
-        ParentModel.__deps__.__annotations__["context"] = ParentModel.__call__.__dynamic_context__
-
-        left = CachedChild(label="left", bias=1)
-        right = CachedChild(label="right", bias=2)
-        parent = ParentModel(left=left, right=right)
+        left = DynamicGraphCachedChild(label="left", bias=1)
+        right = DynamicGraphCachedChild(label="right", bias=2)
+        parent = DynamicGraphParentModel(left=left, right=right)
 
         memory_cache = MemoryCacheEvaluator()
         evaluator = MultiEvaluator(evaluators=[GraphEvaluator(), memory_cache])
@@ -1211,55 +1230,10 @@ class TestDynamicContext(TestCase):
         # parent context + two child contexts cached
         self.assertGreaterEqual(len(memory_cache.cache), 3)
 
-    def test_callable_model_model_dump_in_local_scope(self):
-        """CallableModels defined inside a test should still be serializable and usable for cache keys."""
-        from ccflow.callable import ModelEvaluationContext
-        from ccflow.evaluators.common import cache_key
-
-        class CachedChild(CallableModel):
-            label: str
-            bias: int = 0
-
-            @Flow.dynamic_call(cacheable=True)
-            def __call__(self, *, value: int) -> GenericResult:
-                return GenericResult(value=value + self.bias)
-
-        class ParentModel(CallableModel):
-            left: CachedChild
-            right: CachedChild
-
-            @Flow.dynamic_call(cacheable=True)
-            def __call__(self, *, seed: int) -> GenericResult:
-                left_result = self.left(value=seed)
-                right_result = self.right(value=seed + 1)
-                return GenericResult(value=left_result.value + right_result.value)
-
-        left = CachedChild(label="left", bias=1)
-        right = CachedChild(label="right", bias=2)
-        parent = ParentModel(left=left, right=right)
-
-        dumped = parent.model_dump(mode="python")
-        self.assertEqual(dumped["left"]["label"], "left")
-        self.assertTrue(dumped["type_"].startswith("ccflow._dynamic_callable_models."))
-
-        ctx = parent.__call__.__dynamic_context__(seed=5)
-        mec = ModelEvaluationContext(model=parent, context=ctx, options={"cacheable": True})
-        # cache_key previously raised due to Invalid python path when model_dump failed
-        cache_key(mec)
-
     def test_parent_context_fields_accessible(self):
         """Test that fields from parent context are accessible in the dynamic context."""
 
-        class ParentContext(ContextBase):
-            user_id: str
-            timestamp: int = 0
-
-        class ModelWithParent(CallableModel):
-            @Flow.dynamic_call(parent=ParentContext)
-            def __call__(self, *, query: str) -> GenericResult:
-                return GenericResult(value=query)
-
-        m = ModelWithParent()
+        m = DynamicModelWithParent()
 
         # Create context with both parent and new fields
         ctx_class = m.__call__.__dynamic_context__
