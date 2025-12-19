@@ -74,20 +74,37 @@ model(a=100)           # Default value for 'b' is used
 
 **Advanced usage:**
 
-You can inherit from an existing context class using the `parent` parameter:
+**Inheriting from a parent context:**
+
+You can inherit from an existing context class using the `parent` parameter. This is useful when you want to:
+
+- Share common fields (like `user_id`, `timestamp`) across multiple models
+- Add validation constraints from a base context class
+- Ensure certain fields are always present for auditing or logging
 
 ```python
 class BaseContext(ContextBase):
     user_id: str
+    timestamp: int = 0
 
 class MyModel(CallableModel):
     @Flow.dynamic_call(parent=BaseContext)
     def __call__(self, *, query: str) -> GenericResult:
-        # The dynamic context will have both 'user_id' (from BaseContext) and 'query'
+        # The dynamic context has 'user_id' and 'timestamp' from BaseContext,
+        # plus 'query' from the function signature.
+        # Only 'query' is passed to this function; parent fields are for validation/storage.
         return GenericResult(value=query)
+
+model = MyModel()
+# Must provide 'user_id' (required from parent) and 'query' (required from function)
+result = model(user_id="user123", query="SELECT *")
+# Can also provide 'timestamp' (has default in parent)
+result = model(user_id="user123", timestamp=1000, query="SELECT *")
 ```
 
-You can also have multiple methods with different dynamic contexts on the same model:
+> **Note:** Function parameters cannot have the same name as fields in the parent context. This prevents accidental shadowing and ensures clear ownership of each field.
+
+**Multiple methods with different contexts:**
 
 ```python
 class MultiMethodModel(CallableModel):
@@ -100,6 +117,47 @@ class MultiMethodModel(CallableModel):
         return GenericResult(value=[d for d in data if d > threshold])
 ```
 
+**Using evaluators with dynamic contexts:**
+
+Most evaluators work seamlessly with `Flow.dynamic_call`:
+
+```python
+from ccflow import FlowOptionsOverride, FlowOptions
+from ccflow.evaluators import LoggingEvaluator, LazyEvaluator
+
+class MyModel(CallableModel):
+    @Flow.dynamic_call
+    def __call__(self, *, value: int) -> GenericResult:
+        return GenericResult(value=value * 2)
+
+model = MyModel()
+
+# LoggingEvaluator - works perfectly
+with FlowOptionsOverride(options=FlowOptions(evaluator=LoggingEvaluator())):
+    result = model(value=42)
+
+# LazyEvaluator - works perfectly
+with FlowOptionsOverride(options=FlowOptions(evaluator=LazyEvaluator())):
+    result = model(value=42)
+```
+
+Need caching as well? Dynamic contexts now serialize through an internal fallback so in-memory caching works too:
+
+```python
+from ccflow import FlowOptions, FlowOptionsOverride
+from ccflow.evaluators import GraphEvaluator, MemoryCacheEvaluator, MultiEvaluator
+
+cacheable = MultiEvaluator(evaluators=[GraphEvaluator(), MemoryCacheEvaluator()])
+
+with FlowOptionsOverride(options=FlowOptions(evaluator=cacheable, cacheable=True)):
+    first = model(value=42)   # Executes model
+    second = model(value=42)  # Served from cache, no re-execution
+```
+
+> Dynamic contexts are registered under `ccflow._dynamic_contexts`, so caching/graph evaluators can import them just like regular context classes. Custom evaluators that rely on different serialization schemes should perform a similar registration.
+
+**Standalone decorator:**
+
 The `dynamic_context` decorator can also be used standalone if you need lower-level control:
 
 ```python
@@ -110,6 +168,7 @@ def my_method(self, *, a: int, b: str) -> GenericResult:
     return GenericResult(value=a)
 
 # my_method.__dynamic_context__ contains the generated context class
+# my_method.__result_type__ contains the return type annotation
 ```
 
 ## Model Registry
