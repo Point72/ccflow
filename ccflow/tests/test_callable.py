@@ -33,6 +33,20 @@ def _find_registered_name(module, cls):
     raise AssertionError(f"{cls} not found in {module.__name__}")
 
 
+def create_sensor_scope_models():
+    class SensorScope(ContextBase):
+        reading: int
+
+    class SensorCalibrator(CallableModel):
+        offset: int = 1
+
+        @Flow.call
+        def __call__(self, context: SensorScope) -> GenericResult:
+            return GenericResult(value=context.reading + self.offset)
+
+    return SensorScope, SensorCalibrator
+
+
 class MyContext(ContextBase):
     a: str
 
@@ -673,6 +687,30 @@ class TestCallableModelRegistration(TestCase):
         self.assertEqual(SpecialistCallable.__module__, LOCAL_ARTIFACTS_MODULE_NAME)
         self.assertIs(getattr(locals_module, SpecialistContext.__qualname__), SpecialistContext)
         self.assertIs(getattr(locals_module, SpecialistCallable.__qualname__), SpecialistCallable)
+
+    def test_dynamic_factory_pickle_roundtrip(self):
+        serializers = [(pdumps, ploads), (rcpdumps, rcploads)]
+        for dumps, loads in serializers:
+            factory = loads(dumps(create_sensor_scope_models))
+            SensorContext, SensorModel = factory()
+            self.assertEqual(SensorContext.__module__, LOCAL_ARTIFACTS_MODULE_NAME)
+            self.assertEqual(SensorModel.__module__, LOCAL_ARTIFACTS_MODULE_NAME)
+            locals_module = sys.modules[LOCAL_ARTIFACTS_MODULE_NAME]
+            self.assertIs(getattr(locals_module, SensorContext.__qualname__), SensorContext)
+            self.assertIs(getattr(locals_module, SensorModel.__qualname__), SensorModel)
+
+            context = SensorContext(reading=41)
+            model = SensorModel(offset=1)
+            self.assertEqual(model(context).value, 42)
+
+            restored_context_cls = loads(dumps(SensorContext))
+            restored_model_cls = loads(dumps(SensorModel))
+            self.assertIs(restored_context_cls, SensorContext)
+            self.assertIs(restored_model_cls, SensorModel)
+
+            restored_context = loads(dumps(context))
+            restored_model = loads(dumps(model))
+            self.assertEqual(restored_model(restored_context).value, 42)
 
 
 class TestWrapperModel(TestCase):
