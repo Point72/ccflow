@@ -1,9 +1,9 @@
 from pickle import dumps as pdumps, loads as ploads
-from typing import Generic, List, Optional, Tuple, Type, TypeVar, Union
+from typing import ClassVar, Generic, List, Optional, Tuple, Type, TypeVar, Union
 from unittest import TestCase
 
 import ray
-from pydantic import ValidationError
+from pydantic import PrivateAttr, ValidationError
 from ray.cloudpickle import dumps as rcpdumps, loads as rcploads
 
 from ccflow import (
@@ -20,6 +20,7 @@ from ccflow import (
     ResultBase,
     ResultType,
     WrapperModel,
+    dynamic_context,
 )
 
 
@@ -197,6 +198,75 @@ class BadModelGenericMismatchedResultAndCall(CallableModelGenericType[NullContex
     @Flow.call
     def __call__(self, context: NullContext) -> MyResult:
         return context
+
+
+class DynamicLoggingModel(CallableModel):
+    @Flow.dynamic_call
+    def __call__(self, *, value: float) -> GenericResult:
+        return GenericResult(value=value * 2)
+
+
+class DynamicLazyModel(CallableModel):
+    call_count: ClassVar[int] = 0
+
+    @Flow.dynamic_call
+    def __call__(self, *, value: int) -> GenericResult:
+        type(self).call_count += 1
+        return GenericResult(value=value * 2)
+
+
+class DynamicMemoryCacheModel(CallableModel):
+    call_count: ClassVar[int] = 0
+
+    @Flow.dynamic_call(cacheable=True)
+    def __call__(self, *, value: int) -> GenericResult:
+        type(self).call_count += 1
+        return GenericResult(value=value * 2)
+
+
+class DynamicGraphCachedChild(CallableModel):
+    label: str
+    bias: int = 0
+    _calls: int = PrivateAttr(default=0)
+
+    @Flow.dynamic_call(cacheable=True)
+    def __call__(self, *, value: int) -> GenericResult:
+        self._calls += 1
+        return GenericResult(value=value + self.bias)
+
+
+class DynamicGraphParentModel(CallableModel):
+    left: DynamicGraphCachedChild
+    right: DynamicGraphCachedChild
+
+    @Flow.dynamic_call(cacheable=True)
+    def __call__(self, *, seed: int) -> GenericResult:
+        left_result = self.left(value=seed)
+        right_result = self.right(value=seed + 1)
+        return GenericResult(value=left_result.value + right_result.value)
+
+    @Flow.deps
+    def __deps__(self, context) -> GraphDepList:
+        left_ctx = self.left.__call__.__dynamic_context__
+        right_ctx = self.right.__call__.__dynamic_context__
+        return [
+            (self.left, [left_ctx(value=context.seed)]),
+            (self.right, [right_ctx(value=context.seed + 1)]),
+        ]
+
+
+DynamicGraphParentModel.__deps__.__annotations__["context"] = DynamicGraphParentModel.__call__.__dynamic_context__
+
+
+class ParentContextForDynamic(ContextBase):
+    user_id: str
+    timestamp: int = 0
+
+
+class DynamicModelWithParent(CallableModel):
+    @Flow.dynamic_call(parent=ParentContextForDynamic)
+    def __call__(self, *, query: str) -> GenericResult:
+        return GenericResult(value=query)
 
 
 class MyWrapper(WrapperModel[MyCallable]):
@@ -750,3 +820,434 @@ class TestCallableModelDeps(TestCase):
                 @Flow.deps
                 def foo(self, context):
                     return []
+
+
+class TestDynamicContext(TestCase):
+    """Test the dynamic_context decorator and Flow.dynamic_call functionality."""
+
+    def test_basic_dynamic_call(self):
+        """Test basic usage of Flow.dynamic_call decorator."""
+
+        class DynamicModel(CallableModel):
+            @Flow.dynamic_call
+            def __call__(self, *, a: int, b: str = "default") -> GenericResult:
+                return GenericResult(value={"a": a, "b": b})
+
+        m = DynamicModel()
+
+        # Test calling with kwargs
+        result = m(a=42, b="test")
+        self.assertEqual(result.value, {"a": 42, "b": "test"})
+
+        # Test with default value
+        result2 = m(a=100)
+        self.assertEqual(result2.value, {"a": 100, "b": "default"})
+
+    def test_context_type_from_dynamic_context(self):
+        """Test that context_type is correctly derived from the dynamic context."""
+
+        class DynamicModel(CallableModel):
+            @Flow.dynamic_call
+            def __call__(self, *, x: float, y: int = 0) -> GenericResult:
+                return GenericResult(value=x + y)
+
+        m = DynamicModel()
+
+        # Check context_type
+        ctx_type = m.context_type
+        self.assertTrue(issubclass(ctx_type, ContextBase))
+        self.assertIn("x", ctx_type.model_fields)
+        self.assertIn("y", ctx_type.model_fields)
+
+    def test_pass_context_object_directly(self):
+        """Test passing a context object directly instead of kwargs."""
+
+        class DynamicModel(CallableModel):
+            @Flow.dynamic_call
+            def __call__(self, *, a: int, b: str) -> GenericResult:
+                return GenericResult(value=f"{a}:{b}")
+
+        m = DynamicModel()
+
+        # Get the dynamic context class
+        ctx_class = m.__call__.__dynamic_context__
+        ctx = ctx_class(a=42, b="test")
+
+        result = m(ctx)
+        self.assertEqual(result.value, "42:test")
+
+    def test_parent_context_class(self):
+        """Test using a parent context class with additional shared fields."""
+
+        class ParentContext(ContextBase):
+            shared_field: str = "shared_default"
+
+        class DynamicModel(CallableModel):
+            @Flow.dynamic_call(parent=ParentContext)
+            def __call__(self, *, value: int) -> GenericResult:
+                return GenericResult(value=value)
+
+        m = DynamicModel()
+
+        # Check that the dynamic context inherits from ParentContext
+        ctx_class = m.__call__.__dynamic_context__
+        self.assertTrue(issubclass(ctx_class, ParentContext))
+        self.assertIn("shared_field", ctx_class.model_fields)
+        self.assertIn("value", ctx_class.model_fields)
+
+    def test_multiple_dynamic_methods(self):
+        """Test multiple methods with different dynamic contexts on the same model."""
+
+        class MultiMethodModel(CallableModel):
+            @Flow.dynamic_call
+            def __call__(self, *, a: int) -> GenericResult:
+                return GenericResult(value=a)
+
+            @Flow.dynamic_call
+            def other_method(self, *, x: float, y: float) -> GenericResult:
+                return GenericResult(value=x + y)
+
+        m = MultiMethodModel()
+
+        # Test __call__
+        result1 = m(a=42)
+        self.assertEqual(result1.value, 42)
+
+        # Test other_method
+        result2 = m.other_method(x=1.5, y=2.5)
+        self.assertEqual(result2.value, 4.0)
+
+        # Check that each method has its own context type
+        call_ctx = m.__call__.__dynamic_context__
+        other_ctx = m.other_method.__dynamic_context__
+        self.assertIsNot(call_ctx, other_ctx)
+        self.assertIn("a", call_ctx.model_fields)
+        self.assertIn("x", other_ctx.model_fields)
+
+    def test_mix_with_regular_flow_call(self):
+        """Test mixing Flow.dynamic_call with regular Flow.call on the same model."""
+
+        class MixedModel(CallableModel):
+            @Flow.call
+            def __call__(self, context: MyContext) -> MyResult:
+                return MyResult(x=1, y=context.a)
+
+            @Flow.dynamic_call
+            def dynamic_method(self, *, value: float) -> GenericResult:
+                return GenericResult(value=value * 2)
+
+        m = MixedModel()
+
+        # Test regular __call__
+        result1 = m(a="hello")
+        self.assertEqual(result1.y, "hello")
+
+        # Test dynamic_method
+        result2 = m.dynamic_method(value=3.14)
+        self.assertEqual(result2.value, 6.28)
+
+    def test_flow_options_with_dynamic_call(self):
+        """Test that FlowOptions parameters work with Flow.dynamic_call."""
+        import logging
+
+        class OptionsModel(CallableModel):
+            @Flow.dynamic_call(log_level=logging.WARNING, validate_result=False)
+            def __call__(self, *, val: str) -> GenericResult:
+                # Return a dict instead of GenericResult - should work with validate_result=False
+                return {"value": val}
+
+        m = OptionsModel()
+        result = m(val="test")
+
+        # With validate_result=False, should get the dict back
+        self.assertEqual(result, {"value": "test"})
+        self.assertIsInstance(result, dict)
+
+    def test_error_missing_return_annotation(self):
+        """Test that missing return annotation raises an error."""
+        with self.assertRaises(ValueError) as ctx:
+
+            class BadModel(CallableModel):
+                @Flow.dynamic_call
+                def __call__(self, *, a: int):
+                    pass
+
+        self.assertIn("return type annotation", str(ctx.exception))
+
+    def test_error_missing_param_annotation(self):
+        """Test that missing parameter annotation raises an error."""
+        with self.assertRaises(ValueError) as ctx:
+
+            class BadModel(CallableModel):
+                @Flow.dynamic_call
+                def __call__(self, *, a, b: str = "default") -> GenericResult:
+                    pass
+
+        self.assertIn("type annotation", str(ctx.exception))
+
+    def test_error_kwargs_not_allowed(self):
+        """Test that **kwargs parameter raises an error."""
+        with self.assertRaises(ValueError) as ctx:
+
+            class BadModel(CallableModel):
+                @Flow.dynamic_call
+                def __call__(self, *, a: int, **kwargs) -> GenericResult:
+                    pass
+
+        self.assertIn("kwargs", str(ctx.exception).lower())
+
+    def test_error_args_not_allowed(self):
+        """Test that *args parameter raises an error."""
+        with self.assertRaises(ValueError) as ctx:
+
+            class BadModel(CallableModel):
+                @Flow.dynamic_call
+                def __call__(self, *args, a: int) -> GenericResult:
+                    pass
+
+        self.assertIn("args", str(ctx.exception).lower())
+
+    def test_error_missing_required_arg_at_call_time(self):
+        """Test that missing required arguments at call time raises ValidationError."""
+
+        class Model(CallableModel):
+            @Flow.dynamic_call
+            def __call__(self, *, a: int, b: str) -> GenericResult:
+                return GenericResult(value=a)
+
+        m = Model()
+
+        with self.assertRaises(ValidationError) as ctx:
+            m(a=42)  # Missing 'b'
+
+        self.assertIn("b", str(ctx.exception))
+        self.assertIn("required", str(ctx.exception).lower())
+
+    def test_dynamic_context_decorator_standalone(self):
+        """Test the dynamic_context decorator can be used standalone."""
+
+        @dynamic_context
+        def my_func(self, *, a: int, b: str = "default") -> GenericResult:
+            return GenericResult(value={"a": a, "b": b})
+
+        # Check that __dynamic_context__ is set
+        self.assertTrue(hasattr(my_func, "__dynamic_context__"))
+
+        # Check that the context class has the right fields
+        ctx_class = my_func.__dynamic_context__
+        self.assertTrue(issubclass(ctx_class, ContextBase))
+        self.assertIn("a", ctx_class.model_fields)
+        self.assertIn("b", ctx_class.model_fields)
+
+    def test_complex_types(self):
+        """Test dynamic context with complex types like List, Optional, etc."""
+        from typing import List, Optional
+
+        class ComplexModel(CallableModel):
+            @Flow.dynamic_call
+            def __call__(self, *, items: List[int], name: Optional[str] = None) -> GenericResult:
+                return GenericResult(value={"items": items, "name": name})
+
+        m = ComplexModel()
+
+        result = m(items=[1, 2, 3], name="test")
+        self.assertEqual(result.value["items"], [1, 2, 3])
+        self.assertEqual(result.value["name"], "test")
+
+        result2 = m(items=[4, 5])
+        self.assertEqual(result2.value["items"], [4, 5])
+        self.assertIsNone(result2.value["name"])
+
+    def test_error_parent_field_collision(self):
+        """Test that parameters colliding with parent context fields raise an error."""
+
+        class ParentContext(ContextBase):
+            shared_field: str = "default"
+            another_field: int = 0
+
+        with self.assertRaises(ValueError) as ctx:
+
+            class BadModel(CallableModel):
+                @Flow.dynamic_call(parent=ParentContext)
+                def __call__(self, *, shared_field: int) -> GenericResult:  # Collision with parent
+                    return GenericResult(value=shared_field)
+
+        self.assertIn("shared_field", str(ctx.exception))
+        self.assertIn("collide", str(ctx.exception).lower())
+        self.assertIn("ParentContext", str(ctx.exception))
+
+    def test_result_type_attribute(self):
+        """Test that __result_type__ is set on dynamic context functions."""
+
+        class Model(CallableModel):
+            @Flow.dynamic_call
+            def __call__(self, *, a: int) -> GenericResult:
+                return GenericResult(value=a)
+
+        m = Model()
+
+        # Check __result_type__ is set
+        self.assertTrue(hasattr(m.__call__, "__result_type__"))
+        self.assertEqual(m.__call__.__result_type__, GenericResult)
+
+    def test_context_name_uses_qualname(self):
+        """Test that dynamic context class names use __qualname__ for better debuggability."""
+
+        class MyModel(CallableModel):
+            @Flow.dynamic_call
+            def __call__(self, *, x: int) -> GenericResult:
+                return GenericResult(value=x)
+
+        m = MyModel()
+        ctx_class = m.__call__.__dynamic_context__
+
+        # The name should include the class name (from __qualname__)
+        self.assertIn("MyModel", ctx_class.__name__)
+        self.assertIn("__call__", ctx_class.__name__)
+        self.assertIn("DynamicContext", ctx_class.__name__)
+
+    def test_result_type_validation_with_dynamic_context(self):
+        """Test that result type is validated even with dynamic context."""
+
+        class Model(CallableModel):
+            @Flow.dynamic_call
+            def __call__(self, *, a: int) -> MyResult:
+                # Return wrong type - should be caught by validation
+                # MyResult requires x: int and y: str fields, so a string can't be coerced
+                return "not a valid result"
+
+        m = Model()
+
+        # This should raise because we're returning a string that can't be coerced to MyResult
+        # and validate_result defaults to True
+        with self.assertRaises(ValidationError):
+            m(a=42)
+
+    def test_result_type_validation_can_be_disabled(self):
+        """Test that result validation can be disabled with validate_result=False."""
+
+        class Model(CallableModel):
+            @Flow.dynamic_call(validate_result=False)
+            def __call__(self, *, a: int) -> GenericResult:
+                return {"value": a}  # Return dict instead of GenericResult
+
+        m = Model()
+
+        # With validate_result=False, this should work
+        result = m(a=42)
+        self.assertEqual(result, {"value": 42})
+        self.assertIsInstance(result, dict)
+
+    def test_dynamic_context_standalone_with_parent(self):
+        """Test dynamic_context decorator standalone with parent parameter."""
+
+        class ParentContext(ContextBase):
+            shared: str = "default"
+
+        @dynamic_context(parent=ParentContext)
+        def my_method(self, *, value: int) -> GenericResult:
+            return GenericResult(value=value)
+
+        # Check inheritance
+        ctx_class = my_method.__dynamic_context__
+        self.assertTrue(issubclass(ctx_class, ParentContext))
+        self.assertIn("shared", ctx_class.model_fields)
+        self.assertIn("value", ctx_class.model_fields)
+
+        # Check __result_type__ is set
+        self.assertTrue(hasattr(my_method, "__result_type__"))
+        self.assertEqual(my_method.__result_type__, GenericResult)
+
+    def test_logging_evaluator_with_dynamic_call(self):
+        """Test that LoggingEvaluator works with dynamic_call."""
+        import logging
+
+        from ccflow import FlowOptions, FlowOptionsOverride
+        from ccflow.evaluators import LoggingEvaluator
+
+        logging_evaluator = LoggingEvaluator(log_level=logging.DEBUG)
+        model = DynamicLoggingModel()
+
+        with FlowOptionsOverride(options=FlowOptions(evaluator=logging_evaluator)):
+            result = model(value=3.14)
+            self.assertAlmostEqual(result.value, 6.28)
+
+    def test_lazy_evaluator_with_dynamic_call(self):
+        """Test that LazyEvaluator works with dynamic_call."""
+        from ccflow import FlowOptions, FlowOptionsOverride
+        from ccflow.evaluators import LazyEvaluator
+
+        DynamicLazyModel.call_count = 0
+        lazy_evaluator = LazyEvaluator()
+        model = DynamicLazyModel()
+
+        with FlowOptionsOverride(options=FlowOptions(evaluator=lazy_evaluator)):
+            result = model(value=42)
+            # Not yet evaluated
+            self.assertEqual(DynamicLazyModel.call_count, 0)
+            # Accessing value triggers evaluation
+            self.assertEqual(result.value, 84)
+            self.assertEqual(DynamicLazyModel.call_count, 1)
+
+    def test_memory_cache_evaluator_with_dynamic_call(self):
+        """Test that MemoryCacheEvaluator caches dynamic contexts properly."""
+        from ccflow import FlowOptions, FlowOptionsOverride
+        from ccflow.evaluators import MemoryCacheEvaluator
+
+        DynamicMemoryCacheModel.call_count = 0
+        evaluator = MemoryCacheEvaluator()
+        model = DynamicMemoryCacheModel()
+
+        with FlowOptionsOverride(options=FlowOptions(evaluator=evaluator, cacheable=True)):
+            first = model(value=7)
+            second = model(value=7)
+
+        self.assertEqual(first.value, 14)
+        self.assertEqual(second.value, 14)
+        self.assertEqual(DynamicMemoryCacheModel.call_count, 1)
+        self.assertEqual(len(evaluator.cache), 1)
+
+    def test_graph_and_memory_cache_evaluators_with_dynamic_call(self):
+        """Test GraphEvaluator + MemoryCacheEvaluator with dynamic contexts."""
+        from ccflow import FlowOptions, FlowOptionsOverride
+        from ccflow.evaluators import GraphEvaluator, MemoryCacheEvaluator, MultiEvaluator
+
+        left = DynamicGraphCachedChild(label="left", bias=1)
+        right = DynamicGraphCachedChild(label="right", bias=2)
+        parent = DynamicGraphParentModel(left=left, right=right)
+
+        memory_cache = MemoryCacheEvaluator()
+        evaluator = MultiEvaluator(evaluators=[GraphEvaluator(), memory_cache])
+
+        with FlowOptionsOverride(options=FlowOptions(evaluator=evaluator, cacheable=True)):
+            result1 = parent(seed=5)
+            result2 = parent(seed=5)
+
+        self.assertEqual(result1.value, 14)
+        self.assertEqual(result2.value, 14)
+        self.assertEqual(left._calls, 1)
+        self.assertEqual(right._calls, 1)
+        # parent context + two child contexts cached
+        self.assertGreaterEqual(len(memory_cache.cache), 3)
+
+    def test_parent_context_fields_accessible(self):
+        """Test that fields from parent context are accessible in the dynamic context."""
+
+        m = DynamicModelWithParent()
+
+        # Create context with both parent and new fields
+        ctx_class = m.__call__.__dynamic_context__
+        ctx = ctx_class(user_id="user123", timestamp=1000, query="SELECT *")
+
+        # Verify all fields are set correctly
+        self.assertEqual(ctx.user_id, "user123")
+        self.assertEqual(ctx.timestamp, 1000)
+        self.assertEqual(ctx.query, "SELECT *")
+
+        # Call with explicit context
+        result = m(ctx)
+        self.assertEqual(result.value, "SELECT *")
+
+        # Call with kwargs (all fields)
+        result2 = m(user_id="user456", query="SELECT id")
+        self.assertEqual(result2.value, "SELECT id")
