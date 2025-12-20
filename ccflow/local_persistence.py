@@ -37,9 +37,8 @@ _LOCAL_ARTIFACTS_MODULE = _ensure_module(LOCAL_ARTIFACTS_MODULE_NAME, _LOCAL_MOD
 
 
 def _needs_registration(cls: Type[Any]) -> bool:
-    module = getattr(cls, "__module__", "")
     qualname = getattr(cls, "__qualname__", "")
-    return "<locals>" in qualname or module == "__main__"
+    return "<locals>" in qualname
 
 
 def _sanitize_identifier(value: str, fallback: str) -> str:

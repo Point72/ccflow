@@ -36,11 +36,11 @@ class TestNeedsRegistration(TestCase):
         LocalClass = build_class()
         self.assertTrue(local_persistence._needs_registration(LocalClass))
 
-    def test_main_module_class_needs_registration(self):
+    def test_main_module_class_does_not_need_registration(self):
         cls = type("MainModuleClass", (), {})
         cls.__module__ = "__main__"
         cls.__qualname__ = "MainModuleClass"
-        self.assertTrue(local_persistence._needs_registration(cls))
+        self.assertFalse(local_persistence._needs_registration(cls))
 
     def test_module_level_non_ccflow_class_does_not_need_registration(self):
         cls = type("ExternalClass", (), {})

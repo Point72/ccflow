@@ -33,30 +33,6 @@ def _find_registered_name(module, cls):
     raise AssertionError(f"{cls} not found in {module.__name__}")
 
 
-def _build_main_module_callable():
-    namespace = {
-        "__name__": "__main__",
-        "ClassVar": ClassVar,
-        "CallableModel": CallableModel,
-        "Flow": Flow,
-        "GenericResult": GenericResult,
-        "NullContext": NullContext,
-    }
-    exec(
-        """
-class MainModuleCallable(CallableModel):
-    call_count: ClassVar[int] = 0
-
-    @Flow.call
-    def __call__(self, context: NullContext) -> GenericResult:
-        type(self).call_count += 1
-        return GenericResult(value=\"main\")
-""",
-        namespace,
-    )
-    return namespace["MainModuleCallable"]
-
-
 class MyContext(ContextBase):
     a: str
 
@@ -599,16 +575,6 @@ class TestCallableModelRegistration(TestCase):
         path = ctx.type_
         self.assertEqual(path.object, LocalContext)
         self.assertTrue(str(path).startswith(f"{LOCAL_ARTIFACTS_MODULE_NAME}."))
-
-    def test_exec_defined_main_module_class_registered(self):
-        MainCallable = _build_main_module_callable()
-        self.assertEqual(MainCallable.__module__, LOCAL_ARTIFACTS_MODULE_NAME)
-        self.assertTrue(getattr(MainCallable, "__ccflow_dynamic_origin__").startswith("__main__."))
-        model = MainCallable()
-        MainCallable.call_count = 0
-        result = model(NullContext())
-        self.assertEqual(result.value, "main")
-        self.assertEqual(MainCallable.call_count, 1)
 
     def test_local_context_and_model_serialization_roundtrip(self):
         class LocalContext(ContextBase):
