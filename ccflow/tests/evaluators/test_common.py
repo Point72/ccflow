@@ -1,11 +1,24 @@
 import logging
 from datetime import date
+from typing import ClassVar
 from unittest import TestCase
 
 import pandas as pd
 import pyarrow as pa
 
-from ccflow import DateContext, DateRangeContext, Evaluator, FlowOptionsOverride, ModelEvaluationContext, NullContext
+from ccflow import (
+    CallableModel,
+    ContextBase,
+    DateContext,
+    DateRangeContext,
+    Evaluator,
+    Flow,
+    FlowOptions,
+    FlowOptionsOverride,
+    GenericResult,
+    ModelEvaluationContext,
+    NullContext,
+)
 from ccflow.evaluators import (
     FallbackEvaluator,
     GraphEvaluator,
@@ -16,6 +29,7 @@ from ccflow.evaluators import (
     combine_evaluators,
     get_dependency_graph,
 )
+from ccflow.tests.local_helpers import build_nested_graph_chain
 
 from .util import CircularModel, MyDateCallable, MyDateRangeCallable, MyRaisingCallable, NodeModel, ResultModel
 
@@ -473,3 +487,37 @@ class TestGraphEvaluator(TestCase):
         evaluator = GraphEvaluator()
         with FlowOptionsOverride(options={"evaluator": evaluator}):
             self.assertRaises(Exception, root, context)
+
+    def test_graph_evaluator_with_local_models_and_cache(self):
+        ParentCls, ChildCls = build_nested_graph_chain()
+        ChildCls.call_count = 0
+        model = ParentCls(child=ChildCls())
+        evaluator = MultiEvaluator(evaluators=[GraphEvaluator(), MemoryCacheEvaluator()])
+        with FlowOptionsOverride(options=FlowOptions(evaluator=evaluator, cacheable=True)):
+            first = model(NullContext())
+            second = model(NullContext())
+        self.assertEqual(first.value, second.value)
+        self.assertEqual(ChildCls.call_count, 1)
+
+
+class TestMemoryCacheEvaluatorLocal(TestCase):
+    def test_memory_cache_handles_local_context_and_callable(self):
+        class LocalContext(ContextBase):
+            value: int
+
+        class LocalModel(CallableModel):
+            call_count: ClassVar[int] = 0
+
+            @Flow.call
+            def __call__(self, context: LocalContext) -> GenericResult:
+                type(self).call_count += 1
+                return GenericResult(value=context.value * 2)
+
+        evaluator = MemoryCacheEvaluator()
+        LocalModel.call_count = 0
+        model = LocalModel()
+        with FlowOptionsOverride(options=FlowOptions(evaluator=evaluator, cacheable=True)):
+            result1 = model(LocalContext(value=5))
+            result2 = model(LocalContext(value=5))
+        self.assertEqual(result1.value, result2.value)
+        self.assertEqual(LocalModel.call_count, 1)

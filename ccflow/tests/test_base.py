@@ -1,9 +1,10 @@
 from typing import Any, Dict, List
-from unittest import TestCase
+from unittest import TestCase, mock
 
-from pydantic import ConfigDict, ValidationError
+from pydantic import BaseModel as PydanticBaseModel, ConfigDict, ValidationError
 
-from ccflow import BaseModel, PyObjectPath
+from ccflow import BaseModel, CallableModel, ContextBase, Flow, GenericResult, NullContext, PyObjectPath
+from ccflow.local_persistence import LOCAL_ARTIFACTS_MODULE_NAME
 
 
 class ModelA(BaseModel):
@@ -106,6 +107,20 @@ class TestBaseModel(TestCase):
         self.assertIsInstance(m.type_, PyObjectPath)
         self.assertEqual(m.type_, path)
 
+    def test_pyobjectpath_requires_ccflow_local_registration(self):
+        class PlainLocalModel(PydanticBaseModel):
+            value: int
+
+        with self.assertRaises(ValueError):
+            PyObjectPath.validate(PlainLocalModel)
+
+        class LocalCcflowModel(BaseModel):
+            value: int
+
+        path = PyObjectPath.validate(LocalCcflowModel)
+        self.assertEqual(path.object, LocalCcflowModel)
+        self.assertTrue(str(path).startswith(f"{LOCAL_ARTIFACTS_MODULE_NAME}."))
+
     def test_validate(self):
         self.assertEqual(ModelA.model_validate({"x": "foo"}), ModelA(x="foo"))
         type_ = "ccflow.tests.test_base.ModelA"
@@ -157,3 +172,52 @@ class TestBaseModel(TestCase):
                 {"expanded": True, "root": "bar"},
             ),
         )
+
+
+class TestLocalRegistrationKind(TestCase):
+    def test_base_model_defaults_to_model_kind(self):
+        with mock.patch("ccflow.base.register_local_subclass") as register:
+
+            class LocalModel(BaseModel):
+                value: int
+
+        register.assert_called_once()
+        args, kwargs = register.call_args
+        self.assertIs(args[0], LocalModel)
+        self.assertEqual(kwargs["kind"], "model")
+
+    def test_context_defaults_to_context_kind(self):
+        with mock.patch("ccflow.base.register_local_subclass") as register:
+
+            class LocalContext(ContextBase):
+                value: int
+
+        register.assert_called_once()
+        args, kwargs = register.call_args
+        self.assertIs(args[0], LocalContext)
+        self.assertEqual(kwargs["kind"], "context")
+
+    def test_callable_defaults_to_callable_kind(self):
+        with mock.patch("ccflow.base.register_local_subclass") as register:
+
+            class LocalCallable(CallableModel):
+                @Flow.call
+                def __call__(self, context: NullContext) -> GenericResult:
+                    return GenericResult(value="ok")
+
+        register.assert_called_once()
+        args, kwargs = register.call_args
+        self.assertIs(args[0], LocalCallable)
+        self.assertEqual(kwargs["kind"], "callable_model")
+
+    def test_explicit_override_respected(self):
+        with mock.patch("ccflow.base.register_local_subclass") as register:
+
+            class CustomKind(BaseModel):
+                __ccflow_local_registration_kind__ = "custom"
+                value: int
+
+        register.assert_called_once()
+        args, kwargs = register.call_args
+        self.assertIs(args[0], CustomKind)
+        self.assertEqual(kwargs["kind"], "custom")

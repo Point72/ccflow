@@ -1,5 +1,6 @@
+import sys
 from pickle import dumps as pdumps, loads as ploads
-from typing import Generic, List, Optional, Tuple, Type, TypeVar, Union
+from typing import ClassVar, Generic, List, Optional, Tuple, Type, TypeVar, Union
 from unittest import TestCase
 
 import ray
@@ -21,6 +22,39 @@ from ccflow import (
     ResultType,
     WrapperModel,
 )
+from ccflow.local_persistence import LOCAL_ARTIFACTS_MODULE_NAME
+from ccflow.tests.local_helpers import build_local_callable, build_local_context
+
+
+def _find_registered_name(module, cls):
+    for name, value in vars(module).items():
+        if value is cls:
+            return name
+    raise AssertionError(f"{cls} not found in {module.__name__}")
+
+
+def _build_main_module_callable():
+    namespace = {
+        "__name__": "__main__",
+        "ClassVar": ClassVar,
+        "CallableModel": CallableModel,
+        "Flow": Flow,
+        "GenericResult": GenericResult,
+        "NullContext": NullContext,
+    }
+    exec(
+        """
+class MainModuleCallable(CallableModel):
+    call_count: ClassVar[int] = 0
+
+    @Flow.call
+    def __call__(self, context: NullContext) -> GenericResult:
+        type(self).call_count += 1
+        return GenericResult(value=\"main\")
+""",
+        namespace,
+    )
+    return namespace["MainModuleCallable"]
 
 
 class MyContext(ContextBase):
@@ -491,6 +525,163 @@ class TestCallableModel(TestCase):
         result = m(NullContext())
         self.assertIsInstance(result, AResult)
         self.assertEqual(result.a, 1)
+
+
+class TestCallableModelRegistration(TestCase):
+    def test_module_level_class_retains_module(self):
+        self.assertEqual(MyCallable.__module__, __name__)
+        dynamic_module = sys.modules.get(LOCAL_ARTIFACTS_MODULE_NAME)
+        if dynamic_module:
+            self.assertFalse(any(value is MyCallable for value in vars(dynamic_module).values()))
+
+    def test_module_level_context_retains_module(self):
+        self.assertEqual(MyContext.__module__, __name__)
+        dynamic_module = sys.modules.get(LOCAL_ARTIFACTS_MODULE_NAME)
+        if dynamic_module:
+            self.assertFalse(any(value is MyContext for value in vars(dynamic_module).values()))
+
+    def test_local_class_moves_under_dynamic_namespace(self):
+        LocalCallable = build_local_callable()
+        module_name = LocalCallable.__module__
+        self.assertEqual(module_name, LOCAL_ARTIFACTS_MODULE_NAME)
+        dynamic_module = sys.modules[module_name]
+        self.assertIs(getattr(dynamic_module, LocalCallable.__qualname__), LocalCallable)
+        self.assertIn("<locals>", getattr(LocalCallable, "__ccflow_dynamic_origin__"))
+        result = LocalCallable()(NullContext())
+        self.assertEqual(result.value, "local")
+
+    def test_multiple_local_definitions_have_unique_identifiers(self):
+        first = build_local_callable()
+        second = build_local_callable()
+        self.assertNotEqual(first.__qualname__, second.__qualname__)
+        dynamic_module = sys.modules[LOCAL_ARTIFACTS_MODULE_NAME]
+        self.assertIs(getattr(dynamic_module, first.__qualname__), first)
+        self.assertIs(getattr(dynamic_module, second.__qualname__), second)
+
+    def test_context_and_callable_same_name_do_not_collide(self):
+        def build_conflicting():
+            class LocalThing(ContextBase):
+                value: int
+
+            context_cls = LocalThing
+
+            class LocalThing(CallableModel):
+                @Flow.call
+                def __call__(self, context: context_cls) -> GenericResult:
+                    return GenericResult(value=context.value)
+
+            callable_cls = LocalThing
+            return context_cls, callable_cls
+
+        LocalContext, LocalCallable = build_conflicting()
+        locals_module = sys.modules[LOCAL_ARTIFACTS_MODULE_NAME]
+        ctx_attr = _find_registered_name(locals_module, LocalContext)
+        model_attr = _find_registered_name(locals_module, LocalCallable)
+        self.assertTrue(ctx_attr.startswith("context__"))
+        self.assertTrue(model_attr.startswith("callable_model__"))
+        ctx_hint = ctx_attr.partition("__")[2].rsplit("__", 1)[0]
+        model_hint = model_attr.partition("__")[2].rsplit("__", 1)[0]
+        self.assertEqual(ctx_hint, model_hint)
+        self.assertEqual(getattr(locals_module, ctx_attr), LocalContext)
+        self.assertEqual(getattr(locals_module, model_attr), LocalCallable)
+        self.assertNotEqual(ctx_attr, model_attr, "Kind-prefixed names keep contexts and callables distinct.")
+
+    def test_local_callable_type_path_roundtrip(self):
+        LocalCallable = build_local_callable()
+        instance = LocalCallable()
+        path = instance.type_
+        self.assertEqual(path.object, LocalCallable)
+        self.assertTrue(str(path).startswith(f"{LOCAL_ARTIFACTS_MODULE_NAME}."))
+
+    def test_local_context_type_path_roundtrip(self):
+        LocalContext = build_local_context()
+        ctx = LocalContext(value=10)
+        path = ctx.type_
+        self.assertEqual(path.object, LocalContext)
+        self.assertTrue(str(path).startswith(f"{LOCAL_ARTIFACTS_MODULE_NAME}."))
+
+    def test_exec_defined_main_module_class_registered(self):
+        MainCallable = _build_main_module_callable()
+        self.assertEqual(MainCallable.__module__, LOCAL_ARTIFACTS_MODULE_NAME)
+        self.assertTrue(getattr(MainCallable, "__ccflow_dynamic_origin__").startswith("__main__."))
+        model = MainCallable()
+        MainCallable.call_count = 0
+        result = model(NullContext())
+        self.assertEqual(result.value, "main")
+        self.assertEqual(MainCallable.call_count, 1)
+
+    def test_local_context_and_model_serialization_roundtrip(self):
+        class LocalContext(ContextBase):
+            value: int
+
+        class LocalModel(CallableModel):
+            factor: int = 2
+
+            @Flow.call
+            def __call__(self, context: LocalContext) -> GenericResult:
+                return GenericResult(value=context.value * self.factor)
+
+        instance = LocalModel(factor=5)
+        context = LocalContext(value=7)
+        serialized_model = instance.model_dump(mode="python")
+        restored_model = LocalModel.model_validate(serialized_model)
+        self.assertEqual(restored_model, instance)
+        serialized_context = context.model_dump(mode="python")
+        restored_context = LocalContext.model_validate(serialized_context)
+        self.assertEqual(restored_context, context)
+
+    def test_multiple_nested_levels_unique_paths(self):
+        created = []
+
+        def layer(depth: int):
+            class LocalContext(ContextBase):
+                value: int
+
+            class LocalModel(CallableModel):
+                multiplier: int = depth + 1
+                call_count: ClassVar[int] = 0
+
+                @Flow.call
+                def __call__(self, context: LocalContext) -> GenericResult:
+                    type(self).call_count += 1
+                    return GenericResult(value=context.value * self.multiplier)
+
+            created.append((depth, LocalContext, LocalModel))
+
+            if depth < 2:
+
+                def inner():
+                    layer(depth + 1)
+
+                inner()
+
+        def sibling_group():
+            class LocalContext(ContextBase):
+                value: int
+
+            class LocalModel(CallableModel):
+                @Flow.call
+                def __call__(self, context: LocalContext) -> GenericResult:
+                    return GenericResult(value=context.value)
+
+            created.append(("sibling", LocalContext, LocalModel))
+
+        layer(0)
+        sibling_group()
+        sibling_group()
+
+        locals_module = sys.modules[LOCAL_ARTIFACTS_MODULE_NAME]
+
+        context_names = {ctx.__qualname__ for _, ctx, _ in created}
+        model_names = {model.__qualname__ for _, _, model in created}
+        self.assertEqual(len(context_names), len(created))
+        self.assertEqual(len(model_names), len(created))
+
+        for _, ctx_cls, model_cls in created:
+            self.assertIs(getattr(locals_module, ctx_cls.__qualname__), ctx_cls)
+            self.assertIs(getattr(locals_module, model_cls.__qualname__), model_cls)
+            self.assertIn("<locals>", getattr(ctx_cls, "__ccflow_dynamic_origin__"))
+            self.assertIn("<locals>", getattr(model_cls, "__ccflow_dynamic_origin__"))
 
 
 class TestWrapperModel(TestCase):

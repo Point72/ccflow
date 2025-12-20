@@ -30,6 +30,7 @@ from pydantic.fields import Field
 from typing_extensions import Self
 
 from .exttypes.pyobjectpath import PyObjectPath
+from .local_persistence import register_local_subclass
 
 log = logging.getLogger(__name__)
 
@@ -155,6 +156,15 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
         - Type of object is part of serialization/deserialization
         - Registration by name, and coercion from string name to allow for object re-use from the configs
     """
+
+    __ccflow_local_registration_kind__: ClassVar[str] = "model"
+
+    @classmethod
+    def __pydantic_init_subclass__(cls, **kwargs):
+        # __pydantic_init_subclass__ is the supported hook point once Pydantic finishes wiring the subclass.
+        super().__pydantic_init_subclass__(**kwargs)
+        kind = getattr(cls, "__ccflow_local_registration_kind__", "model")
+        register_local_subclass(cls, kind=kind)
 
     @computed_field(
         alias="_target_",
@@ -819,6 +829,8 @@ class ContextBase(ResultBase):
     A context is also a type of result, as a CallableModel could be responsible for generating a context
     that is an input into another CallableModel.
     """
+
+    __ccflow_local_registration_kind__: ClassVar[str] = "context"
 
     model_config = ConfigDict(
         frozen=True,
