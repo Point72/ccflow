@@ -23,7 +23,7 @@ The naming was inspired by the open source library [Pydantic](https://docs.pydan
 As an example, you may have a `SQLReader` callable model that when called with a `DateRangeContext` returns a `ArrowResult` (wrapper around a Arrow table) with data in the date range defined by the context by querying some SQL database.
 
 > [!NOTE]
-> `CallableModel`, `ContextBase`, and other `ccflow.BaseModel` subclasses declared inside local scopes (functions, tests, notebooks, REPLs, etc.) are automatically persisted under `ccflow._local_artifacts`. Each stored class is prefixed with its kind (for example, `callable_model__...` versus `context__...`) so PyObjectPath-based evaluators can serialize/deserialize them without collisions. The backing module is append-only; long-lived processes should avoid generating unbounded unique classes if cleanup is required.
+> `CallableModel`, `ContextBase`, and other `ccflow.BaseModel` subclasses declared inside local scopes (functions, tests, etc.) are automatically persisted under `ccflow._local_artifacts`. Each stored class is prefixed with its kind (for example, `callable_model__...` versus `context__...`) so PyObjectPath-based evaluators can serialize/deserialize them without collisions. The backing module is append-only; long-lived processes should avoid generating unbounded unique classes if cleanup is required.
 
 ## Model Registry
 

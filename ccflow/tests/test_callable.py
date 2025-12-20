@@ -623,12 +623,16 @@ class TestCallableModelRegistration(TestCase):
 
         instance = LocalModel(factor=5)
         context = LocalContext(value=7)
+        result = instance(context)
+        self.assertEqual(result.value, 35)
         serialized_model = instance.model_dump(mode="python")
         restored_model = LocalModel.model_validate(serialized_model)
         self.assertEqual(restored_model, instance)
         serialized_context = context.model_dump(mode="python")
         restored_context = LocalContext.model_validate(serialized_context)
         self.assertEqual(restored_context, context)
+        restored_result = restored_model(restored_context)
+        self.assertEqual(restored_result.value, 35)
 
     def test_multiple_nested_levels_unique_paths(self):
         created = []
@@ -677,11 +681,17 @@ class TestCallableModelRegistration(TestCase):
         self.assertEqual(len(context_names), len(created))
         self.assertEqual(len(model_names), len(created))
 
-        for _, ctx_cls, model_cls in created:
+        for label, ctx_cls, model_cls in created:
             self.assertIs(getattr(locals_module, ctx_cls.__qualname__), ctx_cls)
             self.assertIs(getattr(locals_module, model_cls.__qualname__), model_cls)
             self.assertIn("<locals>", getattr(ctx_cls, "__ccflow_dynamic_origin__"))
             self.assertIn("<locals>", getattr(model_cls, "__ccflow_dynamic_origin__"))
+            ctx_instance = ctx_cls(value=4)
+            result = model_cls()(ctx_instance)
+            if isinstance(label, str):  # sibling group
+                self.assertEqual(result.value, ctx_instance.value)
+            else:
+                self.assertEqual(result.value, ctx_instance.value * (label + 1))
 
 
 class TestWrapperModel(TestCase):

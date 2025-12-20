@@ -205,10 +205,13 @@ class TestLocalRegistrationKind(TestCase):
                 def __call__(self, context: NullContext) -> GenericResult:
                     return GenericResult(value="ok")
 
-        register.assert_called_once()
-        args, kwargs = register.call_args
-        self.assertIs(args[0], LocalCallable)
+            result = LocalCallable()(NullContext())
+
+        calls_for_local = [(args, kwargs) for args, kwargs in register.call_args_list if args and args[0] is LocalCallable]
+        self.assertEqual(len(calls_for_local), 1)
+        _, kwargs = calls_for_local[0]
         self.assertEqual(kwargs["kind"], "callable_model")
+        self.assertEqual(result.value, "ok")
 
     def test_explicit_override_respected(self):
         with mock.patch("ccflow.base.register_local_subclass") as register:
