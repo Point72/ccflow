@@ -1,8 +1,52 @@
 """Shared helpers for constructing local-scope contexts/models in tests."""
 
-from typing import ClassVar, Tuple, Type
+from typing import ClassVar, Dict, Tuple, Type
 
 from ccflow import CallableModel, ContextBase, Flow, GenericResult, GraphDepList, NullContext
+
+
+def build_meta_sensor_planner():
+    """Return a (SensorQuery, MetaSensorPlanner, captured) tuple for meta-callable tests."""
+
+    captured: Dict[str, Type] = {}
+
+    class SensorQuery(ContextBase):
+        sensor_type: str
+        site: str
+        window: int
+
+    class MetaSensorPlanner(CallableModel):
+        warm_start: int = 2
+
+        @Flow.call
+        def __call__(self, context: SensorQuery) -> GenericResult:
+            # Define request-scoped specialist wiring with a bespoke context/model pair.
+            class SpecialistContext(ContextBase):
+                sensor_type: str
+                window: int
+                pipeline: str
+
+            class SpecialistCallable(CallableModel):
+                pipeline: str
+
+                @Flow.call
+                def __call__(self, context: SpecialistContext) -> GenericResult:
+                    payload = f"{self.pipeline}:{context.sensor_type}:{context.window}"
+                    return GenericResult(value=payload)
+
+            captured["context_cls"] = SpecialistContext
+            captured["callable_cls"] = SpecialistCallable
+
+            window = context.window + self.warm_start
+            local_context = SpecialistContext(
+                sensor_type=context.sensor_type,
+                window=window,
+                pipeline=f"{context.site}-calibration",
+            )
+            specialist = SpecialistCallable(pipeline=f"planner:{context.site}")
+            return specialist(local_context)
+
+    return SensorQuery, MetaSensorPlanner, captured
 
 
 def build_local_callable(name: str = "LocalCallable") -> Type[CallableModel]:

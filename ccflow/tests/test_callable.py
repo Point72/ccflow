@@ -23,7 +23,7 @@ from ccflow import (
     WrapperModel,
 )
 from ccflow.local_persistence import LOCAL_ARTIFACTS_MODULE_NAME
-from ccflow.tests.local_helpers import build_local_callable, build_local_context
+from ccflow.tests.local_helpers import build_local_callable, build_local_context, build_meta_sensor_planner
 
 
 def _find_registered_name(module, cls):
@@ -658,6 +658,21 @@ class TestCallableModelRegistration(TestCase):
                 self.assertEqual(result.value, ctx_instance.value)
             else:
                 self.assertEqual(result.value, ctx_instance.value * (label + 1))
+
+    def test_meta_callable_builds_dynamic_specialist(self):
+        SensorQuery, MetaSensorPlanner, captured = build_meta_sensor_planner()
+        request = SensorQuery(sensor_type="wind-turbine", site="ridge-line", window=5)
+        meta = MetaSensorPlanner(warm_start=3)
+        result = meta(request)
+        self.assertEqual(result.value, "planner:ridge-line:wind-turbine:8")
+
+        locals_module = sys.modules[LOCAL_ARTIFACTS_MODULE_NAME]
+        SpecialistContext = captured["context_cls"]
+        SpecialistCallable = captured["callable_cls"]
+        self.assertEqual(SpecialistContext.__module__, LOCAL_ARTIFACTS_MODULE_NAME)
+        self.assertEqual(SpecialistCallable.__module__, LOCAL_ARTIFACTS_MODULE_NAME)
+        self.assertIs(getattr(locals_module, SpecialistContext.__qualname__), SpecialistContext)
+        self.assertIs(getattr(locals_module, SpecialistCallable.__qualname__), SpecialistCallable)
 
 
 class TestWrapperModel(TestCase):
