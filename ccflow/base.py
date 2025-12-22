@@ -30,7 +30,7 @@ from pydantic.fields import Field
 from typing_extensions import Self
 
 from .exttypes.pyobjectpath import PyObjectPath
-from .local_persistence import register_local_subclass
+from .local_persistence import _register_local_subclass
 
 log = logging.getLogger(__name__)
 
@@ -164,7 +164,7 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
         # __pydantic_init_subclass__ is the supported hook point once Pydantic finishes wiring the subclass.
         super().__pydantic_init_subclass__(**kwargs)
         kind = getattr(cls, "__ccflow_local_registration_kind__", "model")
-        register_local_subclass(cls, kind=kind)
+        _register_local_subclass(cls, kind=kind)
 
     @computed_field(
         alias="_target_",

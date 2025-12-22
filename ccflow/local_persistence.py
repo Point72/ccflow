@@ -14,8 +14,7 @@ if TYPE_CHECKING:
     from importlib.machinery import ModuleSpec
     from types import ModuleType
 
-__all__ = ("LOCAL_ARTIFACTS_MODULE_NAME", "register_local_subclass")
-
+__all__ = ("LOCAL_ARTIFACTS_MODULE_NAME",)
 
 LOCAL_ARTIFACTS_MODULE_NAME = "ccflow._local_artifacts"
 _LOCAL_MODULE_DOC = "Auto-generated BaseModel subclasses created outside importable modules."
@@ -122,7 +121,7 @@ def _build_unique_name(*, kind_slug: str, name_hint: str) -> str:
     return f"{kind_slug}__{sanitized_hint}__{next(counter)}"
 
 
-def register_local_subclass(cls: Type[Any], *, kind: str = "model") -> None:
+def _register_local_subclass(cls: Type[Any], *, kind: str = "model") -> None:
     """Register BaseModel subclasses created in local scopes."""
     if getattr(cls, "__module__", "").startswith(LOCAL_ARTIFACTS_MODULE_NAME):
         return

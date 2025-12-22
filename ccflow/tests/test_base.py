@@ -176,7 +176,7 @@ class TestBaseModel(TestCase):
 
 class TestLocalRegistrationKind(TestCase):
     def test_base_model_defaults_to_model_kind(self):
-        with mock.patch("ccflow.base.register_local_subclass") as register:
+        with mock.patch("ccflow.base._register_local_subclass") as register:
 
             class LocalModel(BaseModel):
                 value: int
@@ -187,7 +187,7 @@ class TestLocalRegistrationKind(TestCase):
         self.assertEqual(kwargs["kind"], "model")
 
     def test_context_defaults_to_context_kind(self):
-        with mock.patch("ccflow.base.register_local_subclass") as register:
+        with mock.patch("ccflow.base._register_local_subclass") as register:
 
             class LocalContext(ContextBase):
                 value: int
@@ -198,7 +198,7 @@ class TestLocalRegistrationKind(TestCase):
         self.assertEqual(kwargs["kind"], "context")
 
     def test_callable_defaults_to_callable_kind(self):
-        with mock.patch("ccflow.base.register_local_subclass") as register:
+        with mock.patch("ccflow.base._register_local_subclass") as register:
 
             class LocalCallable(CallableModel):
                 @Flow.call
@@ -214,7 +214,7 @@ class TestLocalRegistrationKind(TestCase):
         self.assertEqual(result.value, "ok")
 
     def test_explicit_override_respected(self):
-        with mock.patch("ccflow.base.register_local_subclass") as register:
+        with mock.patch("ccflow.base._register_local_subclass") as register:
 
             class CustomKind(BaseModel):
                 __ccflow_local_registration_kind__ = "custom"

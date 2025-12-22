@@ -119,7 +119,7 @@ def test_local_artifacts_module_reload_preserves_dynamic_attrs_and_qualname():
             return _Temp
 
         Temp = build_cls()
-        lp.register_local_subclass(Temp, kind="demo")
+        lp._register_local_subclass(Temp, kind="demo")
         module = importlib.import_module(lp.LOCAL_ARTIFACTS_MODULE_NAME)
         qual_before = Temp.__qualname__
         before = getattr(module, qual_before) is Temp
@@ -143,7 +143,7 @@ def test_register_local_subclass_sets_module_qualname_and_origin():
             return Foo
 
         Foo = build()
-        lp.register_local_subclass(Foo, kind="ModelThing")
+        lp._register_local_subclass(Foo, kind="ModelThing")
         module = sys.modules[lp.LOCAL_ARTIFACTS_MODULE_NAME]
         print(Foo.__module__)
         print(Foo.__qualname__)
