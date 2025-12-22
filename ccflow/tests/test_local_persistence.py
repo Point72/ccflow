@@ -1,3 +1,6 @@
+import subprocess
+import sys
+import textwrap
 from collections import defaultdict
 from itertools import count
 from unittest import TestCase, mock
@@ -23,7 +26,7 @@ class ModuleLevelCallable(CallableModel):
 class TestNeedsRegistration(TestCase):
     def test_module_level_ccflow_classes_do_not_need_registration(self):
         for cls in (ModuleLevelModel, ModuleLevelContext, ModuleLevelCallable):
-            with self.subTest(cls=cls):
+            with self.subTest(cls=cls.__name__):
                 self.assertFalse(local_persistence._needs_registration(cls))
 
     def test_local_scope_class_needs_registration(self):
@@ -79,3 +82,78 @@ class TestBuildUniqueName(TestCase):
         with mock.patch.object(local_persistence, "_LOCAL_KIND_COUNTERS", defaultdict(lambda: count())):
             name = local_persistence._build_unique_name(kind_slug="model", name_hint="")
         self.assertEqual(name, "model__BaseModel__0")
+
+
+def _run_subprocess(code: str) -> str:
+    """Execute code in a clean interpreter so sys.modules starts empty."""
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(code)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def test_local_artifacts_module_is_lazy():
+    output = _run_subprocess(
+        """
+        import sys
+        import ccflow.local_persistence as lp
+
+        print(lp.LOCAL_ARTIFACTS_MODULE_NAME in sys.modules)
+        """
+    )
+    assert output == "False"
+
+
+def test_local_artifacts_module_reload_preserves_dynamic_attrs_and_qualname():
+    output = _run_subprocess(
+        """
+        import importlib
+        import ccflow.local_persistence as lp
+
+        def build_cls():
+            class _Temp:
+                pass
+            return _Temp
+
+        Temp = build_cls()
+        lp.register_local_subclass(Temp, kind="demo")
+        module = importlib.import_module(lp.LOCAL_ARTIFACTS_MODULE_NAME)
+        qual_before = Temp.__qualname__
+        before = getattr(module, qual_before) is Temp
+        module = importlib.reload(module)
+        after = getattr(module, qual_before) is Temp
+        print(before, after, qual_before == Temp.__qualname__)
+        """
+    )
+    assert output.split() == ["True", "True", "True"]
+
+
+def test_register_local_subclass_sets_module_qualname_and_origin():
+    output = _run_subprocess(
+        """
+        import sys
+        import ccflow.local_persistence as lp
+
+        def build():
+            class Foo:
+                pass
+            return Foo
+
+        Foo = build()
+        lp.register_local_subclass(Foo, kind="ModelThing")
+        module = sys.modules[lp.LOCAL_ARTIFACTS_MODULE_NAME]
+        print(Foo.__module__)
+        print(Foo.__qualname__)
+        print(hasattr(module, Foo.__qualname__))
+        print(Foo.__ccflow_dynamic_origin__)
+        """
+    )
+    lines = output.splitlines()
+    assert lines[0] == "ccflow._local_artifacts"
+    assert lines[2] == "True"
+    assert lines[3] == "__main__.build.<locals>.Foo"
+    assert lines[1].startswith("modelthing__")
+    assert lines[1].endswith("__0")

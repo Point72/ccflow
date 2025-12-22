@@ -48,9 +48,8 @@ def test_global_state(root_registry):
     assert state3.open_overrides == {}
 
 
-def test_global_state_pickle():
-    r = ModelRegistry.root()
-    r.add("foo", DummyModel(name="foo"))
+def test_global_state_pickle(root_registry):
+    root_registry.add("foo", DummyModel(name="foo"))
     evaluator = DummyEvaluator()
     with FlowOptionsOverride(options=dict(evaluator=evaluator)) as override:
         state = GlobalState()
