@@ -530,23 +530,46 @@ class TestCallableModelRegistration(TestCase):
         if dynamic_module:
             self.assertFalse(any(value is MyContext for value in vars(dynamic_module).values()))
 
-    def test_local_class_moves_under_dynamic_namespace(self):
+    def test_local_class_registered_with_import_path(self):
+        """Test that local-scope classes preserve __module__/__qualname__ but get an import path.
+
+        The new behavior:
+        - __module__ stays as the original (preserves cloudpickle serialization)
+        - __qualname__ stays with '<locals>' (preserves cloudpickle serialization)
+        - __ccflow_import_path__ is set for PyObjectPath validation
+        - Class is registered in _local_artifacts under a unique name
+        """
         LocalCallable = build_local_callable()
-        module_name = LocalCallable.__module__
-        self.assertEqual(module_name, LOCAL_ARTIFACTS_MODULE_NAME)
-        dynamic_module = sys.modules[module_name]
-        self.assertIs(getattr(dynamic_module, LocalCallable.__qualname__), LocalCallable)
-        self.assertIn("<locals>", getattr(LocalCallable, "__ccflow_dynamic_origin__"))
+        # __module__ should NOT change to _local_artifacts
+        self.assertNotEqual(LocalCallable.__module__, LOCAL_ARTIFACTS_MODULE_NAME)
+        # __qualname__ should still have '<locals>'
+        self.assertIn("<locals>", LocalCallable.__qualname__)
+        # But __ccflow_import_path__ should be set and point to _local_artifacts
+        self.assertTrue(hasattr(LocalCallable, "__ccflow_import_path__"))
+        import_path = LocalCallable.__ccflow_import_path__
+        self.assertTrue(import_path.startswith(f"{LOCAL_ARTIFACTS_MODULE_NAME}."))
+        # Class should be registered in _local_artifacts under the import path
+        dynamic_module = sys.modules[LOCAL_ARTIFACTS_MODULE_NAME]
+        registered_name = import_path.split(".")[-1]
+        self.assertIs(getattr(dynamic_module, registered_name), LocalCallable)
+        # Functionality should work
         result = LocalCallable()(NullContext())
         self.assertEqual(result.value, "local")
 
-    def test_multiple_local_definitions_have_unique_identifiers(self):
+    def test_multiple_local_definitions_have_unique_import_paths(self):
+        """Test that multiple local classes get unique import paths."""
         first = build_local_callable()
         second = build_local_callable()
-        self.assertNotEqual(first.__qualname__, second.__qualname__)
+        # __qualname__ stays the same (both are 'build_local_callable.<locals>._LocalCallable')
+        self.assertEqual(first.__qualname__, second.__qualname__)
+        # But __ccflow_import_path__ should be unique
+        self.assertNotEqual(first.__ccflow_import_path__, second.__ccflow_import_path__)
+        # Both should be registered in _local_artifacts
         dynamic_module = sys.modules[LOCAL_ARTIFACTS_MODULE_NAME]
-        self.assertIs(getattr(dynamic_module, first.__qualname__), first)
-        self.assertIs(getattr(dynamic_module, second.__qualname__), second)
+        first_name = first.__ccflow_import_path__.split(".")[-1]
+        second_name = second.__ccflow_import_path__.split(".")[-1]
+        self.assertIs(getattr(dynamic_module, first_name), first)
+        self.assertIs(getattr(dynamic_module, second_name), second)
 
     def test_context_and_callable_same_name_do_not_collide(self):
         def build_conflicting():
@@ -614,7 +637,8 @@ class TestCallableModelRegistration(TestCase):
         restored_result = restored_model(restored_context)
         self.assertEqual(restored_result.value, 35)
 
-    def test_multiple_nested_levels_unique_paths(self):
+    def test_multiple_nested_levels_unique_import_paths(self):
+        """Test that multiple nested local classes all get unique import paths."""
         created = []
 
         def layer(depth: int):
@@ -656,16 +680,21 @@ class TestCallableModelRegistration(TestCase):
 
         locals_module = sys.modules[LOCAL_ARTIFACTS_MODULE_NAME]
 
-        context_names = {ctx.__qualname__ for _, ctx, _ in created}
-        model_names = {model.__qualname__ for _, _, model in created}
-        self.assertEqual(len(context_names), len(created))
-        self.assertEqual(len(model_names), len(created))
+        # __ccflow_import_path__ should be unique for each class
+        context_import_paths = {ctx.__ccflow_import_path__ for _, ctx, _ in created}
+        model_import_paths = {model.__ccflow_import_path__ for _, _, model in created}
+        self.assertEqual(len(context_import_paths), len(created))
+        self.assertEqual(len(model_import_paths), len(created))
 
         for label, ctx_cls, model_cls in created:
-            self.assertIs(getattr(locals_module, ctx_cls.__qualname__), ctx_cls)
-            self.assertIs(getattr(locals_module, model_cls.__qualname__), model_cls)
-            self.assertIn("<locals>", getattr(ctx_cls, "__ccflow_dynamic_origin__"))
-            self.assertIn("<locals>", getattr(model_cls, "__ccflow_dynamic_origin__"))
+            # Each class should be registered under its import path
+            ctx_name = ctx_cls.__ccflow_import_path__.split(".")[-1]
+            model_name = model_cls.__ccflow_import_path__.split(".")[-1]
+            self.assertIs(getattr(locals_module, ctx_name), ctx_cls)
+            self.assertIs(getattr(locals_module, model_name), model_cls)
+            # Original qualname should still have '<locals>' (preserved for cloudpickle)
+            self.assertIn("<locals>", ctx_cls.__qualname__)
+            self.assertIn("<locals>", model_cls.__qualname__)
             ctx_instance = ctx_cls(value=4)
             result = model_cls()(ctx_instance)
             if isinstance(label, str):  # sibling group
@@ -683,34 +712,54 @@ class TestCallableModelRegistration(TestCase):
         locals_module = sys.modules[LOCAL_ARTIFACTS_MODULE_NAME]
         SpecialistContext = captured["context_cls"]
         SpecialistCallable = captured["callable_cls"]
-        self.assertEqual(SpecialistContext.__module__, LOCAL_ARTIFACTS_MODULE_NAME)
-        self.assertEqual(SpecialistCallable.__module__, LOCAL_ARTIFACTS_MODULE_NAME)
-        self.assertIs(getattr(locals_module, SpecialistContext.__qualname__), SpecialistContext)
-        self.assertIs(getattr(locals_module, SpecialistCallable.__qualname__), SpecialistCallable)
+        # __module__ should NOT change (preserves cloudpickle)
+        self.assertNotEqual(SpecialistContext.__module__, LOCAL_ARTIFACTS_MODULE_NAME)
+        self.assertNotEqual(SpecialistCallable.__module__, LOCAL_ARTIFACTS_MODULE_NAME)
+        # But __ccflow_import_path__ should be set and classes should be registered
+        ctx_name = SpecialistContext.__ccflow_import_path__.split(".")[-1]
+        model_name = SpecialistCallable.__ccflow_import_path__.split(".")[-1]
+        self.assertIs(getattr(locals_module, ctx_name), SpecialistContext)
+        self.assertIs(getattr(locals_module, model_name), SpecialistCallable)
 
     def test_dynamic_factory_pickle_roundtrip(self):
-        serializers = [(pdumps, ploads), (rcpdumps, rcploads)]
-        for dumps, loads in serializers:
-            factory = loads(dumps(create_sensor_scope_models))
-            SensorContext, SensorModel = factory()
-            self.assertEqual(SensorContext.__module__, LOCAL_ARTIFACTS_MODULE_NAME)
-            self.assertEqual(SensorModel.__module__, LOCAL_ARTIFACTS_MODULE_NAME)
-            locals_module = sys.modules[LOCAL_ARTIFACTS_MODULE_NAME]
-            self.assertIs(getattr(locals_module, SensorContext.__qualname__), SensorContext)
-            self.assertIs(getattr(locals_module, SensorModel.__qualname__), SensorModel)
+        """Test that dynamically created local classes can be pickled with cloudpickle.
 
-            context = SensorContext(reading=41)
-            model = SensorModel(offset=1)
-            self.assertEqual(model(context).value, 42)
+        Note: Standard pickle can't handle classes with '<locals>' in __qualname__
+        because it tries to import the class by module.qualname. Cloudpickle can
+        serialize the class definition, which is essential for distributed computing
+        (e.g., Ray tasks). This tradeoff enables cross-process cloudpickle support
+        while PyObjectPath still works via __ccflow_import_path__.
+        """
+        # Test with cloudpickle (which can serialize class definitions)
+        factory = rcploads(rcpdumps(create_sensor_scope_models))
+        SensorContext, SensorModel = factory()
+        # __module__ should NOT change (preserves cloudpickle)
+        self.assertNotEqual(SensorContext.__module__, LOCAL_ARTIFACTS_MODULE_NAME)
+        self.assertNotEqual(SensorModel.__module__, LOCAL_ARTIFACTS_MODULE_NAME)
+        # But __ccflow_import_path__ should be set and point to _local_artifacts
+        self.assertTrue(SensorContext.__ccflow_import_path__.startswith(f"{LOCAL_ARTIFACTS_MODULE_NAME}."))
+        self.assertTrue(SensorModel.__ccflow_import_path__.startswith(f"{LOCAL_ARTIFACTS_MODULE_NAME}."))
+        # Classes should be registered in _local_artifacts
+        locals_module = sys.modules[LOCAL_ARTIFACTS_MODULE_NAME]
+        ctx_name = SensorContext.__ccflow_import_path__.split(".")[-1]
+        model_name = SensorModel.__ccflow_import_path__.split(".")[-1]
+        self.assertIs(getattr(locals_module, ctx_name), SensorContext)
+        self.assertIs(getattr(locals_module, model_name), SensorModel)
 
-            restored_context_cls = loads(dumps(SensorContext))
-            restored_model_cls = loads(dumps(SensorModel))
-            self.assertIs(restored_context_cls, SensorContext)
-            self.assertIs(restored_model_cls, SensorModel)
+        context = SensorContext(reading=41)
+        model = SensorModel(offset=1)
+        self.assertEqual(model(context).value, 42)
 
-            restored_context = loads(dumps(context))
-            restored_model = loads(dumps(model))
-            self.assertEqual(restored_model(restored_context).value, 42)
+        # Class roundtrip with cloudpickle
+        restored_context_cls = rcploads(rcpdumps(SensorContext))
+        restored_model_cls = rcploads(rcpdumps(SensorModel))
+        self.assertIs(restored_context_cls, SensorContext)
+        self.assertIs(restored_model_cls, SensorModel)
+
+        # Instance roundtrip with cloudpickle
+        restored_context = rcploads(rcpdumps(context))
+        restored_model = rcploads(rcpdumps(model))
+        self.assertEqual(restored_model(restored_context).value, 42)
 
 
 class TestWrapperModel(TestCase):

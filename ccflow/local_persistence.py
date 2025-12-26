@@ -1,4 +1,20 @@
-"""Helpers for persisting BaseModel-derived classes defined inside local scopes."""
+"""Helpers for persisting BaseModel-derived classes defined inside local scopes.
+
+This module enables PyObjectPath validation for classes defined inside functions (which have
+'<locals>' in their __qualname__ and aren't normally importable).
+
+Key design decision: We DON'T modify __module__ or __qualname__. This preserves cloudpickle's
+ability to serialize the class definition for cross-process transfer. Instead, we set a
+separate __ccflow_import_path__ attribute that PyObjectPath uses.
+
+Cross-process cloudpickle flow:
+1. Process A creates a local class -> we set __ccflow_import_path__ on it
+2. cloudpickle.dumps() serializes the class definition (because '<locals>' in __qualname__)
+   INCLUDING the __ccflow_import_path__ attribute we set
+3. Process B: cloudpickle.loads() reconstructs the class with __ccflow_import_path__ already set
+4. Process B: __pydantic_init_subclass__ runs, sees __ccflow_import_path__ exists,
+   re-registers the class in this process's _local_artifacts module
+"""
 
 from __future__ import annotations
 
@@ -121,10 +137,49 @@ def _build_unique_name(*, kind_slug: str, name_hint: str) -> str:
     return f"{kind_slug}__{sanitized_hint}__{next(counter)}"
 
 
-def _register_local_subclass(cls: Type[Any], *, kind: str = "model") -> None:
-    """Register BaseModel subclasses created in local scopes."""
-    if getattr(cls, "__module__", "").startswith(LOCAL_ARTIFACTS_MODULE_NAME):
+def _ensure_registered_at_import_path(cls: Type[Any]) -> None:
+    """Ensure a class with __ccflow_import_path__ is actually registered in _local_artifacts.
+
+    This handles the cross-process cloudpickle case: when cloudpickle reconstructs a class,
+    it has __ccflow_import_path__ set (serialized with the class definition), but the class
+    isn't registered in _local_artifacts in the new process yet.
+
+    Called from both _register_local_subclass (during class creation/unpickling) and
+    PyObjectPath validation (when accessing type_).
+    """
+    import_path = getattr(cls, "__ccflow_import_path__", None)
+    if import_path is None or not import_path.startswith(LOCAL_ARTIFACTS_MODULE_NAME + "."):
         return
+
+    registered_name = import_path.rsplit(".", 1)[-1]
+    artifacts_module = _get_local_artifacts_module()
+
+    # Re-register if not present or points to different class
+    if getattr(artifacts_module, registered_name, None) is not cls:
+        setattr(artifacts_module, registered_name, cls)
+
+
+def _register_local_subclass(cls: Type[Any], *, kind: str = "model") -> None:
+    """Register BaseModel subclasses created in local scopes.
+
+    This enables PyObjectPath validation for classes that aren't normally importable
+    (e.g., classes defined inside functions). The class is registered in a synthetic
+    module (`ccflow._local_artifacts`) so it can be imported via the stored path.
+
+    IMPORTANT: This function does NOT change __module__ or __qualname__. This is
+    intentional - it preserves cloudpickle's ability to serialize the class definition
+    for cross-process transfer. If __qualname__ contains '<locals>', cloudpickle
+    recognizes the class isn't normally importable and serializes its full definition.
+
+    Args:
+        cls: The class to register.
+        kind: A slug identifying the type of class (e.g., "model", "context", "callable_model").
+    """
+    # If already has import path, just ensure it's registered (handles cross-process unpickling)
+    if hasattr(cls, "__ccflow_import_path__"):
+        _ensure_registered_at_import_path(cls)
+        return
+
     if not _needs_registration(cls):
         return
 
@@ -133,6 +188,9 @@ def _register_local_subclass(cls: Type[Any], *, kind: str = "model") -> None:
     unique_name = _build_unique_name(kind_slug=kind_slug, name_hint=name_hint)
     artifacts_module = _get_local_artifacts_module()
     setattr(artifacts_module, unique_name, cls)
-    cls.__module__ = artifacts_module.__name__
-    cls.__qualname__ = unique_name
-    setattr(cls, "__ccflow_dynamic_origin__", name_hint)
+
+    # Store the import path as a separate attribute - DON'T change __module__ or __qualname__
+    # This preserves cloudpickle's ability to serialize the class definition.
+    # The original module/qualname can still be retrieved via cls.__module__ and cls.__qualname__.
+    import_path = f"{artifacts_module.__name__}.{unique_name}"
+    setattr(cls, "__ccflow_import_path__", import_path)
