@@ -8,6 +8,8 @@ from pydantic import ImportString, TypeAdapter
 from pydantic_core import core_schema
 from typing_extensions import Self
 
+from ccflow.local_persistence import _ensure_registered_at_import_path
+
 _import_string_adapter = TypeAdapter(ImportString)
 
 
@@ -56,7 +58,14 @@ class PyObjectPath(str):
             origin = get_origin(value)
             if origin:
                 value = origin
-            if hasattr(value, "__module__") and hasattr(value, "__qualname__"):
+
+            # Check for ccflow's import path override first (used for local-scope classes)
+            # This allows classes with '<locals>' in __qualname__ to remain importable
+            # while preserving cloudpickle's ability to serialize the class definition
+            if hasattr(value, "__ccflow_import_path__"):
+                _ensure_registered_at_import_path(value)
+                value = cls(value.__ccflow_import_path__)
+            elif hasattr(value, "__module__") and hasattr(value, "__qualname__"):
                 if value.__module__ == "__builtin__":
                     module = "builtins"
                 else:
