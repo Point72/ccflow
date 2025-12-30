@@ -62,3 +62,20 @@ class TestPyObjectPath(TestCase):
         self.assertIsNotNone(p.object)
         self.assertEqual(p, pickle.loads(pickle.dumps(p)))
         self.assertEqual(p.object, pickle.loads(pickle.dumps(p.object)))
+
+    def test_builtin_module_alias(self):
+        """Test that objects with __module__ == '__builtin__' are handled correctly.
+
+        In Python 2, built-in types had __module__ == '__builtin__', but in Python 3
+        it's 'builtins'. Some C extensions or pickled objects may still report the
+        old module name.
+        """
+
+        # Create a mock object that reports __builtin__ as its module
+        class MockBuiltinObject:
+            __module__ = "__builtin__"
+            __qualname__ = "int"
+
+        p = PyObjectPath.validate(MockBuiltinObject)
+        self.assertEqual(p, "builtins.int")
+        self.assertEqual(p.object, int)

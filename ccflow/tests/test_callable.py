@@ -590,14 +590,13 @@ class TestCallableModelRegistration(TestCase):
         locals_module = sys.modules[LOCAL_ARTIFACTS_MODULE_NAME]
         ctx_attr = _find_registered_name(locals_module, LocalContext)
         model_attr = _find_registered_name(locals_module, LocalCallable)
-        self.assertTrue(ctx_attr.startswith("context__"))
-        self.assertTrue(model_attr.startswith("callable_model__"))
-        ctx_hint = ctx_attr.partition("__")[2].rsplit("__", 1)[0]
-        model_hint = model_attr.partition("__")[2].rsplit("__", 1)[0]
-        self.assertEqual(ctx_hint, model_hint)
+        # Both should use _Local_<ModelName>_<UUID> format
+        self.assertTrue(ctx_attr.startswith("_Local_LocalThing_"))
+        self.assertTrue(model_attr.startswith("_Local_LocalThing_"))
+        # UUIDs make them unique even with same class name
         self.assertEqual(getattr(locals_module, ctx_attr), LocalContext)
         self.assertEqual(getattr(locals_module, model_attr), LocalCallable)
-        self.assertNotEqual(ctx_attr, model_attr, "Kind-prefixed names keep contexts and callables distinct.")
+        self.assertNotEqual(ctx_attr, model_attr, "UUIDs keep same-named classes distinct.")
 
     def test_local_callable_type_path_roundtrip(self):
         LocalCallable = build_local_callable()

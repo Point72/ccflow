@@ -74,8 +74,6 @@ class _CallableModel(BaseModel, abc.ABC):
     The purpose of this class is to provide type definitions of context_type and return_type.
     """
 
-    __ccflow_local_registration_kind__: ClassVar[str] = "callable_model"
-
     model_config = ConfigDict(
         ignored_types=(property,),
     )

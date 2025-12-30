@@ -30,7 +30,7 @@ from pydantic.fields import Field
 from typing_extensions import Self
 
 from .exttypes.pyobjectpath import PyObjectPath
-from .local_persistence import _register_local_subclass
+from .local_persistence import _register, _register_local_subclass_if_needed
 
 log = logging.getLogger(__name__)
 
@@ -157,14 +157,30 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
         - Registration by name, and coercion from string name to allow for object re-use from the configs
     """
 
-    __ccflow_local_registration_kind__: ClassVar[str] = "model"
-
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs):
-        # __pydantic_init_subclass__ is the supported hook point once Pydantic finishes wiring the subclass.
         super().__pydantic_init_subclass__(**kwargs)
-        kind = getattr(cls, "__ccflow_local_registration_kind__", "model")
-        _register_local_subclass(cls, kind=kind)
+        # Register local-scope classes so they're importable via PyObjectPath.
+        # At definition time, we can only detect <locals> in qualname - full check deferred.
+        # Note: Cross-process unpickle sync (when __ccflow_import_path__ is already set) happens
+        # lazily via _register_local_subclass_if_needed, since cloudpickle sets class attributes
+        # AFTER __pydantic_init_subclass__ runs.
+        if "<locals>" in cls.__qualname__:
+            _register(cls)
+
+    def __reduce_ex__(self, protocol):
+        # Ensure the class is registered before pickling. This is necessary for classes
+        # created dynamically (e.g., via pydantic's create_model) that don't have '<locals>'
+        # in their __qualname__. Without this, such classes would get different UUIDs in
+        # different processes if pickled before type_ is accessed, breaking cross-process
+        # consistency. By registering here, we guarantee __ccflow_import_path__ is set
+        # before cloudpickle serializes the class definition.
+        #
+        # We use __reduce_ex__ instead of __reduce__ because it's called first, allowing us
+        # to perform the registration side effect. We then return NotImplemented to let
+        # pydantic's default pickling mechanism take over, preserving the pickle format.
+        _register_local_subclass_if_needed(type(self))
+        return super().__reduce_ex__(protocol)
 
     @computed_field(
         alias="_target_",
@@ -829,8 +845,6 @@ class ContextBase(ResultBase):
     A context is also a type of result, as a CallableModel could be responsible for generating a context
     that is an input into another CallableModel.
     """
-
-    __ccflow_local_registration_kind__: ClassVar[str] = "context"
 
     model_config = ConfigDict(
         frozen=True,

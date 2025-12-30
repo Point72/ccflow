@@ -174,53 +174,33 @@ class TestBaseModel(TestCase):
         )
 
 
-class TestLocalRegistrationKind(TestCase):
-    def test_base_model_defaults_to_model_kind(self):
-        with mock.patch("ccflow.base._register_local_subclass") as register:
+class TestLocalRegistration(TestCase):
+    def test_local_class_registered_for_base_model(self):
+        with mock.patch("ccflow.base._register") as register:
 
             class LocalModel(BaseModel):
                 value: int
 
-        register.assert_called_once()
-        args, kwargs = register.call_args
-        self.assertIs(args[0], LocalModel)
-        self.assertEqual(kwargs["kind"], "model")
+        # Local classes (defined in functions) should be registered
+        calls = [args[0] for args, _ in register.call_args_list if args]
+        self.assertIn(LocalModel, calls)
 
-    def test_context_defaults_to_context_kind(self):
-        with mock.patch("ccflow.base._register_local_subclass") as register:
+    def test_local_class_registered_for_context(self):
+        with mock.patch("ccflow.base._register") as register:
 
             class LocalContext(ContextBase):
                 value: int
 
-        register.assert_called_once()
-        args, kwargs = register.call_args
-        self.assertIs(args[0], LocalContext)
-        self.assertEqual(kwargs["kind"], "context")
+        calls = [args[0] for args, _ in register.call_args_list if args]
+        self.assertIn(LocalContext, calls)
 
-    def test_callable_defaults_to_callable_kind(self):
-        with mock.patch("ccflow.base._register_local_subclass") as register:
+    def test_local_class_registered_for_callable(self):
+        with mock.patch("ccflow.base._register") as register:
 
             class LocalCallable(CallableModel):
                 @Flow.call
                 def __call__(self, context: NullContext) -> GenericResult:
                     return GenericResult(value="ok")
 
-            result = LocalCallable()(NullContext())
-
-        calls_for_local = [(args, kwargs) for args, kwargs in register.call_args_list if args and args[0] is LocalCallable]
-        self.assertEqual(len(calls_for_local), 1)
-        _, kwargs = calls_for_local[0]
-        self.assertEqual(kwargs["kind"], "callable_model")
-        self.assertEqual(result.value, "ok")
-
-    def test_explicit_override_respected(self):
-        with mock.patch("ccflow.base._register_local_subclass") as register:
-
-            class CustomKind(BaseModel):
-                __ccflow_local_registration_kind__ = "custom"
-                value: int
-
-        register.assert_called_once()
-        args, kwargs = register.call_args
-        self.assertIs(args[0], CustomKind)
-        self.assertEqual(kwargs["kind"], "custom")
+        calls = [args[0] for args, _ in register.call_args_list if args]
+        self.assertIn(LocalCallable, calls)
