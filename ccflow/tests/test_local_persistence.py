@@ -489,6 +489,52 @@ print("SUCCESS")
         load_result = subprocess.run([sys.executable, "-c", load_code], capture_output=True, text=True)
         assert load_result.returncode == 0, f"Load failed: {load_result.stderr}"
 
+    def test_main_module_class_cross_process(self, pickle_file):
+        """Test that __main__ module classes work with cloudpickle cross-process.
+
+        Classes defined in __main__ need registration because cloudpickle recreates
+        them but doesn't add them to sys.modules["__main__"] in the target process.
+        """
+        pkl_path = pickle_file
+
+        # Create a __main__ class and pickle it (class is at module level, not in a function)
+        create_code = f'''
+from ray.cloudpickle import dump
+from ccflow import ContextBase
+
+# This class is in __main__ (not inside a function)
+class MainContext(ContextBase):
+    value: int
+
+# Verify it's registered (has __ccflow_import_path__)
+assert hasattr(MainContext, "__ccflow_import_path__"), "Expected __main__ class to be registered"
+assert MainContext.__module__ == "__main__"
+
+instance = MainContext(value=42)
+type_path = instance.type_  # Verify type_ works before pickle
+
+with open("{pkl_path}", "wb") as f:
+    dump(instance, f)
+print("SUCCESS")
+'''
+        create_result = subprocess.run([sys.executable, "-c", create_code], capture_output=True, text=True)
+        assert create_result.returncode == 0, f"Create failed: {create_result.stderr}"
+
+        # Load in a different process - type_ should work
+        load_code = f'''
+from ray.cloudpickle import load
+
+with open("{pkl_path}", "rb") as f:
+    obj = load(f)
+
+assert obj.value == 42
+type_path = obj.type_  # This would fail without registration
+assert type_path.object is type(obj)
+print("SUCCESS")
+'''
+        load_result = subprocess.run([sys.executable, "-c", load_code], capture_output=True, text=True)
+        assert load_result.returncode == 0, f"Load failed: {load_result.stderr}"
+
 
 # =============================================================================
 # Module-level classes should not be affected

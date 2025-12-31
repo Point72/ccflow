@@ -160,12 +160,14 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs):
         super().__pydantic_init_subclass__(**kwargs)
-        # Register local-scope classes so they're importable via PyObjectPath.
-        # At definition time, we can only detect <locals> in qualname - full check deferred.
+        # Register local-scope classes and __main__ classes so they're importable via PyObjectPath.
+        # - Local classes (<locals> in qualname) aren't importable via their qualname path
+        # - __main__ classes aren't importable cross-process (cloudpickle recreates them but
+        #   doesn't add them to sys.modules["__main__"])
         # Note: Cross-process unpickle sync (when __ccflow_import_path__ is already set) happens
-        # lazily via _register_local_subclass_if_needed, since cloudpickle sets class attributes
+        # lazily via _sync_to_module, since cloudpickle sets class attributes
         # AFTER __pydantic_init_subclass__ runs.
-        if "<locals>" in cls.__qualname__:
+        if "<locals>" in cls.__qualname__ or cls.__module__ == "__main__":
             _register(cls)
 
     @computed_field(
