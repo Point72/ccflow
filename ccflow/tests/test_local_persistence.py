@@ -7,7 +7,7 @@ on ccflow.local_persistence with unique names.
 Key behaviors tested:
 1. Local classes get __ccflow_import_path__ set at definition time
 2. Module-level classes are NOT registered (they're already importable)
-3. Cross-process cloudpickle works via _sync_to_module
+3. Cross-process cloudpickle works via sync_to_module
 4. UUID-based naming provides uniqueness
 """
 
@@ -38,7 +38,7 @@ class ModuleLevelCallable(CallableModel):
 
 
 # =============================================================================
-# Tests for _register function
+# Tests for register_ccflow_import_path function
 # =============================================================================
 
 
@@ -48,7 +48,7 @@ def test_base_module_available_after_import():
 
 
 def test_register_preserves_module_qualname_and_sets_import_path():
-    """Test that _register sets __ccflow_import_path__ without changing __module__ or __qualname__."""
+    """Test that register_ccflow_import_path sets __ccflow_import_path__ without changing __module__ or __qualname__."""
 
     def build():
         class Foo:
@@ -60,7 +60,7 @@ def test_register_preserves_module_qualname_and_sets_import_path():
     original_module = Foo.__module__
     original_qualname = Foo.__qualname__
 
-    local_persistence._register(Foo)
+    local_persistence.register_ccflow_import_path(Foo)
 
     # __module__ and __qualname__ should NOT change (preserves cloudpickle)
     assert Foo.__module__ == original_module, "__module__ should not change"
@@ -77,10 +77,10 @@ def test_register_preserves_module_qualname_and_sets_import_path():
 
 
 def test_register_handles_class_name_starting_with_digit():
-    """Test that _register handles class names starting with a digit by prefixing with underscore."""
+    """Test that register_ccflow_import_path handles class names starting with a digit by prefixing with underscore."""
     # Create a class with a name starting with a digit
     cls = type("3DModel", (), {})
-    local_persistence._register(cls)
+    local_persistence.register_ccflow_import_path(cls)
 
     import_path = cls.__ccflow_import_path__
     registered_name = import_path.split(".")[-1]
@@ -95,7 +95,7 @@ def test_register_handles_class_name_starting_with_digit():
 
 
 def test_sync_to_module_registers_class_not_yet_on_module():
-    """Test that _sync_to_module registers a class that has __ccflow_import_path__ but isn't on the module yet.
+    """Test that sync_to_module registers a class that has __ccflow_import_path__ but isn't on the module yet.
 
     This happens in cross-process unpickle scenarios where cloudpickle recreates the class
     with __ccflow_import_path__ set, but the class isn't yet on ccflow.local_persistence.
@@ -110,11 +110,62 @@ def test_sync_to_module_registers_class_not_yet_on_module():
     module = sys.modules[local_persistence.LOCAL_ARTIFACTS_MODULE_NAME]
     assert getattr(module, unique_name, None) is None, "Class should NOT be on module before sync"
 
-    # Call _sync_to_module
-    local_persistence._sync_to_module(cls)
+    # Call sync_to_module
+    local_persistence.sync_to_module(cls)
 
     # Verify class IS now on ccflow.local_persistence
     assert getattr(module, unique_name, None) is cls, "Class should be on module after sync"
+
+
+# =============================================================================
+# Tests for _register_on_module (internal function)
+# =============================================================================
+
+
+def test_register_on_module_uses_specified_module():
+    """Test that _register_on_module registers on the specified module, not just LOCAL_ARTIFACTS_MODULE_NAME."""
+    # Use a different module that's already in sys.modules
+    target_module_name = "ccflow.tests.test_local_persistence"
+    target_module = sys.modules[target_module_name]
+
+    cls = type("CustomModuleClass", (), {})
+    local_persistence._register_on_module(cls, target_module_name)
+
+    # Verify import path uses the specified module name
+    import_path = cls.__ccflow_import_path__
+    assert import_path.startswith(f"{target_module_name}._Local_"), f"Import path should start with {target_module_name}"
+
+    # Verify class is registered on the specified module
+    registered_name = import_path.split(".")[-1]
+    assert getattr(target_module, registered_name) is cls, "Class should be on specified module"
+
+    # Verify class is NOT on LOCAL_ARTIFACTS_MODULE_NAME
+    artifacts_module = sys.modules[local_persistence.LOCAL_ARTIFACTS_MODULE_NAME]
+    assert getattr(artifacts_module, registered_name, None) is None, "Class should NOT be on artifacts module"
+
+    # Cleanup
+    delattr(target_module, registered_name)
+
+
+def test_register_on_module_import_path_format():
+    """Test that _register_on_module produces correctly formatted import paths."""
+    target_module_name = "ccflow.tests.test_local_persistence"
+    target_module = sys.modules[target_module_name]
+
+    cls = type("FormatTestClass", (), {})
+    local_persistence._register_on_module(cls, target_module_name)
+
+    import_path = cls.__ccflow_import_path__
+
+    # Import path should be: module_name._Local_ClassName_uuid
+    parts = import_path.rsplit(".", 1)
+    assert len(parts) == 2, "Import path should have module.name format"
+    assert parts[0] == target_module_name, "Module part should match target"
+    assert parts[1].startswith("_Local_FormatTestClass_"), "Name should follow _Local_ClassName_uuid pattern"
+    assert len(parts[1].split("_")[-1]) == 12, "UUID suffix should be 12 hex chars"
+
+    # Cleanup
+    delattr(target_module, parts[1])
 
 
 # =============================================================================
@@ -926,7 +977,7 @@ class TestRegistrationStrategy:
         from unittest import mock
 
         # Must patch where it's used (base.py), not where it's defined (local_persistence)
-        with mock.patch("ccflow.base._register") as mock_do_reg:
+        with mock.patch("ccflow.base.register_ccflow_import_path") as mock_do_reg:
 
             def create_local():
                 class LocalModel(BaseModel):
@@ -936,7 +987,7 @@ class TestRegistrationStrategy:
 
             LocalModel = create_local()
 
-            # _register SHOULD be called immediately for local classes
+            # register_ccflow_import_path SHOULD be called immediately for local classes
             mock_do_reg.assert_called_once()
             # Verify it has <locals> in qualname
             assert "<locals>" in LocalModel.__qualname__

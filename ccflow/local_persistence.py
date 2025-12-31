@@ -6,8 +6,8 @@ We keep __module__ and __qualname__ unchanged so cloudpickle can still serialize
 class definition.
 
 This module provides:
-- _register(cls): Register a local class with a unique import path
-- _sync_to_module(cls): Ensure a class with __ccflow_import_path__ is on the module
+- register_ccflow_import_path(cls): Register a local class with a unique import path
+- sync_to_module(cls): Ensure a class with __ccflow_import_path__ is on the module
   (used for cross-process unpickle scenarios)
 - create_ccflow_model: Wrapper around pydantic.create_model that registers the created model
 """
@@ -22,11 +22,15 @@ __all__ = ("LOCAL_ARTIFACTS_MODULE_NAME", "create_ccflow_model")
 LOCAL_ARTIFACTS_MODULE_NAME = "ccflow.local_persistence"
 
 
-def _register(cls: Type[Any]) -> None:
-    """Give cls a unique name and register it on the artifacts module.
+def _register_on_module(cls: Type[Any], module_name: str) -> None:
+    """Register cls on the specified module with a unique name.
 
     This sets __ccflow_import_path__ on the class without modifying __module__ or
     __qualname__, preserving cloudpickle's ability to serialize the class definition.
+
+    Args:
+        cls: The class to register.
+        module_name: The fully-qualified module name to register on (must be in sys.modules).
     """
     # Sanitize the class name to be a valid Python identifier
     name = re.sub(r"[^0-9A-Za-z_]", "_", cls.__name__ or "Model").strip("_") or "Model"
@@ -34,11 +38,20 @@ def _register(cls: Type[Any]) -> None:
         name = f"_{name}"
     unique = f"_Local_{name}_{uuid.uuid4().hex[:12]}"
 
-    setattr(sys.modules[LOCAL_ARTIFACTS_MODULE_NAME], unique, cls)
-    cls.__ccflow_import_path__ = f"{LOCAL_ARTIFACTS_MODULE_NAME}.{unique}"
+    setattr(sys.modules[module_name], unique, cls)
+    cls.__ccflow_import_path__ = f"{module_name}.{unique}"
 
 
-def _sync_to_module(cls: Type[Any]) -> None:
+def register_ccflow_import_path(cls: Type[Any]) -> None:
+    """Give cls a unique name and register it on ccflow.local_persistence.
+
+    This sets __ccflow_import_path__ on the class without modifying __module__ or
+    __qualname__, preserving cloudpickle's ability to serialize the class definition.
+    """
+    _register_on_module(cls, LOCAL_ARTIFACTS_MODULE_NAME)
+
+
+def sync_to_module(cls: Type[Any]) -> None:
     """Ensure cls is registered on the artifacts module in this process.
 
     This handles cross-process unpickle scenarios where cloudpickle recreates the class
@@ -77,6 +90,6 @@ def create_ccflow_model(__model_name: str, *, __base__: Any = None, **field_defi
     from ccflow.base import BaseModel
 
     if isinstance(model, type) and issubclass(model, BaseModel):
-        _register(model)
+        register_ccflow_import_path(model)
 
     return model

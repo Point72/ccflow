@@ -176,7 +176,7 @@ class TestBaseModel(TestCase):
 
 class TestLocalRegistration(TestCase):
     def test_local_class_registered_for_base_model(self):
-        with mock.patch("ccflow.base._register") as register:
+        with mock.patch("ccflow.base.register_ccflow_import_path") as register:
 
             class LocalModel(BaseModel):
                 value: int
@@ -186,7 +186,7 @@ class TestLocalRegistration(TestCase):
         self.assertIn(LocalModel, calls)
 
     def test_local_class_registered_for_context(self):
-        with mock.patch("ccflow.base._register") as register:
+        with mock.patch("ccflow.base.register_ccflow_import_path") as register:
 
             class LocalContext(ContextBase):
                 value: int
@@ -195,7 +195,7 @@ class TestLocalRegistration(TestCase):
         self.assertIn(LocalContext, calls)
 
     def test_local_class_registered_for_callable(self):
-        with mock.patch("ccflow.base._register") as register:
+        with mock.patch("ccflow.base.register_ccflow_import_path") as register:
 
             class LocalCallable(CallableModel):
                 @Flow.call
