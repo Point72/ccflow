@@ -30,7 +30,7 @@ from pydantic.fields import Field
 from typing_extensions import Self
 
 from .exttypes.pyobjectpath import PyObjectPath
-from .local_persistence import _register, _sync_to_module
+from .local_persistence import register_ccflow_import_path, sync_to_module
 
 log = logging.getLogger(__name__)
 
@@ -165,10 +165,10 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
         # - __main__ classes aren't importable cross-process (cloudpickle recreates them but
         #   doesn't add them to sys.modules["__main__"])
         # Note: Cross-process unpickle sync (when __ccflow_import_path__ is already set) happens
-        # lazily via _sync_to_module, since cloudpickle sets class attributes
+        # lazily via sync_to_module, since cloudpickle sets class attributes
         # AFTER __pydantic_init_subclass__ runs.
         if "<locals>" in cls.__qualname__ or cls.__module__ == "__main__":
-            _register(cls)
+            register_ccflow_import_path(cls)
 
     @computed_field(
         alias="_target_",
@@ -189,7 +189,7 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
         # Handle cross-process unpickle: cloudpickle sets __ccflow_import_path__ but
         # the class may not be on ccflow.local_persistence yet in this process
         if "__ccflow_import_path__" in cls.__dict__:
-            _sync_to_module(cls)
+            sync_to_module(cls)
         return PyObjectPath.validate(cls)
 
     # We want to track under what names a model has been registered
