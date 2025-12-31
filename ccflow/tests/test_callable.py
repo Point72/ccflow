@@ -20,6 +20,7 @@ from ccflow import (
     ResultBase,
     ResultType,
     WrapperModel,
+    dynamic_context,
 )
 from ccflow.local_persistence import LOCAL_ARTIFACTS_MODULE_NAME
 
@@ -783,3 +784,383 @@ class TestCallableModelDeps(TestCase):
                 @Flow.deps
                 def foo(self, context):
                     return []
+
+
+# =============================================================================
+# Tests for dynamic_context decorator
+# =============================================================================
+
+
+class TestDynamicContext(TestCase):
+    """Tests for the @dynamic_context decorator."""
+
+    def test_basic_usage_with_kwargs(self):
+        """Test basic dynamic_context usage with keyword arguments."""
+
+        class DynamicCallable(CallableModel):
+            @Flow.call
+            @dynamic_context
+            def __call__(self, *, x: int, y: str = "default") -> GenericResult:
+                return GenericResult(value=f"{x}-{y}")
+
+        model = DynamicCallable()
+
+        # Call with kwargs
+        result = model(x=42, y="hello")
+        self.assertEqual(result.value, "42-hello")
+
+        # Call with default
+        result = model(x=10)
+        self.assertEqual(result.value, "10-default")
+
+    def test_dynamic_context_attribute(self):
+        """Test that __dynamic_context__ attribute is set."""
+
+        class DynamicCallable(CallableModel):
+            @Flow.call
+            @dynamic_context
+            def __call__(self, *, a: int, b: str) -> GenericResult:
+                return GenericResult(value=f"{a}-{b}")
+
+        # The __call__ method should have __dynamic_context__
+        call_method = DynamicCallable.__call__
+        self.assertTrue(hasattr(call_method, "__wrapped__"))
+        # Access the inner function's __dynamic_context__
+        inner = call_method.__wrapped__
+        self.assertTrue(hasattr(inner, "__dynamic_context__"))
+
+        dyn_ctx = inner.__dynamic_context__
+        self.assertTrue(issubclass(dyn_ctx, ContextBase))
+        self.assertIn("a", dyn_ctx.model_fields)
+        self.assertIn("b", dyn_ctx.model_fields)
+
+    def test_dynamic_context_is_registered(self):
+        """Test that the dynamic context is registered for serialization."""
+
+        class DynamicCallable(CallableModel):
+            @Flow.call
+            @dynamic_context
+            def __call__(self, *, value: int) -> GenericResult:
+                return GenericResult(value=value)
+
+        inner = DynamicCallable.__call__.__wrapped__
+        dyn_ctx = inner.__dynamic_context__
+
+        # Should have __ccflow_import_path__ set
+        self.assertTrue(hasattr(dyn_ctx, "__ccflow_import_path__"))
+        self.assertTrue(dyn_ctx.__ccflow_import_path__.startswith(LOCAL_ARTIFACTS_MODULE_NAME))
+
+    def test_call_with_context_object(self):
+        """Test calling with a context object instead of kwargs."""
+
+        class DynamicCallable(CallableModel):
+            @Flow.call
+            @dynamic_context
+            def __call__(self, *, x: int, y: str = "default") -> GenericResult:
+                return GenericResult(value=f"{x}-{y}")
+
+        model = DynamicCallable()
+
+        # Get the dynamic context class
+        dyn_ctx = DynamicCallable.__call__.__wrapped__.__dynamic_context__
+
+        # Create a context object
+        ctx = dyn_ctx(x=99, y="context")
+        result = model(ctx)
+        self.assertEqual(result.value, "99-context")
+
+    def test_with_parent_context(self):
+        """Test dynamic_context with parent context class."""
+
+        class ParentContext(ContextBase):
+            base_value: str = "base"
+
+        class DynamicCallable(CallableModel):
+            @Flow.call
+            @dynamic_context(parent=ParentContext)
+            def __call__(self, *, x: int, base_value: str) -> GenericResult:
+                return GenericResult(value=f"{x}-{base_value}")
+
+        # Get dynamic context
+        dyn_ctx = DynamicCallable.__call__.__wrapped__.__dynamic_context__
+
+        # Should inherit from ParentContext
+        self.assertTrue(issubclass(dyn_ctx, ParentContext))
+
+        # Should have both fields
+        self.assertIn("base_value", dyn_ctx.model_fields)
+        self.assertIn("x", dyn_ctx.model_fields)
+
+        # Create context with parent field
+        ctx = dyn_ctx(x=42, base_value="custom")
+        self.assertEqual(ctx.base_value, "custom")
+        self.assertEqual(ctx.x, 42)
+
+    def test_parent_fields_must_be_in_signature(self):
+        """Test that parent fields must be included in function signature."""
+
+        class ParentContext(ContextBase):
+            required_field: str
+
+        with self.assertRaises(TypeError) as cm:
+
+            class DynamicCallable(CallableModel):
+                @Flow.call
+                @dynamic_context(parent=ParentContext)
+                def __call__(self, *, x: int) -> GenericResult:
+                    return GenericResult(value=x)
+
+        self.assertIn("required_field", str(cm.exception))
+
+    def test_cloudpickle_roundtrip(self):
+        """Test cloudpickle roundtrip for dynamic context callable."""
+
+        class DynamicCallable(CallableModel):
+            multiplier: int = 2
+
+            @Flow.call
+            @dynamic_context
+            def __call__(self, *, x: int) -> GenericResult:
+                return GenericResult(value=x * self.multiplier)
+
+        model = DynamicCallable(multiplier=3)
+
+        # Test roundtrip
+        restored = rcploads(rcpdumps(model))
+
+        result = restored(x=10)
+        self.assertEqual(result.value, 30)
+
+    def test_ray_task_execution(self):
+        """Test dynamic context callable in Ray task."""
+
+        class DynamicCallable(CallableModel):
+            factor: int = 2
+
+            @Flow.call
+            @dynamic_context
+            def __call__(self, *, x: int, y: int = 1) -> GenericResult:
+                return GenericResult(value=(x + y) * self.factor)
+
+        @ray.remote
+        def run_callable(model, **kwargs):
+            return model(**kwargs).value
+
+        model = DynamicCallable(factor=5)
+
+        with ray.init(num_cpus=1):
+            result = ray.get(run_callable.remote(model, x=10, y=2))
+
+        self.assertEqual(result, 60)  # (10 + 2) * 5
+
+    def test_multiple_dynamic_context_methods(self):
+        """Test callable with multiple dynamic_context decorated methods."""
+
+        class MultiMethodCallable(CallableModel):
+            @Flow.call
+            @dynamic_context
+            def __call__(self, *, a: int) -> GenericResult:
+                return GenericResult(value=a)
+
+            @dynamic_context
+            def other_method(self, *, b: str, c: float = 1.0) -> GenericResult:
+                return GenericResult(value=f"{b}-{c}")
+
+        model = MultiMethodCallable()
+
+        # Test __call__
+        result1 = model(a=42)
+        self.assertEqual(result1.value, 42)
+
+        # Test other_method (without Flow.call, just the dynamic_context wrapper)
+        # Need to create the context manually
+        other_ctx = model.other_method.__dynamic_context__
+        ctx = other_ctx(b="hello", c=2.5)
+        result2 = model.other_method(ctx)
+        self.assertEqual(result2.value, "hello-2.5")
+
+    def test_context_type_property_works(self):
+        """Test that type_ property works on the dynamic context."""
+
+        class DynamicCallable(CallableModel):
+            @Flow.call
+            @dynamic_context
+            def __call__(self, *, x: int) -> GenericResult:
+                return GenericResult(value=x)
+
+        dyn_ctx = DynamicCallable.__call__.__wrapped__.__dynamic_context__
+        ctx = dyn_ctx(x=42)
+
+        # type_ should work and be importable
+        type_path = str(ctx.type_)
+        self.assertIn("_Local_", type_path)
+        self.assertEqual(ctx.type_.object, dyn_ctx)
+
+    def test_complex_field_types(self):
+        """Test dynamic_context with complex field types."""
+        from typing import List, Optional
+
+        class DynamicCallable(CallableModel):
+            @Flow.call
+            @dynamic_context
+            def __call__(
+                self,
+                *,
+                items: List[int],
+                name: Optional[str] = None,
+                count: int = 0,
+            ) -> GenericResult:
+                total = sum(items) + count
+                return GenericResult(value=f"{name}:{total}" if name else str(total))
+
+        model = DynamicCallable()
+
+        result = model(items=[1, 2, 3], name="test", count=10)
+        self.assertEqual(result.value, "test:16")
+
+        result = model(items=[5, 5])
+        self.assertEqual(result.value, "10")
+
+
+class TestFlowDynamicCall(TestCase):
+    """Tests for @Flow.dynamic_call decorator."""
+
+    def test_basic_usage(self):
+        """Test basic @Flow.dynamic_call usage."""
+
+        class DynamicCallable(CallableModel):
+            @Flow.dynamic_call
+            def __call__(self, *, x: int, y: str = "default") -> GenericResult:
+                return GenericResult(value=f"{x}-{y}")
+
+        model = DynamicCallable()
+
+        result = model(x=42, y="hello")
+        self.assertEqual(result.value, "42-hello")
+
+        result = model(x=10)
+        self.assertEqual(result.value, "10-default")
+
+    def test_dynamic_context_attributes_preserved(self):
+        """Test that __dynamic_context__ and __result_type__ are directly accessible."""
+
+        class DynamicCallable(CallableModel):
+            @Flow.dynamic_call
+            def __call__(self, *, x: int) -> GenericResult:
+                return GenericResult(value=x)
+
+        # Should be directly accessible without traversing __wrapped__ chain
+        method = DynamicCallable.__call__
+        self.assertTrue(hasattr(method, "__dynamic_context__"))
+        self.assertTrue(hasattr(method, "__result_type__"))
+        self.assertTrue(issubclass(method.__dynamic_context__, ContextBase))
+        self.assertEqual(method.__result_type__, GenericResult)
+
+    def test_model_result_type_property(self):
+        """Test that model.result_type returns correct type for dynamic contexts."""
+
+        class DynamicCallable(CallableModel):
+            @Flow.dynamic_call
+            def __call__(self, *, x: int) -> GenericResult:
+                return GenericResult(value=x)
+
+        model = DynamicCallable()
+        self.assertEqual(model.result_type, GenericResult)
+
+    def test_with_parent_context(self):
+        """Test @Flow.dynamic_call with parent context."""
+
+        class ParentContext(ContextBase):
+            base_value: str = "base"
+
+        class DynamicCallable(CallableModel):
+            @Flow.dynamic_call(parent=ParentContext)
+            def __call__(self, *, x: int, base_value: str) -> GenericResult:
+                return GenericResult(value=f"{x}-{base_value}")
+
+        model = DynamicCallable()
+
+        # Get dynamic context by traversing __wrapped__ chain
+        dyn_ctx = _find_dynamic_context(DynamicCallable.__call__)
+
+        # Should inherit from ParentContext
+        self.assertTrue(issubclass(dyn_ctx, ParentContext))
+
+        # Call should work, uses parent default
+        result = model(x=42, base_value="custom")
+        self.assertEqual(result.value, "42-custom")
+
+    def test_with_flow_options(self):
+        """Test @Flow.dynamic_call with FlowOptions parameters."""
+
+        class DynamicCallable(CallableModel):
+            @Flow.dynamic_call(validate_result=False)
+            def __call__(self, *, x: int) -> GenericResult:
+                return GenericResult(value=x)
+
+        model = DynamicCallable()
+        result = model(x=42)
+        self.assertEqual(result.value, 42)
+
+    def test_cloudpickle_roundtrip(self):
+        """Test cloudpickle roundtrip with @Flow.dynamic_call."""
+
+        class DynamicCallable(CallableModel):
+            multiplier: int = 2
+
+            @Flow.dynamic_call
+            def __call__(self, *, x: int) -> GenericResult:
+                return GenericResult(value=x * self.multiplier)
+
+        model = DynamicCallable(multiplier=3)
+        restored = rcploads(rcpdumps(model))
+
+        result = restored(x=10)
+        self.assertEqual(result.value, 30)
+
+    def test_ray_task(self):
+        """Test @Flow.dynamic_call in Ray task."""
+
+        class DynamicCallable(CallableModel):
+            factor: int = 2
+
+            @Flow.dynamic_call
+            def __call__(self, *, x: int, y: int = 1) -> GenericResult:
+                return GenericResult(value=(x + y) * self.factor)
+
+        @ray.remote
+        def run_callable(model, **kwargs):
+            return model(**kwargs).value
+
+        model = DynamicCallable(factor=5)
+
+        with ray.init(num_cpus=1):
+            result = ray.get(run_callable.remote(model, x=10, y=2))
+
+        self.assertEqual(result, 60)
+
+    def test_dynamic_context_is_registered(self):
+        """Test that the dynamic context from @Flow.dynamic_call is registered."""
+
+        class DynamicCallable(CallableModel):
+            @Flow.dynamic_call
+            def __call__(self, *, value: int) -> GenericResult:
+                return GenericResult(value=value)
+
+        # Find dynamic context by traversing __wrapped__ chain
+        dyn_ctx = _find_dynamic_context(DynamicCallable.__call__)
+
+        self.assertTrue(hasattr(dyn_ctx, "__ccflow_import_path__"))
+        self.assertTrue(dyn_ctx.__ccflow_import_path__.startswith(LOCAL_ARTIFACTS_MODULE_NAME))
+
+
+def _find_dynamic_context(func):
+    """Helper to find __dynamic_context__ by traversing the __wrapped__ chain."""
+    visited = set()
+    current = func
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        if hasattr(current, "__dynamic_context__"):
+            return current.__dynamic_context__
+        current = getattr(current, "__wrapped__", None)
+    return None
