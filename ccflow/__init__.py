@@ -12,6 +12,7 @@ from .callable import *
 from .context import *
 from .enums import Enum
 from .global_state import *
+from .local_persistence import *
 from .models import *
 from .object_config import *
 from .publisher import *

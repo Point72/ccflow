@@ -21,6 +21,7 @@ from ccflow import (
     ResultType,
     WrapperModel,
 )
+from ccflow.local_persistence import LOCAL_ARTIFACTS_MODULE_NAME
 
 
 class MyContext(ContextBase):
@@ -491,6 +492,38 @@ class TestCallableModel(TestCase):
         result = m(NullContext())
         self.assertIsInstance(result, AResult)
         self.assertEqual(result.a, 1)
+
+
+class TestCallableModelRegistration(TestCase):
+    """Smoke test verifying CallableModel inherits registration from BaseModel.
+
+    NOTE: Registration behavior is thoroughly tested at the BaseModel level in
+    test_local_persistence.py. This single test verifies inheritance works.
+    """
+
+    def test_local_callable_smoke_test(self):
+        """Verify that local CallableModel classes inherit registration from BaseModel."""
+
+        class LocalContext(ContextBase):
+            value: int
+
+        class LocalCallable(CallableModel):
+            @Flow.call
+            def __call__(self, context: LocalContext) -> GenericResult:
+                return GenericResult(value=context.value * 2)
+
+        # Basic registration should work (inherits from BaseModel)
+        self.assertIn("<locals>", LocalCallable.__qualname__)
+        self.assertTrue(hasattr(LocalCallable, "__ccflow_import_path__"))
+        self.assertTrue(LocalCallable.__ccflow_import_path__.startswith(LOCAL_ARTIFACTS_MODULE_NAME))
+
+        # type_ should work
+        instance = LocalCallable()
+        self.assertEqual(instance.type_.object, LocalCallable)
+
+        # Callable should execute correctly
+        result = instance(LocalContext(value=21))
+        self.assertEqual(result.value, 42)
 
 
 class TestWrapperModel(TestCase):
