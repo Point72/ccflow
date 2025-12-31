@@ -327,100 +327,73 @@ def pickle_file(tmp_path):
 
 
 class TestCloudpickleCrossProcess:
-    """Tests for cross-process cloudpickle behavior (subprocess tests)."""
+    """Tests for cross-process cloudpickle behavior (subprocess tests).
 
-    def test_local_basemodel_cloudpickle_cross_process(self, pickle_file):
-        """Test that local-scope BaseModel subclasses work with cloudpickle cross-process."""
-        pkl_path = pickle_file
+    These tests verify that ccflow classes (BaseModel, ContextBase, CallableModel)
+    with local or __main__ scope can be pickled in one process and unpickled in another,
+    with .type_ (PyObjectPath) working correctly after unpickle.
+    """
 
-        # Create a local-scope BaseModel in subprocess 1 and pickle it
-        create_code = f'''
+    @pytest.mark.parametrize(
+        "create_code,load_code",
+        [
+            pytest.param(
+                # Local-scope BaseModel
+                """
 from ray.cloudpickle import dump
 from ccflow import BaseModel
 
-def create_local_model():
+def create_local():
     class LocalModel(BaseModel):
         value: int
-
     return LocalModel
 
-LocalModel = create_local_model()
+LocalModel = create_local()
+assert "<locals>" in LocalModel.__qualname__
+assert hasattr(LocalModel, "__ccflow_import_path__")
 
-# Verify __qualname__ has '<locals>' (enables cloudpickle serialization)
-assert "<locals>" in LocalModel.__qualname__, f"Expected '<locals>' in qualname: {{LocalModel.__qualname__}}"
-
-# Verify __ccflow_import_path__ is set (enables PyObjectPath)
-assert hasattr(LocalModel, "__ccflow_import_path__"), "Expected __ccflow_import_path__ to be set"
-
-# Create instance and verify type_ works (PyObjectPath validation)
 instance = LocalModel(value=42)
-type_path = instance.type_
-print(f"type_: {{type_path}}")
+_ = instance.type_
 
-# Pickle the instance
 with open("{pkl_path}", "wb") as f:
     dump(instance, f)
-
-print("SUCCESS: Created and pickled")
-'''
-        create_result = subprocess.run([sys.executable, "-c", create_code], capture_output=True, text=True)
-        assert create_result.returncode == 0, f"Create subprocess failed: {create_result.stderr}"
-        assert "SUCCESS" in create_result.stdout, f"Create subprocess output: {create_result.stdout}"
-
-        # Load in subprocess 2 (different process, class not pre-defined)
-        load_code = f'''
+print("SUCCESS")
+""",
+                """
 from ray.cloudpickle import load
 
 with open("{pkl_path}", "rb") as f:
     obj = load(f)
 
-# Verify the value was preserved
-assert obj.value == 42, f"Expected value=42, got {{obj.value}}"
-
-# Verify type_ works after unpickling (class was re-registered)
-type_path = obj.type_
-print(f"type_: {{type_path}}")
-
-# Verify the import path works
-import importlib
-path_parts = str(type_path).rsplit(".", 1)
-module = importlib.import_module(path_parts[0])
-cls = getattr(module, path_parts[1])
-assert cls is type(obj), "Import path should resolve to the same class"
-
-print("SUCCESS: Loaded and verified")
-'''
-        load_result = subprocess.run([sys.executable, "-c", load_code], capture_output=True, text=True)
-        assert load_result.returncode == 0, f"Load subprocess failed: {load_result.stderr}"
-        assert "SUCCESS" in load_result.stdout, f"Load subprocess output: {load_result.stdout}"
-
-    def test_context_base_cross_process(self, pickle_file):
-        """Test cross-process cloudpickle for ContextBase subclasses."""
-        pkl_path = pickle_file
-
-        create_code = f'''
+assert obj.value == 42
+assert obj.type_.object is type(obj)
+print("SUCCESS")
+""",
+                id="local_basemodel",
+            ),
+            pytest.param(
+                # Local-scope ContextBase
+                """
 from ray.cloudpickle import dump
 from ccflow import ContextBase
 
-def create_context():
+def create_local():
     class LocalContext(ContextBase):
         name: str
         value: int
     return LocalContext
 
-LocalContext = create_context()
+LocalContext = create_local()
 assert "<locals>" in LocalContext.__qualname__
+
 instance = LocalContext(name="test", value=42)
-_ = instance.type_  # Verify type_ works before pickle
+_ = instance.type_
 
 with open("{pkl_path}", "wb") as f:
     dump(instance, f)
 print("SUCCESS")
-'''
-        create_result = subprocess.run([sys.executable, "-c", create_code], capture_output=True, text=True)
-        assert create_result.returncode == 0, f"Create failed: {create_result.stderr}"
-
-        load_code = f'''
+""",
+                """
 from ray.cloudpickle import load
 
 with open("{pkl_path}", "rb") as f:
@@ -428,22 +401,18 @@ with open("{pkl_path}", "rb") as f:
 
 assert obj.name == "test"
 assert obj.value == 42
-type_path = obj.type_  # Verify type_ works after unpickle
-assert type_path.object is type(obj)
+assert obj.type_.object is type(obj)
 print("SUCCESS")
-'''
-        load_result = subprocess.run([sys.executable, "-c", load_code], capture_output=True, text=True)
-        assert load_result.returncode == 0, f"Load failed: {load_result.stderr}"
-
-    def test_callable_model_cross_process(self, pickle_file):
-        """Test cross-process cloudpickle for CallableModel subclasses."""
-        pkl_path = pickle_file
-
-        create_code = f'''
+""",
+                id="local_context",
+            ),
+            pytest.param(
+                # Local-scope CallableModel (also tests callable execution)
+                """
 from ray.cloudpickle import dump
 from ccflow import CallableModel, ContextBase, GenericResult, Flow
 
-def create_callable():
+def create_local():
     class LocalContext(ContextBase):
         x: int
 
@@ -456,84 +425,83 @@ def create_callable():
 
     return LocalContext, LocalCallable
 
-LocalContext, LocalCallable = create_callable()
-instance = LocalCallable(multiplier=3)
-context = LocalContext(x=10)
-
-# Verify it works
-result = instance(context)
+LocalContext, LocalCallable = create_local()
+model = LocalCallable(multiplier=3)
+ctx = LocalContext(x=10)
+result = model(ctx)
 assert result.value == 30
 
 with open("{pkl_path}", "wb") as f:
-    dump((instance, context), f)
+    dump((model, ctx), f)
 print("SUCCESS")
-'''
-        create_result = subprocess.run([sys.executable, "-c", create_code], capture_output=True, text=True)
-        assert create_result.returncode == 0, f"Create failed: {create_result.stderr}"
-
-        load_code = f'''
+""",
+                """
 from ray.cloudpickle import load
 
 with open("{pkl_path}", "rb") as f:
-    instance, context = load(f)
+    model, ctx = load(f)
 
-# Verify the callable works after unpickle
-result = instance(context)
+result = model(ctx)
 assert result.value == 30
-
-# Verify type_ works
-assert instance.type_.object is type(instance)
-assert context.type_.object is type(context)
+assert model.type_.object is type(model)
+assert ctx.type_.object is type(ctx)
 print("SUCCESS")
-'''
-        load_result = subprocess.run([sys.executable, "-c", load_code], capture_output=True, text=True)
-        assert load_result.returncode == 0, f"Load failed: {load_result.stderr}"
-
-    def test_main_module_class_cross_process(self, pickle_file):
-        """Test that __main__ module classes work with cloudpickle cross-process.
-
-        Classes defined in __main__ need registration because cloudpickle recreates
-        them but doesn't add them to sys.modules["__main__"] in the target process.
-        """
-        pkl_path = pickle_file
-
-        # Create a __main__ class and pickle it (class is at module level, not in a function)
-        create_code = f'''
+""",
+                id="local_callable",
+            ),
+            pytest.param(
+                # __main__ module class (not inside a function)
+                # cloudpickle recreates but doesn't add to sys.modules["__main__"]
+                """
 from ray.cloudpickle import dump
 from ccflow import ContextBase
 
-# This class is in __main__ (not inside a function)
 class MainContext(ContextBase):
     value: int
 
-# Verify it's registered (has __ccflow_import_path__)
-assert hasattr(MainContext, "__ccflow_import_path__"), "Expected __main__ class to be registered"
 assert MainContext.__module__ == "__main__"
+assert hasattr(MainContext, "__ccflow_import_path__")
 
 instance = MainContext(value=42)
-type_path = instance.type_  # Verify type_ works before pickle
+_ = instance.type_
 
 with open("{pkl_path}", "wb") as f:
     dump(instance, f)
 print("SUCCESS")
-'''
-        create_result = subprocess.run([sys.executable, "-c", create_code], capture_output=True, text=True)
-        assert create_result.returncode == 0, f"Create failed: {create_result.stderr}"
-
-        # Load in a different process - type_ should work
-        load_code = f'''
+""",
+                """
 from ray.cloudpickle import load
 
 with open("{pkl_path}", "rb") as f:
     obj = load(f)
 
 assert obj.value == 42
-type_path = obj.type_  # This would fail without registration
-assert type_path.object is type(obj)
+assert obj.type_.object is type(obj)
 print("SUCCESS")
-'''
-        load_result = subprocess.run([sys.executable, "-c", load_code], capture_output=True, text=True)
+""",
+                id="main_module",
+            ),
+        ],
+    )
+    def test_cross_process_cloudpickle(self, pickle_file, create_code, load_code):
+        """Test that ccflow classes work with cloudpickle across processes."""
+        pkl_path = pickle_file
+
+        create_result = subprocess.run(
+            [sys.executable, "-c", create_code.format(pkl_path=pkl_path)],
+            capture_output=True,
+            text=True,
+        )
+        assert create_result.returncode == 0, f"Create failed: {create_result.stderr}"
+        assert "SUCCESS" in create_result.stdout
+
+        load_result = subprocess.run(
+            [sys.executable, "-c", load_code.format(pkl_path=pkl_path)],
+            capture_output=True,
+            text=True,
+        )
         assert load_result.returncode == 0, f"Load failed: {load_result.stderr}"
+        assert "SUCCESS" in load_result.stdout
 
 
 # =============================================================================
@@ -1173,18 +1141,18 @@ class TestCreateCcflowModelCloudpickleSameProcess:
 
 
 class TestCreateCcflowModelCloudpickleCrossProcess:
-    """Tests for cross-process cloudpickle with dynamically created models."""
+    """Tests for cross-process cloudpickle with dynamically created models (via create_ccflow_model)."""
 
-    def test_create_ccflow_model_cross_process(self, pickle_file):
-        """Test that dynamically created models work across processes."""
-        pkl_path = pickle_file
-
-        create_code = f'''
+    @pytest.mark.parametrize(
+        "create_code,load_code",
+        [
+            pytest.param(
+                # Context only
+                """
 from ray.cloudpickle import dump
 from ccflow import ContextBase
 from ccflow.local_persistence import create_ccflow_model
 
-# Create a dynamic context using the wrapper
 DynamicContext = create_ccflow_model(
     "CrossProcessContext",
     __base__=ContextBase,
@@ -1192,59 +1160,36 @@ DynamicContext = create_ccflow_model(
     value=(int, 0),
 )
 
-# Verify registration
 assert hasattr(DynamicContext, "__ccflow_import_path__")
 
-# Create instance and verify type_ works
 ctx = DynamicContext(name="test", value=42)
-type_path = str(ctx.type_)
-print(f"type_: {{type_path}}")
-assert "_Local_" in type_path
+assert "_Local_" in str(ctx.type_)
 
-# Pickle
 with open("{pkl_path}", "wb") as f:
     dump(ctx, f)
-
-print("SUCCESS: Created and pickled")
-'''
-        create_result = subprocess.run([sys.executable, "-c", create_code], capture_output=True, text=True)
-        assert create_result.returncode == 0, f"Create subprocess failed: {create_result.stderr}"
-        assert "SUCCESS" in create_result.stdout, f"Create subprocess output: {create_result.stdout}"
-
-        load_code = f'''
+print("SUCCESS")
+""",
+                """
 from ray.cloudpickle import load
 
 with open("{pkl_path}", "rb") as f:
     ctx = load(f)
 
-# Verify values preserved
-assert ctx.name == "test", f"Expected name='test', got {{ctx.name}}"
-assert ctx.value == 42, f"Expected value=42, got {{ctx.value}}"
-
-# Verify type_ works after unpickle
-type_path = str(ctx.type_)
-print(f"type_: {{type_path}}")
-assert "_Local_" in type_path
-
-# Verify the class can be resolved
+assert ctx.name == "test"
+assert ctx.value == 42
+assert "_Local_" in str(ctx.type_)
 assert ctx.type_.object is type(ctx)
-
-print("SUCCESS: Loaded and verified")
-'''
-        load_result = subprocess.run([sys.executable, "-c", load_code], capture_output=True, text=True)
-        assert load_result.returncode == 0, f"Load subprocess failed: {load_result.stderr}"
-        assert "SUCCESS" in load_result.stdout, f"Load subprocess output: {load_result.stdout}"
-
-    def test_create_ccflow_model_with_callable_model_cross_process(self, pickle_file):
-        """Test dynamically created contexts used with CallableModel across processes."""
-        pkl_path = pickle_file
-
-        create_code = f'''
+print("SUCCESS")
+""",
+                id="context_only",
+            ),
+            pytest.param(
+                # Dynamic context with CallableModel
+                """
 from ray.cloudpickle import dump
 from ccflow import CallableModel, ContextBase, GenericResult, Flow
 from ccflow.local_persistence import create_ccflow_model
 
-# Create a dynamic context
 DynamicContext = create_ccflow_model(
     "CallableModelContext",
     __base__=ContextBase,
@@ -1252,8 +1197,6 @@ DynamicContext = create_ccflow_model(
     multiplier=(int, 2),
 )
 
-# Create a callable model using the dynamic context (defined inside a function
-# to get <locals> in qualname for automatic registration)
 def create_callable():
     class DynamicCallable(CallableModel):
         @Flow.call
@@ -1264,39 +1207,46 @@ def create_callable():
 DynamicCallable = create_callable()
 model = DynamicCallable()
 ctx = DynamicContext(x=10, multiplier=3)
-
-# Verify it works
 result = model(ctx)
 assert result.value == 30
 
 with open("{pkl_path}", "wb") as f:
     dump((model, ctx), f)
-
 print("SUCCESS")
-'''
-        create_result = subprocess.run([sys.executable, "-c", create_code], capture_output=True, text=True)
-        assert create_result.returncode == 0, f"Create failed: {create_result.stderr}"
-        assert "SUCCESS" in create_result.stdout
-
-        load_code = f'''
+""",
+                """
 from ray.cloudpickle import load
 
 with open("{pkl_path}", "rb") as f:
     model, ctx = load(f)
 
-# Verify the callable works
 result = model(ctx)
 assert result.value == 30
-
-# Verify type_ works for the dynamically created context (our focus)
 assert ctx.type_.object is type(ctx)
-
-# Verify callable model type_ works (it should since it was defined in a function)
 assert model.type_.object is type(model)
-
 print("SUCCESS")
-'''
-        load_result = subprocess.run([sys.executable, "-c", load_code], capture_output=True, text=True)
+""",
+                id="with_callable",
+            ),
+        ],
+    )
+    def test_create_ccflow_model_cross_process(self, pickle_file, create_code, load_code):
+        """Test that dynamically created models work across processes."""
+        pkl_path = pickle_file
+
+        create_result = subprocess.run(
+            [sys.executable, "-c", create_code.format(pkl_path=pkl_path)],
+            capture_output=True,
+            text=True,
+        )
+        assert create_result.returncode == 0, f"Create failed: {create_result.stderr}"
+        assert "SUCCESS" in create_result.stdout
+
+        load_result = subprocess.run(
+            [sys.executable, "-c", load_code.format(pkl_path=pkl_path)],
+            capture_output=True,
+            text=True,
+        )
         assert load_result.returncode == 0, f"Load failed: {load_result.stderr}"
         assert "SUCCESS" in load_result.stdout
 

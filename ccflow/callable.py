@@ -446,27 +446,59 @@ class Flow(PydanticBaseModel):
 
     @staticmethod
     def dynamic_call(*args, **kwargs):
-        """Decorator for methods that creates a dynamic context from the function signature.
+        """Decorator that combines @Flow.call with dynamic context creation.
 
-        This combines @Flow.call and @dynamic_context into a single decorator, allowing
-        you to define the context inline in the function signature instead of creating
-        a separate context class.
+        Instead of defining a separate context class, this decorator creates one
+        automatically from the function signature. The method can then be called
+        with keyword arguments directly.
 
-        Example:
+        Basic Example:
             class MyModel(CallableModel):
                 @Flow.dynamic_call
-                def __call__(self, *, a: int, b: str = "default") -> GenericResult:
-                    return GenericResult(value=f"{a}-{b}")
+                def __call__(self, *, date: date, region: str = "US") -> MyResult:
+                    return MyResult(value=f"{date}-{region}")
 
             model = MyModel()
-            model(a=42)  # Works with kwargs
-            model(a=42, b="test")  # Also works
+            model(date=date.today())              # Uses default region="US"
+            model(date=date.today(), region="EU") # Override default
+
+        With Parent Context:
+            class MyModel(CallableModel):
+                @Flow.dynamic_call(parent=DateContext)
+                def __call__(self, *, date: date, extra: int = 0) -> MyResult:
+                    return MyResult(value=date.day + extra)
+
+            # Parent fields (date) must be included in the function signature.
+            # This is useful for integrating with existing infrastructure that
+            # expects specific context types.
 
         Args:
-            *args: When used without arguments, the decorated function
-            **kwargs: FlowOptions parameters (log_level, verbose, validate_result, etc.)
-                      plus dynamic_context options:
-                      - parent: Optional parent context class to inherit from
+            *args: The decorated function when used without parentheses
+            **kwargs: Combined options for FlowOptions and dynamic_context:
+
+                Dynamic context options:
+                    parent: Parent context class to inherit from. All parent fields
+                        must appear in the function signature.
+
+                FlowOptions (passed through to @Flow.call):
+                    log_level: Logging level for evaluation (default: DEBUG)
+                    verbose: Use verbose logging (default: True)
+                    validate_result: Validate return against result_type (default: True)
+                    cacheable: Allow result caching (default: False)
+                    evaluator: Custom evaluator instance
+
+        Returns:
+            A decorated method that accepts keyword arguments matching the signature.
+
+        Notes:
+            - All parameters (except 'self') must have type annotations
+            - Use keyword-only parameters (after *) for cleaner signatures
+            - The generated context class is accessible via method.__dynamic_context__
+            - The return type is accessible via method.__result_type__
+
+        See Also:
+            dynamic_context: The underlying decorator for context creation
+            Flow.call: The underlying decorator for flow evaluation
         """
         # Import here to avoid circular import at module level
         from ccflow.callable import dynamic_context
