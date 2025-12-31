@@ -9,8 +9,6 @@ from pydantic import TypeAdapter
 from pydantic_core import core_schema
 from typing_extensions import Self
 
-from ccflow.local_persistence import _register_local_subclass_if_needed
-
 
 @lru_cache(maxsize=None)
 def import_string(dotted_path: str) -> Any:
@@ -120,13 +118,15 @@ class PyObjectPath(str):
 
     @classmethod
     def _path_from_object(cls, value: Any) -> "PyObjectPath":
-        """Build import path from an object. Triggers ccflow registration for local classes."""
-        if isinstance(value, type):
-            # For ccflow BaseModel subclasses that aren't normally importable (defined in
-            # functions or via create_model), this registers them on ccflow.base
-            _register_local_subclass_if_needed(value)
+        """Build import path from an object.
 
-            # Use __ccflow_import_path__ if set (check __dict__ to avoid inheriting from parents)
+        For ccflow BaseModel subclasses with __ccflow_import_path__ set (local classes),
+        uses that path. Otherwise uses the standard module.qualname path.
+        """
+        if isinstance(value, type):
+            # Use __ccflow_import_path__ if set (check __dict__ to avoid inheriting from parents).
+            # Note: accessing .__dict__ is safe here because value is a type (class object),
+            # and all class objects have __dict__. Only instances of __slots__ classes lack it.
             if "__ccflow_import_path__" in value.__dict__:
                 return cls(value.__ccflow_import_path__)
             return cls(_build_standard_import_path(value))

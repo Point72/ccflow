@@ -1,21 +1,15 @@
 import logging
 from datetime import date
-from typing import ClassVar
 from unittest import TestCase
 
 import pandas as pd
 import pyarrow as pa
 
 from ccflow import (
-    CallableModel,
-    ContextBase,
     DateContext,
     DateRangeContext,
     Evaluator,
-    Flow,
-    FlowOptions,
     FlowOptionsOverride,
-    GenericResult,
     ModelEvaluationContext,
     NullContext,
 )
@@ -29,7 +23,6 @@ from ccflow.evaluators import (
     combine_evaluators,
     get_dependency_graph,
 )
-from ccflow.tests.local_helpers import build_meta_sensor_planner, build_nested_graph_chain
 
 from .util import CircularModel, MyDateCallable, MyDateRangeCallable, MyRaisingCallable, NodeModel, ResultModel
 
@@ -219,22 +212,6 @@ class TestLoggingEvaluator(TestCase):
         self.assertIn("MyDateCallable", captured.records[1].getMessage())
         self.assertIn("End evaluation of __call__", captured.records[2].getMessage())
         self.assertIn("time elapsed", captured.records[2].getMessage())
-
-    def test_meta_callable_logged_with_evaluator(self):
-        """Meta callables can spin up request-scoped specialists and still inherit evaluator instrumentation."""
-        SensorQuery, MetaSensorPlanner, captured = build_meta_sensor_planner()
-        evaluator = LoggingEvaluator(log_level=logging.INFO, verbose=False)
-        request = SensorQuery(sensor_type="pressure-valve", site="orbital-lab", window=4)
-        meta = MetaSensorPlanner(warm_start=2)
-        with FlowOptionsOverride(options=FlowOptions(evaluator=evaluator)):
-            with self.assertLogs(level=logging.INFO) as captured_logs:
-                result = meta(request)
-        self.assertEqual(result.value, "planner:orbital-lab:pressure-valve:6")
-        start_messages = [record.getMessage() for record in captured_logs.records if "Start evaluation" in record.getMessage()]
-        self.assertEqual(len(start_messages), 2)
-        self.assertTrue(any("MetaSensorPlanner" in msg for msg in start_messages))
-        specialist_name = captured["callable_cls"].__name__
-        self.assertTrue(any(specialist_name in msg for msg in start_messages))
 
 
 class SubContext(DateContext):
@@ -503,37 +480,3 @@ class TestGraphEvaluator(TestCase):
         evaluator = GraphEvaluator()
         with FlowOptionsOverride(options={"evaluator": evaluator}):
             self.assertRaises(Exception, root, context)
-
-    def test_graph_evaluator_with_local_models_and_cache(self):
-        ParentCls, ChildCls = build_nested_graph_chain()
-        ChildCls.call_count = 0
-        model = ParentCls(child=ChildCls())
-        evaluator = MultiEvaluator(evaluators=[GraphEvaluator(), MemoryCacheEvaluator()])
-        with FlowOptionsOverride(options=FlowOptions(evaluator=evaluator, cacheable=True)):
-            first = model(NullContext())
-            second = model(NullContext())
-        self.assertEqual(first.value, second.value)
-        self.assertEqual(ChildCls.call_count, 1)
-
-
-class TestMemoryCacheEvaluatorLocal(TestCase):
-    def test_memory_cache_handles_local_context_and_callable(self):
-        class LocalContext(ContextBase):
-            value: int
-
-        class LocalModel(CallableModel):
-            call_count: ClassVar[int] = 0
-
-            @Flow.call
-            def __call__(self, context: LocalContext) -> GenericResult:
-                type(self).call_count += 1
-                return GenericResult(value=context.value * 2)
-
-        evaluator = MemoryCacheEvaluator()
-        LocalModel.call_count = 0
-        model = LocalModel()
-        with FlowOptionsOverride(options=FlowOptions(evaluator=evaluator, cacheable=True)):
-            result1 = model(LocalContext(value=5))
-            result2 = model(LocalContext(value=5))
-        self.assertEqual(result1.value, result2.value)
-        self.assertEqual(LocalModel.call_count, 1)

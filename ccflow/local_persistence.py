@@ -1,8 +1,14 @@
-"""Register local-scope classes on ccflow.base so PyObjectPath can import them.
+"""Register local-scope classes on a module so PyObjectPath can import them.
 
-Classes defined in functions or via create_model aren't normally importable.
-We give them a unique name and put them on ccflow.base. We keep __module__ and
-__qualname__ unchanged so cloudpickle can still serialize the class definition.
+Classes defined in functions (with '<locals>' in __qualname__) aren't normally importable.
+We give them a unique name and register them on this module (ccflow.local_persistence).
+We keep __module__ and __qualname__ unchanged so cloudpickle can still serialize the
+class definition.
+
+This module provides:
+- _register(cls): Register a local class with a unique import path
+- _sync_to_module(cls): Ensure a class with __ccflow_import_path__ is on the module
+  (used for cross-process unpickle scenarios)
 """
 
 import re
@@ -10,66 +16,37 @@ import sys
 import uuid
 from typing import Any, Type
 
-__all__ = ("LOCAL_ARTIFACTS_MODULE_NAME", "_register_local_subclass_if_needed", "_register", "_sync_to_module")
+__all__ = ("LOCAL_ARTIFACTS_MODULE_NAME",)
 
-LOCAL_ARTIFACTS_MODULE_NAME = "ccflow.base"
-
-
-def _is_importable(cls: Type[Any]) -> bool:
-    """Can cls be imported via its __module__.__qualname__ path?"""
-    qualname = getattr(cls, "__qualname__", "")
-    module_name = getattr(cls, "__module__", "")
-
-    if "<locals>" in qualname or module_name == "__main__":
-        return False
-
-    module = sys.modules.get(module_name)
-    if not module:
-        return False
-
-    obj = module
-    for part in qualname.split("."):
-        obj = getattr(obj, part, None)
-        if obj is None:
-            return False
-    return obj is cls
+LOCAL_ARTIFACTS_MODULE_NAME = "ccflow.local_persistence"
 
 
 def _register(cls: Type[Any]) -> None:
-    """Give cls a unique name and put it on ccflow.base."""
+    """Give cls a unique name and register it on the artifacts module.
+
+    This sets __ccflow_import_path__ on the class without modifying __module__ or
+    __qualname__, preserving cloudpickle's ability to serialize the class definition.
+    """
+    # Sanitize the class name to be a valid Python identifier
     name = re.sub(r"[^0-9A-Za-z_]", "_", cls.__name__ or "Model").strip("_") or "Model"
     if name[0].isdigit():
         name = f"_{name}"
     unique = f"_Local_{name}_{uuid.uuid4().hex[:12]}"
 
-    setattr(sys.modules["ccflow.base"], unique, cls)
+    setattr(sys.modules[LOCAL_ARTIFACTS_MODULE_NAME], unique, cls)
     cls.__ccflow_import_path__ = f"{LOCAL_ARTIFACTS_MODULE_NAME}.{unique}"
 
 
 def _sync_to_module(cls: Type[Any]) -> None:
-    """Ensure cls is on ccflow.base in this process (for cross-process unpickle)."""
+    """Ensure cls is registered on the artifacts module in this process.
+
+    This handles cross-process unpickle scenarios where cloudpickle recreates the class
+    with __ccflow_import_path__ already set (from the original process), but the class
+    isn't yet registered on ccflow.local_persistence in the new process.
+    """
     path = getattr(cls, "__ccflow_import_path__", "")
     if path.startswith(LOCAL_ARTIFACTS_MODULE_NAME + "."):
         name = path.rsplit(".", 1)[-1]
-        base = sys.modules["ccflow.base"]
+        base = sys.modules[LOCAL_ARTIFACTS_MODULE_NAME]
         if getattr(base, name, None) is not cls:
             setattr(base, name, cls)
-
-
-def _register_local_subclass_if_needed(cls: Type[Any]) -> None:
-    """Register cls if not importable. Called from PyObjectPath and __reduce_ex__."""
-    if "__ccflow_import_path__" in cls.__dict__:
-        _sync_to_module(cls)
-        return
-    if "__ccflow_importable__" in cls.__dict__:
-        return
-
-    from ccflow.base import BaseModel
-
-    if not (isinstance(cls, type) and issubclass(cls, BaseModel)):
-        return
-
-    if _is_importable(cls):
-        cls.__ccflow_importable__ = True
-    else:
-        _register(cls)
