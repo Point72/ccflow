@@ -20,6 +20,7 @@ import ray
 
 import ccflow.local_persistence as local_persistence
 from ccflow import BaseModel, CallableModel, ContextBase, Flow, GenericResult, NullContext
+from ccflow.local_persistence import create_ccflow_model
 
 
 class ModuleLevelModel(BaseModel):
@@ -925,3 +926,482 @@ class TestRegistrationStrategy:
             mock_do_reg.assert_called_once()
             # Verify it has <locals> in qualname
             assert "<locals>" in LocalModel.__qualname__
+
+
+# =============================================================================
+# Tests for create_ccflow_model wrapper
+# =============================================================================
+
+
+class TestCreateCcflowModelWrapper:
+    """Tests for the create_ccflow_model wrapper function."""
+
+    def test_create_ccflow_model_basic(self):
+        """Test basic create_ccflow_model usage with ContextBase."""
+        DynamicContext = create_ccflow_model(
+            "DynamicContext",
+            __base__=ContextBase,
+            name=(str, ...),
+            value=(int, 0),
+        )
+
+        # Should be a valid ContextBase subclass
+        assert issubclass(DynamicContext, ContextBase)
+
+        # Should be registered
+        assert hasattr(DynamicContext, "__ccflow_import_path__")
+        assert DynamicContext.__ccflow_import_path__.startswith(local_persistence.LOCAL_ARTIFACTS_MODULE_NAME)
+
+        # Should be usable
+        ctx = DynamicContext(name="test", value=42)
+        assert ctx.name == "test"
+        assert ctx.value == 42
+
+    def test_create_ccflow_model_with_base_model(self):
+        """Test create_ccflow_model with ccflow BaseModel as base."""
+        DynamicModel = create_ccflow_model(
+            "DynamicModel",
+            __base__=BaseModel,
+            data=(str, "default"),
+            count=(int, 0),
+        )
+
+        assert issubclass(DynamicModel, BaseModel)
+        assert hasattr(DynamicModel, "__ccflow_import_path__")
+
+        instance = DynamicModel(data="hello", count=5)
+        assert instance.data == "hello"
+        assert instance.count == 5
+
+    def test_create_ccflow_model_type_property_works(self):
+        """Test that type_ property works for dynamically created models."""
+        DynamicContext = create_ccflow_model(
+            "DynamicContext",
+            __base__=ContextBase,
+            x=(int, ...),
+        )
+
+        ctx = DynamicContext(x=10)
+        type_path = str(ctx.type_)
+
+        # type_ should use __ccflow_import_path__
+        assert type_path == DynamicContext.__ccflow_import_path__
+        assert "_Local_" in type_path
+        assert ctx.type_.object is DynamicContext
+
+    def test_create_ccflow_model_can_be_imported(self):
+        """Test that dynamically created models can be imported via their path."""
+        import importlib
+
+        DynamicModel = create_ccflow_model(
+            "ImportableModel",
+            __base__=BaseModel,
+            value=(int, 0),
+        )
+
+        import_path = DynamicModel.__ccflow_import_path__
+        parts = import_path.rsplit(".", 1)
+        module = importlib.import_module(parts[0])
+        imported_cls = getattr(module, parts[1])
+
+        assert imported_cls is DynamicModel
+
+    def test_create_ccflow_model_with_docstring(self):
+        """Test create_ccflow_model with custom docstring."""
+
+        DynamicModel = create_ccflow_model(
+            "DocumentedModel",
+            __base__=BaseModel,
+            __doc__="A dynamically created model for testing.",
+            value=(int, 0),
+        )
+
+        assert DynamicModel.__doc__ == "A dynamically created model for testing."
+
+    def test_create_ccflow_model_with_complex_fields(self):
+        """Test create_ccflow_model with various field types."""
+        from typing import List, Optional
+
+        from pydantic import Field
+
+        DynamicModel = create_ccflow_model(
+            "ComplexModel",
+            __base__=BaseModel,
+            name=(str, ...),
+            tags=(List[str], Field(default_factory=list)),
+            description=(Optional[str], None),
+            count=(int, 0),
+        )
+
+        instance = DynamicModel(name="test")
+        assert instance.name == "test"
+        assert instance.tags == []
+        assert instance.description is None
+        assert instance.count == 0
+
+        instance2 = DynamicModel(name="test2", tags=["a", "b"], description="desc", count=5)
+        assert instance2.tags == ["a", "b"]
+        assert instance2.description == "desc"
+        assert instance2.count == 5
+
+    def test_create_ccflow_model_multiple_unique_names(self):
+        """Test that multiple models with same name get unique registration paths."""
+
+        Model1 = create_ccflow_model("SameName", __base__=BaseModel, value=(int, 0))
+        Model2 = create_ccflow_model("SameName", __base__=BaseModel, value=(str, ""))
+
+        # Both should be registered with different paths
+        assert Model1.__ccflow_import_path__ != Model2.__ccflow_import_path__
+
+        # Both should have the same __name__
+        assert Model1.__name__ == Model2.__name__ == "SameName"
+
+        # Both should be accessible via their own paths
+        assert Model1(value=42).type_.object is Model1
+        assert Model2(value="test").type_.object is Model2
+
+    def test_create_ccflow_model_inherits_from_context_base(self):
+        """Test that models inheriting from ContextBase have frozen config."""
+        DynamicContext = create_ccflow_model(
+            "FrozenContext",
+            __base__=ContextBase,
+            value=(int, 0),
+        )
+
+        ctx = DynamicContext(value=42)
+
+        # ContextBase subclasses should be frozen
+        with pytest.raises(Exception):  # ValidationError for frozen model
+            ctx.value = 100
+
+
+class TestCreateCcflowModelCloudpickleSameProcess:
+    """Tests for cloudpickle with dynamically created models in the same process."""
+
+    def test_cloudpickle_instance_roundtrip(self):
+        """Test cloudpickle roundtrip for instances of dynamically created models."""
+        from ray.cloudpickle import dumps, loads
+
+        DynamicModel = create_ccflow_model(
+            "PickleTestModel",
+            __base__=BaseModel,
+            value=(int, 0),
+        )
+
+        instance = DynamicModel(value=123)
+        restored = loads(dumps(instance))
+
+        assert restored.value == 123
+        assert type(restored) is DynamicModel
+
+    def test_cloudpickle_class_roundtrip(self):
+        """Test cloudpickle roundtrip for dynamically created model classes."""
+        from ray.cloudpickle import dumps, loads
+
+        DynamicModel = create_ccflow_model(
+            "ClassPickleModel",
+            __base__=BaseModel,
+            name=(str, ""),
+        )
+
+        restored_cls = loads(dumps(DynamicModel))
+        assert restored_cls is DynamicModel
+
+    def test_cloudpickle_preserves_type_path(self):
+        """Test that type_ path is preserved after cloudpickle roundtrip."""
+        from ray.cloudpickle import dumps, loads
+
+        DynamicModel = create_ccflow_model(
+            "TypePathModel",
+            __base__=BaseModel,
+            value=(int, 0),
+        )
+
+        instance = DynamicModel(value=42)
+        original_path = str(instance.type_)
+
+        restored = loads(dumps(instance))
+        restored_path = str(restored.type_)
+
+        assert restored_path == original_path
+
+
+class TestCreateCcflowModelCloudpickleCrossProcess:
+    """Tests for cross-process cloudpickle with dynamically created models."""
+
+    def test_create_ccflow_model_cross_process(self, pickle_file):
+        """Test that dynamically created models work across processes."""
+        pkl_path = pickle_file
+
+        create_code = f'''
+from ray.cloudpickle import dump
+from ccflow import ContextBase
+from ccflow.local_persistence import create_ccflow_model
+
+# Create a dynamic context using the wrapper
+DynamicContext = create_ccflow_model(
+    "CrossProcessContext",
+    __base__=ContextBase,
+    name=(str, ...),
+    value=(int, 0),
+)
+
+# Verify registration
+assert hasattr(DynamicContext, "__ccflow_import_path__")
+
+# Create instance and verify type_ works
+ctx = DynamicContext(name="test", value=42)
+type_path = str(ctx.type_)
+print(f"type_: {{type_path}}")
+assert "_Local_" in type_path
+
+# Pickle
+with open("{pkl_path}", "wb") as f:
+    dump(ctx, f)
+
+print("SUCCESS: Created and pickled")
+'''
+        create_result = subprocess.run([sys.executable, "-c", create_code], capture_output=True, text=True)
+        assert create_result.returncode == 0, f"Create subprocess failed: {create_result.stderr}"
+        assert "SUCCESS" in create_result.stdout, f"Create subprocess output: {create_result.stdout}"
+
+        load_code = f'''
+from ray.cloudpickle import load
+
+with open("{pkl_path}", "rb") as f:
+    ctx = load(f)
+
+# Verify values preserved
+assert ctx.name == "test", f"Expected name='test', got {{ctx.name}}"
+assert ctx.value == 42, f"Expected value=42, got {{ctx.value}}"
+
+# Verify type_ works after unpickle
+type_path = str(ctx.type_)
+print(f"type_: {{type_path}}")
+assert "_Local_" in type_path
+
+# Verify the class can be resolved
+assert ctx.type_.object is type(ctx)
+
+print("SUCCESS: Loaded and verified")
+'''
+        load_result = subprocess.run([sys.executable, "-c", load_code], capture_output=True, text=True)
+        assert load_result.returncode == 0, f"Load subprocess failed: {load_result.stderr}"
+        assert "SUCCESS" in load_result.stdout, f"Load subprocess output: {load_result.stdout}"
+
+    def test_create_ccflow_model_with_callable_model_cross_process(self, pickle_file):
+        """Test dynamically created contexts used with CallableModel across processes."""
+        pkl_path = pickle_file
+
+        create_code = f'''
+from ray.cloudpickle import dump
+from ccflow import CallableModel, ContextBase, GenericResult, Flow
+from ccflow.local_persistence import create_ccflow_model
+
+# Create a dynamic context
+DynamicContext = create_ccflow_model(
+    "CallableModelContext",
+    __base__=ContextBase,
+    x=(int, ...),
+    multiplier=(int, 2),
+)
+
+# Create a callable model using the dynamic context (defined inside a function
+# to get <locals> in qualname for automatic registration)
+def create_callable():
+    class DynamicCallable(CallableModel):
+        @Flow.call
+        def __call__(self, context: DynamicContext) -> GenericResult:
+            return GenericResult(value=context.x * context.multiplier)
+    return DynamicCallable
+
+DynamicCallable = create_callable()
+model = DynamicCallable()
+ctx = DynamicContext(x=10, multiplier=3)
+
+# Verify it works
+result = model(ctx)
+assert result.value == 30
+
+with open("{pkl_path}", "wb") as f:
+    dump((model, ctx), f)
+
+print("SUCCESS")
+'''
+        create_result = subprocess.run([sys.executable, "-c", create_code], capture_output=True, text=True)
+        assert create_result.returncode == 0, f"Create failed: {create_result.stderr}"
+        assert "SUCCESS" in create_result.stdout
+
+        load_code = f'''
+from ray.cloudpickle import load
+
+with open("{pkl_path}", "rb") as f:
+    model, ctx = load(f)
+
+# Verify the callable works
+result = model(ctx)
+assert result.value == 30
+
+# Verify type_ works for the dynamically created context (our focus)
+assert ctx.type_.object is type(ctx)
+
+# Verify callable model type_ works (it should since it was defined in a function)
+assert model.type_.object is type(model)
+
+print("SUCCESS")
+'''
+        load_result = subprocess.run([sys.executable, "-c", load_code], capture_output=True, text=True)
+        assert load_result.returncode == 0, f"Load failed: {load_result.stderr}"
+        assert "SUCCESS" in load_result.stdout
+
+
+class TestCreateCcflowModelRayTask:
+    """Tests for Ray task execution with dynamically created models."""
+
+    def test_create_ccflow_model_ray_task(self):
+        """Test that dynamically created models work in Ray tasks."""
+
+        DynamicContext = create_ccflow_model(
+            "RayTaskContext",
+            __base__=ContextBase,
+            name=(str, ...),
+            value=(int, 0),
+        )
+
+        @ray.remote
+        def process_context(ctx):
+            # Access fields and type_ inside Ray task
+            _ = ctx.type_
+            return f"{ctx.name}:{ctx.value}"
+
+        ctx = DynamicContext(name="ray_test", value=99)
+
+        with ray.init(num_cpus=1):
+            result = ray.get(process_context.remote(ctx))
+
+        assert result == "ray_test:99"
+
+    def test_create_ccflow_model_callable_model_ray_task(self):
+        """Test CallableModel with dynamically created context in Ray tasks."""
+
+        DynamicContext = create_ccflow_model(
+            "RayCallableContext",
+            __base__=ContextBase,
+            x=(int, ...),
+        )
+
+        class RayCallable(CallableModel):
+            factor: int = 2
+
+            @Flow.call
+            def __call__(self, context: DynamicContext) -> GenericResult:
+                return GenericResult(value=context.x * self.factor)
+
+        @ray.remote
+        def run_callable(model, ctx):
+            result = model(ctx)
+            # Verify type_ works in Ray worker
+            _ = model.type_
+            _ = ctx.type_
+            return result.value
+
+        model = RayCallable(factor=5)
+        ctx = DynamicContext(x=10)
+
+        with ray.init(num_cpus=1):
+            result = ray.get(run_callable.remote(model, ctx))
+
+        assert result == 50
+
+
+class TestCreateCcflowModelEdgeCases:
+    """Tests for edge cases in create_ccflow_model wrapper."""
+
+    def test_create_ccflow_model_no_fields(self):
+        """Test create_ccflow_model with no custom fields."""
+
+        EmptyModel = create_ccflow_model("EmptyModel", __base__=BaseModel)
+
+        assert issubclass(EmptyModel, BaseModel)
+        assert hasattr(EmptyModel, "__ccflow_import_path__")
+
+        instance = EmptyModel()
+        assert instance.type_.object is EmptyModel
+
+    def test_create_ccflow_model_with_module_override(self):
+        """Test create_ccflow_model with __module__ parameter."""
+
+        CustomModuleModel = create_ccflow_model(
+            "CustomModuleModel",
+            __base__=BaseModel,
+            __module__="custom.module.path",
+            value=(int, 0),
+        )
+
+        # Module should be overridden
+        assert CustomModuleModel.__module__ == "custom.module.path"
+
+        # But should still be registered since it's not actually importable
+        assert hasattr(CustomModuleModel, "__ccflow_import_path__")
+
+    def test_create_ccflow_model_inheritance_from_custom_base(self):
+        """Test create_ccflow_model inheriting from a custom ccflow class."""
+
+        # First create a base class
+        class CustomBase(ContextBase):
+            base_field: str = "base"
+
+        DerivedModel = create_ccflow_model(
+            "DerivedModel",
+            __base__=CustomBase,
+            derived_field=(int, 0),
+        )
+
+        assert issubclass(DerivedModel, CustomBase)
+        assert issubclass(DerivedModel, ContextBase)
+
+        instance = DerivedModel(derived_field=42)
+        assert instance.base_field == "base"
+        assert instance.derived_field == 42
+
+    def test_create_ccflow_model_special_characters_in_name(self):
+        """Test create_ccflow_model handles special characters in name."""
+
+        # Names with special characters should still work
+        SpecialModel = create_ccflow_model(
+            "Model-With-Dashes",
+            __base__=BaseModel,
+            value=(int, 0),
+        )
+
+        assert hasattr(SpecialModel, "__ccflow_import_path__")
+
+        # The registered name should be sanitized
+        import_path = SpecialModel.__ccflow_import_path__
+        registered_name = import_path.split(".")[-1]
+        # Should have sanitized the dashes
+        assert "-" not in registered_name
+
+    def test_create_ccflow_model_returns_correct_type(self):
+        """Test that create_ccflow_model returns the model class, not an instance."""
+
+        result = create_ccflow_model(
+            "TypeCheckModel",
+            __base__=BaseModel,
+            value=(int, 0),
+        )
+
+        assert isinstance(result, type)
+        assert issubclass(result, BaseModel)
+
+    def test_create_ccflow_model_import_at_top_level(self):
+        """Test that create_ccflow_model can be imported from ccflow."""
+        from ccflow import create_ccflow_model as ccflow_create_model
+        from ccflow.local_persistence import create_ccflow_model as lp_create_model
+
+        # Both should be the same function
+        assert ccflow_create_model is lp_create_model
+
+        # And both should work
+        Model = ccflow_create_model("TopLevelImportModel", __base__=BaseModel, value=(int, 0))
+        assert hasattr(Model, "__ccflow_import_path__")
