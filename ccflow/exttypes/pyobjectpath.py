@@ -25,7 +25,7 @@ def import_string(dotted_path: str) -> Any:
     parts = dotted_path.split(".")
 
     # Try progressively shorter module paths
-    # e.g., for 'a.b.C.D', try 'a.b.C', then 'a.b', then 'a'
+    # e.g., for 'a.b.C.D', try 'a.b.C.D', then 'a.b.C', then 'a.b', then 'a'
     for i in range(len(parts), 0, -1):
         module_path = ".".join(parts[:i])
         try:
@@ -120,7 +120,7 @@ class PyObjectPath(str):
     def _path_from_object(cls, value: Any) -> "PyObjectPath":
         """Build import path from an object.
 
-        For ccflow BaseModel subclasses with __ccflow_import_path__ set (local classes),
+        For classes with __ccflow_import_path__ set (local classes),
         uses that path. Otherwise uses the standard module.qualname path.
         """
         if isinstance(value, type):
