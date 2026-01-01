@@ -14,7 +14,7 @@ which all need to be defined together so that pydantic (especially V1) can resol
 import abc
 import inspect
 import logging
-from functools import lru_cache, partial, wraps
+from functools import lru_cache, wraps
 from inspect import Signature, isclass, signature
 from typing import Any, Callable, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar, Union, get_args, get_origin
 
@@ -46,7 +46,6 @@ __all__ = (
     "EvaluatorBase",
     "Evaluator",
     "WrapperModel",
-    "dynamic_context",
 )
 
 log = logging.getLogger(__name__)
@@ -272,22 +271,22 @@ class FlowOptions(BaseModel):
             if not isinstance(model, CallableModel):
                 raise TypeError(f"Can only decorate methods on CallableModels (not {type(model)}) with the flow decorator.")
 
-            # Check if this is a dynamic_context decorated method
-            has_dynamic_context = hasattr(fn, "__dynamic_context__")
-            if has_dynamic_context:
-                method_context_type = fn.__dynamic_context__
+            # Check if this is an auto_context decorated method
+            has_auto_context = hasattr(fn, "__auto_context__")
+            if has_auto_context:
+                method_context_type = fn.__auto_context__
             else:
                 method_context_type = model.context_type
 
-            # Validate context type (skip for dynamic contexts which are always valid ContextBase subclasses)
-            if not has_dynamic_context:
+            # Validate context type (skip for auto contexts which are always valid ContextBase subclasses)
+            if not has_auto_context:
                 if (not isclass(model.context_type) or not issubclass(model.context_type, ContextBase)) and not (
                     get_origin(model.context_type) is Union and type(None) in get_args(model.context_type)
                 ):
                     raise TypeError(f"Context type {model.context_type} must be a subclass of ContextBase")
 
-            # Validate result type - use __result_type__ for dynamic contexts if available
-            if has_dynamic_context and hasattr(fn, "__result_type__"):
+            # Validate result type - use __result_type__ for auto contexts if available
+            if has_auto_context and hasattr(fn, "__result_type__"):
                 method_result_type = fn.__result_type__
             else:
                 method_result_type = model.result_type
@@ -334,9 +333,9 @@ class FlowOptions(BaseModel):
         wrap.get_options = self.get_options
         wrap.get_evaluation_context = get_evaluation_context
 
-        # Preserve dynamic context attributes for introspection
-        if hasattr(fn, "__dynamic_context__"):
-            wrap.__dynamic_context__ = fn.__dynamic_context__
+        # Preserve auto context attributes for introspection
+        if hasattr(fn, "__auto_context__"):
+            wrap.__auto_context__ = fn.__auto_context__
         if hasattr(fn, "__result_type__"):
             wrap.__result_type__ = fn.__result_type__
 
@@ -418,7 +417,58 @@ class FlowOptionsOverride(BaseModel):
 class Flow(PydanticBaseModel):
     @staticmethod
     def call(*args, **kwargs):
-        """Decorator for methods on callable models"""
+        """Decorator for methods on callable models.
+
+        Args:
+            auto_context: Controls automatic context class generation from the function
+                signature. Accepts three types of values:
+                - False (default): No auto-generation, use traditional context parameter
+                - True: Auto-generate context class with no parent
+                - ContextBase subclass: Auto-generate context class inheriting from this parent
+            **kwargs: Additional FlowOptions parameters (log_level, verbose, validate_result,
+                cacheable, evaluator, volatile).
+
+        Basic Example:
+            class MyModel(CallableModel):
+                @Flow.call
+                def __call__(self, context: MyContext) -> MyResult:
+                    return MyResult(value=context.x)
+
+        Auto Context Example:
+            class MyModel(CallableModel):
+                @Flow.call(auto_context=True)
+                def __call__(self, *, x: int, y: str = "default") -> MyResult:
+                    return MyResult(value=f"{x}-{y}")
+
+            model = MyModel()
+            model(x=42)  # Call with kwargs directly
+
+        With Parent Context:
+            class MyModel(CallableModel):
+                @Flow.call(auto_context=DateContext)
+                def __call__(self, *, date: date, extra: int = 0) -> MyResult:
+                    return MyResult(value=date.day + extra)
+
+            # The generated context inherits from DateContext, so it's compatible
+            # with infrastructure expecting DateContext instances.
+        """
+        # Extract auto_context option (not part of FlowOptions)
+        # Can be: False, True, or a ContextBase subclass
+        auto_context = kwargs.pop("auto_context", False)
+
+        # Determine if auto_context is enabled and extract parent class if provided
+        if auto_context is False:
+            auto_context_enabled = False
+            context_parent = None
+        elif auto_context is True:
+            auto_context_enabled = True
+            context_parent = None
+        elif isclass(auto_context) and issubclass(auto_context, ContextBase):
+            auto_context_enabled = True
+            context_parent = auto_context
+        else:
+            raise TypeError(f"auto_context must be False, True, or a ContextBase subclass, got {auto_context!r}")
+
         if len(args) == 1 and callable(args[0]):
             # No arguments to decorator, this is the decorator
             fn = args[0]
@@ -427,6 +477,14 @@ class Flow(PydanticBaseModel):
         else:
             # Arguments to decorator, this is just returning the decorator
             # Note that the code below is executed only once
+            if auto_context_enabled:
+                # Return a decorator that first applies auto_context, then FlowOptions
+                def auto_context_decorator(fn):
+                    wrapped = _apply_auto_context(fn, parent=context_parent)
+                    # FlowOptions.__call__ already applies wraps, so we just return its result
+                    return FlowOptions(**kwargs)(wrapped)
+
+                return auto_context_decorator
             return FlowOptions(**kwargs)
 
     @staticmethod
@@ -443,81 +501,6 @@ class Flow(PydanticBaseModel):
             # Arguments to decorator, this is just returning the decorator
             # Note that the code below is executed only once
             return FlowOptionsDeps(**kwargs)
-
-    @staticmethod
-    def dynamic_call(*args, **kwargs):
-        """Decorator that combines @Flow.call with dynamic context creation.
-
-        Instead of defining a separate context class, this decorator creates one
-        automatically from the function signature. The method can then be called
-        with keyword arguments directly.
-
-        Basic Example:
-            class MyModel(CallableModel):
-                @Flow.dynamic_call
-                def __call__(self, *, date: date, region: str = "US") -> MyResult:
-                    return MyResult(value=f"{date}-{region}")
-
-            model = MyModel()
-            model(date=date.today())              # Uses default region="US"
-            model(date=date.today(), region="EU") # Override default
-
-        With Parent Context:
-            class MyModel(CallableModel):
-                @Flow.dynamic_call(parent=DateContext)
-                def __call__(self, *, date: date, extra: int = 0) -> MyResult:
-                    return MyResult(value=date.day + extra)
-
-            # Parent fields (date) must be included in the function signature.
-            # This is useful for integrating with existing infrastructure that
-            # expects specific context types.
-
-        Args:
-            *args: The decorated function when used without parentheses
-            **kwargs: Combined options for FlowOptions and dynamic_context:
-
-                Dynamic context options:
-                    parent: Parent context class to inherit from. All parent fields
-                        must appear in the function signature.
-
-                FlowOptions (passed through to @Flow.call):
-                    log_level: Logging level for evaluation (default: DEBUG)
-                    verbose: Use verbose logging (default: True)
-                    validate_result: Validate return against result_type (default: True)
-                    cacheable: Allow result caching (default: False)
-                    evaluator: Custom evaluator instance
-
-        Returns:
-            A decorated method that accepts keyword arguments matching the signature.
-
-        Notes:
-            - All parameters (except 'self') must have type annotations
-            - Use keyword-only parameters (after *) for cleaner signatures
-            - The generated context class is accessible via method.__dynamic_context__
-            - The return type is accessible via method.__result_type__
-
-        See Also:
-            dynamic_context: The underlying decorator for context creation
-            Flow.call: The underlying decorator for flow evaluation
-        """
-        # Import here to avoid circular import at module level
-        from ccflow.callable import dynamic_context
-
-        # Extract dynamic_context-specific options
-        parent = kwargs.pop("parent", None)
-
-        if len(args) == 1 and callable(args[0]):
-            # No arguments to decorator (@Flow.dynamic_call)
-            fn = args[0]
-            wrapped = dynamic_context(fn, parent=parent)
-            return Flow.call(wrapped)
-        else:
-            # Arguments to decorator (@Flow.dynamic_call(...))
-            def decorator(fn):
-                wrapped = dynamic_context(fn, parent=parent)
-                return Flow.call(**kwargs)(wrapped)
-
-            return decorator
 
 
 # *****************************************************************************
@@ -859,30 +842,29 @@ CallableModelGenericType = CallableModelGeneric
 
 
 # *****************************************************************************
-# Dynamic Context Decorator
+# Auto Context (internal helper for Flow.call(auto_context=True))
 # *****************************************************************************
 
 
-def dynamic_context(func: Callable = None, *, parent: Type[ContextBase] = None) -> Callable:
-    """Decorator that creates a dynamic context class from function parameters.
+def _apply_auto_context(func: Callable, *, parent: Type[ContextBase] = None) -> Callable:
+    """Internal function that creates an auto context class from function parameters.
 
-    This decorator extracts the parameters from a function signature and creates
-    a dynamic ContextBase subclass whose fields correspond to those parameters.
+    This function extracts the parameters from a function signature and creates
+    a ContextBase subclass whose fields correspond to those parameters.
     The decorated function is then wrapped to accept the context object and
     unpack it into keyword arguments.
 
+    Used internally by Flow.call(auto_context=...).
+
     Example:
         class MyCallable(CallableModel):
-            @Flow.dynamic_call  # or @Flow.call @dynamic_context
+            @Flow.call(auto_context=True)
             def __call__(self, *, x: int, y: str = "default") -> GenericResult:
                 return GenericResult(value=f"{x}-{y}")
 
         model = MyCallable()
         model(x=42, y="hello")  # Works with kwargs
     """
-    if func is None:
-        return partial(dynamic_context, parent=parent)
-
     sig = signature(func)
     base_class = parent or ContextBase
 
@@ -902,8 +884,8 @@ def dynamic_context(func: Callable = None, *, parent: Type[ContextBase] = None) 
         default = ... if param.default is inspect.Parameter.empty else param.default
         fields[name] = (param.annotation, default)
 
-    # Create dynamic context class
-    dyn_context = create_ccflow_model(f"{func.__qualname__}_DynamicContext", __base__=base_class, **fields)
+    # Create auto context class
+    auto_context_class = create_ccflow_model(f"{func.__qualname__}_AutoContext", __base__=base_class, **fields)
 
     @wraps(func)
     def wrapper(self, context):
@@ -914,10 +896,10 @@ def dynamic_context(func: Callable = None, *, parent: Type[ContextBase] = None) 
     wrapper.__signature__ = inspect.Signature(
         parameters=[
             inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
-            inspect.Parameter("context", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=dyn_context),
+            inspect.Parameter("context", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=auto_context_class),
         ],
         return_annotation=sig.return_annotation,
     )
-    wrapper.__dynamic_context__ = dyn_context
+    wrapper.__auto_context__ = auto_context_class
     wrapper.__result_type__ = sig.return_annotation
     return wrapper

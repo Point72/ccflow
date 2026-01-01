@@ -8,12 +8,12 @@ from ccflow import CallableModel, DateContext, Evaluator, Flow, ModelEvaluationC
 from .evaluators.util import MyDateCallable, MyResult
 
 
-class MyDynamicDateCallable(CallableModel):
-    """Dynamic context version of MyDateCallable for testing evaluators."""
+class MyAutoContextDateCallable(CallableModel):
+    """Auto context version of MyDateCallable for testing evaluators."""
 
     offset: int
 
-    @Flow.dynamic_call(parent=DateContext)
+    @Flow.call(auto_context=DateContext)
     def __call__(self, *, date: date) -> MyResult:
         return MyResult(x=date.day + self.offset)
 
@@ -48,11 +48,11 @@ class TestEvaluator(TestCase):
 
 @pytest.mark.parametrize(
     "callable_class",
-    [MyDateCallable, MyDynamicDateCallable],
-    ids=["standard", "dynamic"],
+    [MyDateCallable, MyAutoContextDateCallable],
+    ids=["standard", "auto_context"],
 )
 class TestEvaluatorParametrized:
-    """Test evaluators work with both standard and dynamic context callables."""
+    """Test evaluators work with both standard and auto_context callables."""
 
     def test_evaluator_with_context_object(self, callable_class):
         """Test evaluator with a context object."""

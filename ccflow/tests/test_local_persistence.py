@@ -1235,7 +1235,7 @@ print("SUCCESS")
                 id="context_only",
             ),
             pytest.param(
-                # Dynamic context with CallableModel
+                # Runtime-created context with CallableModel
                 """
 from ray.cloudpickle import dump
 from ccflow import CallableModel, ContextBase, GenericResult, Flow
