@@ -1,0 +1,80 @@
+# Flow.model configurations for Hydra integration tests
+# This file is separate from conf.yaml to avoid affecting existing tests
+
+# Basic Flow.model
+flow_loader:
+    _target_: ccflow.tests.test_flow_model.basic_loader
+    source: test_source
+    multiplier: 5
+
+flow_processor:
+    _target_: ccflow.tests.test_flow_model.string_processor
+    prefix: "value="
+    suffix: "!"
+
+# Pipeline with dependencies (uses registry name references for same instance)
+flow_source:
+    _target_: ccflow.tests.test_flow_model.data_source
+    base_value: 100
+
+flow_transformer:
+    _target_: ccflow.tests.test_flow_model.data_transformer
+    source: flow_source
+    factor: 3
+
+# Three-stage pipeline
+flow_stage1:
+    _target_: ccflow.tests.test_flow_model.pipeline_stage1
+    initial: 10
+
+flow_stage2:
+    _target_: ccflow.tests.test_flow_model.pipeline_stage2
+    stage1_output: flow_stage1
+    multiplier: 2
+
+flow_stage3:
+    _target_: ccflow.tests.test_flow_model.pipeline_stage3
+    stage2_output: flow_stage2
+    offset: 50
+
+# Diamond dependency pattern
+diamond_source:
+    _target_: ccflow.tests.test_flow_model.data_source
+    base_value: 10
+
+diamond_branch_a:
+    _target_: ccflow.tests.test_flow_model.data_transformer
+    source: diamond_source
+    factor: 2
+
+diamond_branch_b:
+    _target_: ccflow.tests.test_flow_model.data_transformer
+    source: diamond_source
+    factor: 5
+
+diamond_aggregator:
+    _target_: ccflow.tests.test_flow_model.data_aggregator
+    input_a: diamond_branch_a
+    input_b: diamond_branch_b
+    operation: add
+
+# DateRangeContext with transform
+flow_date_loader:
+    _target_: ccflow.tests.test_flow_model.date_range_loader
+    source: market_data
+    include_weekends: false
+
+flow_date_processor:
+    _target_: ccflow.tests.test_flow_model.date_range_processor
+    raw_data: flow_date_loader
+    normalize: true
+
+# context_args models (auto-unpacked context parameters)
+ctx_args_loader:
+    _target_: ccflow.tests.test_flow_model.context_args_loader
+    source: data_source
+
+ctx_args_processor:
+    _target_: ccflow.tests.test_flow_model.context_args_processor
+    data: ctx_args_loader
+    prefix: "output"

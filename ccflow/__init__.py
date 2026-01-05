@@ -10,6 +10,7 @@ from .base import *
 from .compose import *
 from .callable import *
 from .context import *
+from .dep import *
 from .enums import Enum
 from .global_state import *
 from .local_persistence import *

@@ -22,6 +22,121 @@ The naming was inspired by the open source library [Pydantic](https://docs.pydan
 `CallableModel`'s are called with a context (something that derives from `ContextBase`) and returns a result (something that derives from `ResultBase`).
 As an example, you may have a `SQLReader` callable model that when called with a `DateRangeContext` returns a `ArrowResult` (wrapper around a Arrow table) with data in the date range defined by the context by querying some SQL database.
 
+### Flow.model Decorator
+
+The `@Flow.model` decorator provides a simpler way to define `CallableModel`s using plain Python functions instead of classes. It automatically generates a `CallableModel` class with proper `__call__` and `__deps__` methods.
+
+**Basic Example:**
+
+```python
+from datetime import date
+from ccflow import Flow, GenericResult, DateRangeContext
+
+@Flow.model
+def load_data(context: DateRangeContext, source: str) -> GenericResult[dict]:
+    # Your data loading logic here
+    return GenericResult(value=query_db(source, context.start_date, context.end_date))
+
+# Create model instance
+loader = load_data(source="my_database")
+
+# Execute with context
+ctx = DateRangeContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31))
+result = loader(ctx)
+```
+
+**Composing Dependencies with `Dep` and `DepOf`:**
+
+Use `Dep()` or `DepOf` to mark parameters that accept other `CallableModel`s as dependencies. The framework automatically resolves the dependency graph.
+
+> **Tip:** If your function doesn't use the context directly (only passes it to dependencies), use `_` as the parameter name to signal this: `def my_func(_: DateRangeContext, data: DepOf[..., ResultType])`. This is a Python convention for intentionally unused parameters.
+
+```python
+from datetime import date, timedelta
+from typing import Annotated
+from ccflow import Flow, GenericResult, DateRangeContext, Dep, DepOf
+
+@Flow.model
+def load_data(context: DateRangeContext, source: str) -> GenericResult[dict]:
+    return GenericResult(value={"records": [1, 2, 3]})
+
+@Flow.model
+def transform_data(
+    _: DateRangeContext,  # Context passed to dependency, not used directly
+    raw_data: Annotated[GenericResult[dict], Dep(
+        # Transform context to fetch one extra day for lookback
+        transform=lambda ctx: ctx.model_copy(update={
+            "start_date": ctx.start_date - timedelta(days=1)
+        })
+    )]
+) -> GenericResult[dict]:
+    # raw_data.value contains the resolved result from load_data
+    return GenericResult(value={"transformed": raw_data.value["records"]})
+
+# Or use DepOf shorthand (no transform needed):
+@Flow.model
+def aggregate_data(
+    _: DateRangeContext,  # Context passed to dependency, not used directly
+    transformed: DepOf[..., GenericResult[dict]]  # Shorthand for Annotated[T, Dep()]
+) -> GenericResult[dict]:
+    return GenericResult(value={"count": len(transformed.value["transformed"])})
+
+# Build the pipeline
+data = load_data(source="my_database")
+transformed = transform_data(raw_data=data)
+aggregated = aggregate_data(transformed=transformed)
+
+# Execute - dependencies are automatically resolved
+ctx = DateRangeContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31))
+result = aggregated(ctx)
+```
+
+**Hydra/YAML Configuration:**
+
+`Flow.model` decorated functions work seamlessly with Hydra configuration and the `ModelRegistry`:
+
+```yaml
+# config.yaml
+data:
+  _target_: mymodule.load_data
+  source: my_database
+
+transformed:
+  _target_: mymodule.transform_data
+  raw_data: data  # Reference by registry name (same instance is shared)
+
+aggregated:
+  _target_: mymodule.aggregate_data
+  transformed: transformed  # Reference by registry name
+```
+
+When loaded via `ModelRegistry.load_config()`, references by name ensure the same object instance is shared across all consumers.
+
+**Auto-Unpacked Context with `context_args`:**
+
+Instead of taking an explicit `context` parameter, you can use `context_args` to automatically unpack context fields as function parameters. This is useful when you want cleaner function signatures:
+
+```python
+from datetime import date
+from ccflow import Flow, GenericResult, DateRangeContext
+
+# Instead of: def load_data(context: DateRangeContext, source: str)
+# Use context_args to unpack the context fields directly:
+@Flow.model(context_args=["start_date", "end_date"])
+def load_data(start_date: date, end_date: date, source: str) -> GenericResult[str]:
+    return GenericResult(value=f"{source}:{start_date} to {end_date}")
+
+# The decorator infers DateRangeContext from the parameter types
+loader = load_data(source="my_database")
+assert loader.context_type == DateRangeContext
+
+# Execute with context as usual
+ctx = DateRangeContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31))
+result = loader(ctx)  # "my_database:2024-01-01 to 2024-01-31"
+```
+
+The `context_args` parameter specifies which function parameters should be extracted from the context. The framework automatically determines the context type based on the parameter type annotations.
+
 ## Model Registry
 
 A `ModelRegistry` is a named collection of models.
