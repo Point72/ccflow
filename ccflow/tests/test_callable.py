@@ -462,6 +462,7 @@ class TestCallableModel(TestCase):
         error = "__call__ method must take a single argument, named 'context'"
         self.assertRaisesRegex(ValueError, error, BadModelMissingContextArg)
 
+        # BadModelDoubleContextArg also fails with the same error since extra params aren't allowed
         error = "__call__ method must take a single argument, named 'context'"
         self.assertRaisesRegex(ValueError, error, BadModelDoubleContextArg)
 
