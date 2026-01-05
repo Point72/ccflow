@@ -14,6 +14,7 @@ which all need to be defined together so that pydantic (especially V1) can resol
 import abc
 import inspect
 import logging
+from contextvars import ContextVar
 from functools import lru_cache, wraps
 from inspect import Signature, isclass, signature
 from typing import Any, Callable, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar, Union, get_args, get_origin
@@ -47,6 +48,8 @@ __all__ = (
     "EvaluatorBase",
     "Evaluator",
     "WrapperModel",
+    # Note: resolve() is intentionally not in __all__ to avoid namespace pollution.
+    # Users who need it can import explicitly: from ccflow.callable import resolve
 )
 
 log = logging.getLogger(__name__)
@@ -239,10 +242,60 @@ def _wrap_with_dep_resolution(fn):
     return fn
 
 
+# Context variable for storing resolved dependency values during __call__
+# Maps id(callable_model) -> resolved_value
+_resolved_deps: ContextVar[Dict[int, Any]] = ContextVar("resolved_deps", default={})
+
+# TypeVar for resolve() function to enable proper type inference
+_T = TypeVar("_T")
+
+
+def resolve(dep: Union[_T, "_CallableModel"]) -> _T:
+    """Access the resolved value of a DepOf dependency during __call__.
+
+    This function is used inside a CallableModel's __call__ method to get
+    the resolved value of a dependency field. It provides proper type inference -
+    if the field is `DepOf[..., GenericResult[int]]`, this returns `GenericResult[int]`.
+
+    Args:
+        dep: The dependency field value (either a CallableModel or already-resolved value)
+
+    Returns:
+        The resolved value. If dep is already a resolved value (not a CallableModel),
+        returns it unchanged.
+
+    Raises:
+        RuntimeError: If called outside of __call__ or if the dependency wasn't resolved.
+
+    Example:
+        class MyModel(CallableModel):
+            data: DepOf[..., GenericResult[int]]
+
+            @Flow.call
+            def __call__(self, context: MyContext) -> GenericResult[int]:
+                # resolve() provides proper type inference
+                data = resolve(self.data)  # type: GenericResult[int]
+                return GenericResult(value=data.value + 1)
+    """
+    # If it's not a CallableModel, it's already a resolved value - pass through
+    if not isinstance(dep, _CallableModel):
+        return dep  # type: ignore[return-value]
+
+    # Look up in context var
+    store = _resolved_deps.get()
+    dep_id = id(dep)
+    if dep_id not in store:
+        raise RuntimeError(
+            "resolve() can only be used inside __call__ for DepOf fields. Make sure the field is annotated with DepOf and contains a CallableModel."
+        )
+    return store[dep_id]
+
+
 def _resolve_deps_and_call(model, context, fn):
     """Resolve DepOf fields and call the function.
 
     This is called from ModelEvaluationContext.__call__ to handle dep resolution.
+    Resolved values are stored in a context variable and accessed via resolve().
 
     Args:
         model: The CallableModel instance
@@ -269,8 +322,8 @@ def _resolve_deps_and_call(model, context, fn):
     for dep_model, contexts in deps_result:
         dep_map[id(dep_model)] = (dep_model, contexts)
 
-    # Store original values and resolve
-    originals = {}
+    # Resolve dependencies and store in context var
+    resolved_values = {}
     for field_name, dep in dep_fields.items():
         field_value = getattr(model, field_name, None)
         if field_value is None:
@@ -279,8 +332,6 @@ def _resolve_deps_and_call(model, context, fn):
         # Check if field is a CallableModel that needs resolution
         if not isinstance(field_value, _CallableModel):
             continue  # Already a resolved value, skip
-
-        originals[field_name] = field_value
 
         # Check if this field is in __deps__ (for custom transforms)
         if id(field_value) in dep_map:
@@ -292,16 +343,17 @@ def _resolve_deps_and_call(model, context, fn):
             transformed_ctx = dep.apply(context)
             resolved = field_value(transformed_ctx)
 
-        # Temporarily set resolved value on model
-        object.__setattr__(model, field_name, resolved)
+        # Store resolved value keyed by the CallableModel's id
+        resolved_values[id(field_value)] = resolved
 
+    # Store in context var and call function
+    current_store = _resolved_deps.get()
+    new_store = {**current_store, **resolved_values}
+    token = _resolved_deps.set(new_store)
     try:
-        # Call original function
         return fn(model, context)
     finally:
-        # Restore original CallableModel values
-        for field_name, original_value in originals.items():
-            object.__setattr__(model, field_name, original_value)
+        _resolved_deps.reset(token)
 
 
 class FlowOptions(BaseModel):

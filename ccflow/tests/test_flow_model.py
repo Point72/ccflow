@@ -18,6 +18,7 @@ from ccflow import (
     ModelRegistry,
     ResultBase,
 )
+from ccflow.callable import resolve
 
 
 class SimpleContext(ContextBase):
@@ -1153,7 +1154,7 @@ class TestClassBasedDepResolution(TestCase):
     """
 
     def test_class_based_auto_resolve_basic(self):
-        """Test that DepOf fields are auto-resolved and accessible via self."""
+        """Test that DepOf fields are auto-resolved and accessible via resolve()."""
 
         @Flow.model
         def data_source(context: SimpleContext) -> GenericResult[int]:
@@ -1165,8 +1166,8 @@ class TestClassBasedDepResolution(TestCase):
 
             @Flow.call
             def __call__(self, context: SimpleContext) -> GenericResult[int]:
-                # Access resolved value via self.source
-                return GenericResult(value=self.source.value + 1)
+                # Access resolved value via resolve()
+                return GenericResult(value=resolve(self.source).value + 1)
 
             @Flow.deps
             def __deps__(self, context: SimpleContext):
@@ -1192,7 +1193,7 @@ class TestClassBasedDepResolution(TestCase):
 
             @Flow.call
             def __call__(self, context: SimpleContext) -> GenericResult[int]:
-                return GenericResult(value=self.source.value + self.offset)
+                return GenericResult(value=resolve(self.source).value + self.offset)
 
             @Flow.deps
             def __deps__(self, context: SimpleContext):
@@ -1224,7 +1225,7 @@ class TestClassBasedDepResolution(TestCase):
 
             @Flow.call
             def __call__(self, context: SimpleContext) -> GenericResult[int]:
-                return GenericResult(value=self.source.value + 1)
+                return GenericResult(value=resolve(self.source).value + 1)
 
             @Flow.deps
             def __deps__(self, context: SimpleContext):
@@ -1256,7 +1257,7 @@ class TestClassBasedDepResolution(TestCase):
 
             @Flow.call
             def __call__(self, context: SimpleContext) -> GenericResult[int]:
-                return GenericResult(value=self.a.value + self.b.value)
+                return GenericResult(value=resolve(self.a).value + resolve(self.b).value)
 
             @Flow.deps
             def __deps__(self, context: SimpleContext):
@@ -1285,7 +1286,7 @@ class TestClassBasedDepResolution(TestCase):
 
             @Flow.call
             def __call__(self, context: SimpleContext) -> GenericResult[int]:
-                return GenericResult(value=self.source.value * 2)
+                return GenericResult(value=resolve(self.source).value * 2)
 
             @Flow.deps
             def __deps__(self, context: SimpleContext):
@@ -1310,7 +1311,8 @@ class TestClassBasedDepResolution(TestCase):
 
             @Flow.call
             def __call__(self, context: SimpleContext) -> GenericResult[int]:
-                return GenericResult(value=self.source.value + context.value)
+                # resolve() passes through non-CallableModel values unchanged
+                return GenericResult(value=resolve(self.source).value + context.value)
 
             @Flow.deps
             def __deps__(self, context: SimpleContext):
@@ -1341,7 +1343,7 @@ class TestClassBasedDepResolution(TestCase):
 
             @Flow.call
             def __call__(self, context: SimpleContext) -> GenericResult[int]:
-                return GenericResult(value=self.data.value + 1)
+                return GenericResult(value=resolve(self.data).value + 1)
 
             @Flow.deps
             def __deps__(self, context: SimpleContext):
@@ -1381,7 +1383,7 @@ class TestClassBasedDepResolution(TestCase):
             @Flow.call
             def __call__(self, context: SimpleContext) -> GenericResult[int]:
                 call_counts["layer_b"] += 1
-                return GenericResult(value=self.source.value * 10)
+                return GenericResult(value=resolve(self.source).value * 10)
 
             @Flow.deps
             def __deps__(self, context: SimpleContext):
@@ -1394,7 +1396,7 @@ class TestClassBasedDepResolution(TestCase):
             @Flow.call
             def __call__(self, context: SimpleContext) -> GenericResult[int]:
                 call_counts["layer_a"] += 1
-                return GenericResult(value=self.source.value + 1)
+                return GenericResult(value=resolve(self.source).value + 1)
 
             @Flow.deps
             def __deps__(self, context: SimpleContext):
@@ -1415,6 +1417,58 @@ class TestClassBasedDepResolution(TestCase):
         self.assertEqual(call_counts["layer_c"], 1, "layer_c should be called exactly once")
         self.assertEqual(call_counts["layer_b"], 1, "layer_b should be called exactly once")
         self.assertEqual(call_counts["layer_a"], 1, "layer_a should be called exactly once")
+
+    def test_resolve_direct_value_passthrough(self):
+        """Test that resolve() passes through non-CallableModel values unchanged."""
+
+        class Consumer(CallableModel):
+            data: DepOf[..., GenericResult[int]]
+
+            @Flow.call
+            def __call__(self, context: SimpleContext) -> GenericResult[int]:
+                # resolve() should return the GenericResult directly (pass-through)
+                resolved = resolve(self.data)
+                # Verify it's the actual GenericResult, not a CallableModel
+                assert isinstance(resolved, GenericResult)
+                return GenericResult(value=resolved.value * 2)
+
+            @Flow.deps
+            def __deps__(self, context: SimpleContext):
+                return []
+
+        # Pass a direct value, not a CallableModel
+        direct_result = GenericResult(value=42)
+        consumer = Consumer(data=direct_result)
+
+        result = consumer(SimpleContext(value=5))
+        self.assertEqual(result.value, 84)  # 42 * 2
+
+    def test_resolve_outside_call_raises_error(self):
+        """Test that resolve() raises RuntimeError when called outside __call__."""
+
+        @Flow.model
+        def source(context: SimpleContext) -> GenericResult[int]:
+            return GenericResult(value=context.value)
+
+        class Consumer(CallableModel):
+            data: DepOf[..., GenericResult[int]]
+
+            @Flow.call
+            def __call__(self, context: SimpleContext) -> GenericResult[int]:
+                return GenericResult(value=resolve(self.data).value)
+
+            @Flow.deps
+            def __deps__(self, context: SimpleContext):
+                return [(self.data, [context])]
+
+        src = source()
+        consumer = Consumer(data=src)
+
+        # Calling resolve() outside of __call__ should raise RuntimeError
+        with self.assertRaises(RuntimeError) as cm:
+            resolve(consumer.data)
+
+        self.assertIn("resolve() can only be used inside __call__", str(cm.exception))
 
     def test_flow_model_uses_unified_resolution_path(self):
         """Test that @Flow.model uses the same resolution path as class-based CallableModel.
@@ -1445,7 +1499,7 @@ class TestClassBasedDepResolution(TestCase):
             @Flow.call
             def __call__(self, context: SimpleContext) -> GenericResult[int]:
                 call_counts["class_model"] += 1
-                return GenericResult(value=self.data.value + 100)
+                return GenericResult(value=resolve(self.data).value + 100)
 
             @Flow.deps
             def __deps__(self, context: SimpleContext):

@@ -190,6 +190,9 @@ def flow_model(
 
         # Create the __call__ method
         def make_call_impl():
+            # Import resolve here to avoid circular import at module level
+            from .callable import resolve
+
             def __call__(self, context):
                 # Build kwargs for the original function
                 if use_context_args:
@@ -199,9 +202,14 @@ def flow_model(
                     # Pass context directly (using actual parameter name: 'context' or '_')
                     fn_kwargs = {ctx_param_name: context}
 
-                # Add model fields (deps are resolved by _resolve_deps_and_call in callable.py)
+                # Add model fields - use resolve() for dep fields to get resolved values
                 for name in model_fields:
-                    fn_kwargs[name] = getattr(self, name)
+                    value = getattr(self, name)
+                    if name in dep_fields:
+                        # Use resolve() to get the resolved value from context var
+                        fn_kwargs[name] = resolve(value)
+                    else:
+                        fn_kwargs[name] = value
 
                 return fn(**fn_kwargs)
 

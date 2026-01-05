@@ -154,7 +154,7 @@ class Dep:
 
     def __init__(
         self,
-        transform: Optional[Callable[[ContextBase], ContextBase]] = None,
+        transform: Optional[Callable[..., ContextBase]] = None,
         context_type: Optional[Type[ContextBase]] = None,
     ):
         """

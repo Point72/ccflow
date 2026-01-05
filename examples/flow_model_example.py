@@ -11,6 +11,7 @@ from datetime import date, timedelta
 from typing import Annotated
 
 from ccflow import CallableModel, DateRangeContext, Dep, DepOf, Flow, GenericResult
+from ccflow.callable import resolve
 
 
 # =============================================================================
@@ -77,7 +78,7 @@ class ComputeMovingAverage(CallableModel):
     This demonstrates:
     - Field uses DepOf annotation: accepts either result or CallableModel
     - Instance field (window) accessible in __deps__ for custom transforms
-    - Auto-resolution: self.records returns resolved value during __call__
+    - resolve() to access resolved dependency values during __call__
     """
 
     records: DepOf[..., GenericResult[list]]
@@ -85,8 +86,9 @@ class ComputeMovingAverage(CallableModel):
 
     @Flow.call
     def __call__(self, context: DateRangeContext) -> GenericResult[float]:
-        """Compute the moving average - self.records is already resolved."""
-        values = [r["value"] for r in self.records.value]
+        """Compute the moving average - use resolve() to get resolved value."""
+        records = resolve(self.records)  # Get the resolved GenericResult
+        values = [r["value"] for r in records.value]
         avg = sum(values) / len(values) if values else 0
         print(f"  Computing {self.window}-day moving average: {avg:.2f} (from {len(values)} records)")
         return GenericResult(value=avg)
