@@ -150,7 +150,7 @@ class _SerializeAsAnyMeta(ModelMetaclass):
 
 
 class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta):
-    """BaseModel is a base class for all pydantic models within the cubist flow framework.
+    """BaseModel is a base class for all pydantic models within the ccflow framework.
 
     This gives us a way to add functionality to the framework, including
         - Type of object is part of serialization/deserialization
