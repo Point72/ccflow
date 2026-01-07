@@ -5,7 +5,14 @@ from unittest import TestCase
 import pandas as pd
 import pyarrow as pa
 
-from ccflow import DateContext, DateRangeContext, Evaluator, FlowOptionsOverride, ModelEvaluationContext, NullContext
+from ccflow import (
+    DateContext,
+    DateRangeContext,
+    Evaluator,
+    FlowOptionsOverride,
+    ModelEvaluationContext,
+    NullContext,
+)
 from ccflow.evaluators import (
     FallbackEvaluator,
     GraphEvaluator,

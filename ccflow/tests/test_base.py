@@ -1,9 +1,10 @@
 from typing import Any, Dict, List
-from unittest import TestCase
+from unittest import TestCase, mock
 
-from pydantic import ConfigDict, ValidationError
+from pydantic import BaseModel as PydanticBaseModel, ConfigDict, ValidationError
 
-from ccflow import BaseModel, PyObjectPath
+from ccflow import BaseModel, CallableModel, ContextBase, Flow, GenericResult, NullContext, PyObjectPath
+from ccflow.local_persistence import LOCAL_ARTIFACTS_MODULE_NAME
 
 
 class ModelA(BaseModel):
@@ -106,6 +107,20 @@ class TestBaseModel(TestCase):
         self.assertIsInstance(m.type_, PyObjectPath)
         self.assertEqual(m.type_, path)
 
+    def test_pyobjectpath_requires_ccflow_local_registration(self):
+        class PlainLocalModel(PydanticBaseModel):
+            value: int
+
+        with self.assertRaises(ValueError):
+            PyObjectPath.validate(PlainLocalModel)
+
+        class LocalCcflowModel(BaseModel):
+            value: int
+
+        path = PyObjectPath.validate(LocalCcflowModel)
+        self.assertEqual(path.object, LocalCcflowModel)
+        self.assertTrue(str(path).startswith(f"{LOCAL_ARTIFACTS_MODULE_NAME}."))
+
     def test_validate(self):
         self.assertEqual(ModelA.model_validate({"x": "foo"}), ModelA(x="foo"))
         type_ = "ccflow.tests.test_base.ModelA"
@@ -157,3 +172,35 @@ class TestBaseModel(TestCase):
                 {"expanded": True, "root": "bar"},
             ),
         )
+
+
+class TestLocalRegistration(TestCase):
+    def test_local_class_registered_for_base_model(self):
+        with mock.patch("ccflow.base.register_ccflow_import_path") as register:
+
+            class LocalModel(BaseModel):
+                value: int
+
+        # Local classes (defined in functions) should be registered
+        calls = [args[0] for args, _ in register.call_args_list if args]
+        self.assertIn(LocalModel, calls)
+
+    def test_local_class_registered_for_context(self):
+        with mock.patch("ccflow.base.register_ccflow_import_path") as register:
+
+            class LocalContext(ContextBase):
+                value: int
+
+        calls = [args[0] for args, _ in register.call_args_list if args]
+        self.assertIn(LocalContext, calls)
+
+    def test_local_class_registered_for_callable(self):
+        with mock.patch("ccflow.base.register_ccflow_import_path") as register:
+
+            class LocalCallable(CallableModel):
+                @Flow.call
+                def __call__(self, context: NullContext) -> GenericResult:
+                    return GenericResult(value="ok")
+
+        calls = [args[0] for args, _ in register.call_args_list if args]
+        self.assertIn(LocalCallable, calls)

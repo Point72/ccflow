@@ -30,6 +30,7 @@ from pydantic.fields import Field
 from typing_extensions import Self
 
 from .exttypes.pyobjectpath import PyObjectPath
+from .local_persistence import register_ccflow_import_path, sync_to_module
 
 log = logging.getLogger(__name__)
 
@@ -156,6 +157,19 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
         - Registration by name, and coercion from string name to allow for object re-use from the configs
     """
 
+    @classmethod
+    def __pydantic_init_subclass__(cls, **kwargs):
+        super().__pydantic_init_subclass__(**kwargs)
+        # Register local-scope classes and __main__ classes so they're importable via PyObjectPath.
+        # - Local classes (<locals> in qualname) aren't importable via their qualname path
+        # - __main__ classes aren't importable cross-process (cloudpickle recreates them but
+        #   doesn't add them to sys.modules["__main__"])
+        # Note: Cross-process unpickle sync (when __ccflow_import_path__ is already set) happens
+        # lazily via sync_to_module, since cloudpickle sets class attributes
+        # AFTER __pydantic_init_subclass__ runs.
+        if "<locals>" in cls.__qualname__ or cls.__module__ == "__main__":
+            register_ccflow_import_path(cls)
+
     @computed_field(
         alias="_target_",
         repr=False,
@@ -165,8 +179,18 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
     )
     @property
     def type_(self) -> PyObjectPath:
-        """The path to the object type"""
-        return PyObjectPath.validate(type(self))
+        """The path to the object type.
+
+        For local classes (defined in functions), this returns the __ccflow_import_path__.
+        For cross-process unpickle scenarios, this also ensures the class is synced to
+        the ccflow.local_persistence module so the import path resolves correctly.
+        """
+        cls = type(self)
+        # Handle cross-process unpickle: cloudpickle sets __ccflow_import_path__ but
+        # the class may not be on ccflow.local_persistence yet in this process
+        if "__ccflow_import_path__" in cls.__dict__:
+            sync_to_module(cls)
+        return PyObjectPath.validate(cls)
 
     # We want to track under what names a model has been registered
     _registrations: List[Tuple["ModelRegistry", str]] = PrivateAttr(default_factory=list)
