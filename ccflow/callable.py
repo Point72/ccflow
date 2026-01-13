@@ -312,7 +312,10 @@ def _resolve_deps_and_call(model, context, fn):
     # Get Dep-annotated fields for this model class
     dep_fields = _get_dep_fields(model.__class__)
 
-    if not dep_fields:
+    # Check if model has custom deps (from @func.deps decorator)
+    has_custom_deps = getattr(model.__class__, "__has_custom_deps__", False)
+
+    if not dep_fields and not has_custom_deps:
         return fn(model, context)
 
     # Get dependencies from __deps__
@@ -324,27 +327,37 @@ def _resolve_deps_and_call(model, context, fn):
 
     # Resolve dependencies and store in context var
     resolved_values = {}
-    for field_name, dep in dep_fields.items():
-        field_value = getattr(model, field_name, None)
-        if field_value is None:
-            continue
 
-        # Check if field is a CallableModel that needs resolution
-        if not isinstance(field_value, _CallableModel):
-            continue  # Already a resolved value, skip
-
-        # Check if this field is in __deps__ (for custom transforms)
-        if id(field_value) in dep_map:
-            dep_model, contexts = dep_map[id(field_value)]
-            # Call dependency with the (transformed) context
+    # If custom deps, resolve ALL CallableModel fields from dep_map
+    if has_custom_deps:
+        for dep_model, contexts in deps_result:
             resolved = dep_model(contexts[0]) if contexts else dep_model(context)
-        else:
-            # Not in __deps__, use Dep annotation transform directly
-            transformed_ctx = dep.apply(context)
-            resolved = field_value(transformed_ctx)
+            # Unwrap GenericResult if present (consistent with auto-detected deps)
+            if hasattr(resolved, 'value'):
+                resolved = resolved.value
+            resolved_values[id(dep_model)] = resolved
+    else:
+        # Standard path: iterate over Dep-annotated fields
+        for field_name, dep in dep_fields.items():
+            field_value = getattr(model, field_name, None)
+            if field_value is None:
+                continue
 
-        # Store resolved value keyed by the CallableModel's id
-        resolved_values[id(field_value)] = resolved
+            # Check if field is a CallableModel that needs resolution
+            if not isinstance(field_value, _CallableModel):
+                continue  # Already a resolved value, skip
+
+            # Check if this field is in __deps__ (for custom transforms)
+            if id(field_value) in dep_map:
+                dep_model, contexts = dep_map[id(field_value)]
+                # Call dependency with the (transformed) context
+                resolved = dep_model(contexts[0]) if contexts else dep_model(context)
+            else:
+                # Not in __deps__, use Dep annotation transform directly
+                transformed_ctx = dep.apply(context)
+                resolved = field_value(transformed_ctx)
+
+            resolved_values[id(field_value)] = resolved
 
     # Store in context var and call function
     current_store = _resolved_deps.get()

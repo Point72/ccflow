@@ -609,15 +609,45 @@ class TestFlowModelErrors(TestCase):
 
         self.assertIn("ResultBase", str(cm.exception))
 
-    def test_missing_context_and_context_args(self):
-        """Test error when neither context param nor context_args provided."""
-        with self.assertRaises(TypeError) as cm:
+    def test_dynamic_deferred_mode(self):
+        """Test dynamic deferred mode where what you provide at construction = bound."""
+        from ccflow import FlowContext
 
-            @Flow.model
-            def no_context(value: int) -> GenericResult[int]:
-                return GenericResult(value=value)
+        @Flow.model
+        def dynamic_model(value: int, multiplier: int) -> GenericResult[int]:
+            return GenericResult(value=value * multiplier)
 
-        self.assertIn("context", str(cm.exception))
+        # Provide 'multiplier' at construction -> it's bound
+        # Don't provide 'value' -> comes from context
+        model = dynamic_model(multiplier=3)
+
+        # Check bound vs unbound
+        self.assertEqual(model.flow.bound_inputs, {"multiplier": 3})
+        self.assertEqual(model.flow.unbound_inputs, {"value": int})
+
+        # Call with context providing 'value'
+        ctx = FlowContext(value=10)
+        result = model(ctx)
+        self.assertEqual(result.value, 30)  # 10 * 3
+
+    def test_all_defaults_is_valid(self):
+        """Test that all-defaults function is valid (everything can be pre-bound)."""
+        from ccflow import FlowContext
+
+        @Flow.model
+        def all_defaults(value: int = 1, other: str = "x") -> GenericResult[str]:
+            return GenericResult(value=f"{value}-{other}")
+
+        # No args provided -> everything comes from defaults or context
+        model = all_defaults()
+
+        # All params are unbound (not provided at construction)
+        self.assertEqual(model.flow.unbound_inputs, {"value": int, "other": str})
+
+        # Call with context - context values override defaults
+        ctx = FlowContext(value=5, other="y")
+        result = model(ctx)
+        self.assertEqual(result.value, "5-y")
 
     def test_invalid_context_arg(self):
         """Test error when context_args refers to non-existent parameter."""

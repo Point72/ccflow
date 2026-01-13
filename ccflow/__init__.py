@@ -12,6 +12,7 @@ from .callable import *
 from .context import *
 from .dep import *
 from .enums import Enum
+from .flow_model import FlowAPI, BoundModel, Lazy
 from .global_state import *
 from .local_persistence import *
 from .models import *

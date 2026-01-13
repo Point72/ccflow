@@ -2,10 +2,10 @@
 
 import warnings
 from datetime import date, datetime
-from typing import Generic, Hashable, Optional, Sequence, Set, TypeVar
+from typing import Any, Generic, Hashable, Optional, Sequence, Set, TypeVar
 
 from deprecated import deprecated
-from pydantic import field_validator, model_validator
+from pydantic import ConfigDict, field_validator, model_validator
 
 from .base import ContextBase
 from .exttypes import Frequency
@@ -15,6 +15,7 @@ warnings.simplefilter("always", DeprecationWarning)
 
 
 __all__ = (
+    "FlowContext",
     "NullContext",
     "GenericContext",
     "DateContext",
@@ -92,6 +93,42 @@ _SEPARATOR = ","
 
 # Starting 0.8.0 Nullcontext is an alias to ContextBase
 NullContext = ContextBase
+
+
+class FlowContext(ContextBase):
+    """Universal context for @Flow.model functions.
+
+    Instead of generating a new ContextBase subclass for each @Flow.model,
+    this single class with extra="allow" serves as the universal carrier.
+    Validation happens via TypedDict + TypeAdapter at compute() time.
+
+    This design avoids:
+    - Proliferation of dynamic _funcname_Context classes
+    - Class registration overhead for serialization
+    - Pickling issues with Ray/distributed computing
+
+    Fields are stored in __pydantic_extra__ and accessed via __getattr__.
+    """
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    def __getattr__(self, name: str) -> Any:
+        """Access fields stored in __pydantic_extra__."""
+        # Use object.__getattribute__ to avoid infinite recursion
+        try:
+            extra = object.__getattribute__(self, "__pydantic_extra__")
+            if extra is not None and name in extra:
+                return extra[name]
+        except AttributeError:
+            pass
+        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+
+    def __repr__(self) -> str:
+        """Show all fields including extra fields."""
+        extra = object.__getattribute__(self, "__pydantic_extra__") or {}
+        fields = ", ".join(f"{k}={v!r}" for k, v in extra.items())
+        return f"FlowContext({fields})"
+
 
 C = TypeVar("C", bound=Hashable)
 
