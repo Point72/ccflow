@@ -241,6 +241,24 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
         # Can't use self.model_dump_json or self.model_dump because they don't expose the fallback argument
         return JSON(self.__pydantic_serializer__.to_python(self, **kwargs), **(widget_kwargs or {}))
 
+    def __panel__(self):
+        """Return a Panel viewable for this model.
+
+        Requires ccflow UI dependencies (panel, panel_material_ui).
+        """
+        from ccflow.ui.model import ModelViewer
+
+        return ModelViewer(model=self)
+
+    def get_panel(self):
+        """Get a Panel pane for this model.
+
+        Requires panel to be installed.
+        """
+        import panel as pn
+
+        return pn.panel(self)
+
     @model_validator(mode="wrap")
     def _base_model_validator(cls, v, handler, info):
         if isinstance(v, str):
@@ -399,6 +417,15 @@ class ModelRegistry(BaseModel, collections.abc.Mapping):
     def models(self) -> MappingProxyType:
         """Return an immutable pointer to the models dictionary."""
         return MappingProxyType(self._models)
+
+    def __panel__(self):
+        """Return a Panel viewable for this registry.
+
+        Requires ccflow UI dependencies (panel, panel_material_ui).
+        """
+        from ccflow.ui.registry import ModelRegistryViewer
+
+        return ModelRegistryViewer(self)
 
     @classmethod
     def root(cls) -> Self:

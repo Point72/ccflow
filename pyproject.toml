@@ -52,9 +52,12 @@ dependencies = [
 
 [project.optional-dependencies]
 full = [
+    "bleach",
     "cexprtk",
     "duckdb",
     "pandas",
+    "panel",
+    "panel_material_ui",
     "plotly",
     "polars",
     "ray",
@@ -75,10 +78,13 @@ develop = [
     "uv",
     "wheel",
     # Full deps
+    "bleach",
     "cexprtk",
     "csp>=0.8.0,<1",
     "duckdb",
     "pandas",
+    "panel",
+    "panel_material_ui",
     "plotly",
     "polars",
     "ray",
