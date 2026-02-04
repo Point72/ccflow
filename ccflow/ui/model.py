@@ -1,10 +1,7 @@
 import html
 
-import bleach
 import panel as pn
-
-# Register extensions
-import panel_material_ui  # noqa: F401
+import panel_material_ui  # noqa: F401  Must be imported like this to register the extension
 import panel_material_ui as pmui
 import param
 from pydantic._internal._repr import display_as_type
@@ -161,10 +158,16 @@ class ModelConfigViewer(param.Parameterized):
 
         desc_html = ""
         if description:
+            try:
+                import bleach
+
+                description = bleach.linkify(html.escape(description))
+            except ImportError:
+                description = html.escape(description)
             desc_html = f"""
             <div style="margin-bottom:6px;">
               <div style="font-weight:600;">Instance Description</div>
-              <div>{bleach.linkify(html.escape(description))}</div>
+              <div>{description}</div>
             </div>
             """
 

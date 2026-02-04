@@ -1,7 +1,5 @@
 import panel as pn
-
-# Register extensions
-import panel_material_ui  # noqa: F401
+import panel_material_ui  # noqa: F401  Must be imported like this to register the extension
 import panel_material_ui as pmui
 import param
 
