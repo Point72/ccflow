@@ -3,6 +3,7 @@ from typing import Annotated
 import narwhals.stable.v1 as nw
 import polars as pl
 import pytest
+from polars.testing import assert_frame_equal
 
 from ccflow.exttypes.narwhals import (
     DataFrameT,
@@ -90,3 +91,10 @@ def test_custom(data, schema):
     df = pl.DataFrame(data)
     result = MyNarwhalsResult(df=df)
     assert result.df.schema["d"] == nw.Float64()
+
+
+def test_serialization(data):
+    df = pl.DataFrame(data)
+    result = NarwhalsDataFrameResult(df=df)
+    result2 = NarwhalsDataFrameResult.model_validate_json(result.model_dump_json())
+    assert_frame_equal(result.df.to_native(), result2.df.to_native())

@@ -59,6 +59,13 @@ class FrameValidator:
                 if source_args and source_args[0] and source_args[0] is not Any:
                     backend = source_args[0].__module__.split(".", 1)[0]
 
+                if "backend" in value:
+                    if backend is None:
+                        # backend in source args takes precedence
+                        backend = value["backend"]
+
+                    value = value["data"]
+
                 try:
                     try:
                         value = nw.from_dict(value, backend=backend)
@@ -89,7 +96,10 @@ class FrameValidator:
 
         def serialize(value: Any):
             if isinstance(value, nw.DataFrame):
-                return value.to_dict(as_series=False)
+                return {
+                    "data": value.to_dict(as_series=False),
+                    "backend": value.implementation.value,
+                }
             else:
                 raise ValueError("Cannot serialize a LazyFrame to JSON. Please use the collect() method to convert it to a DataFrame first.")
 
