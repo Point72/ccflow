@@ -1,14 +1,12 @@
 """CLI for serving ModelRegistryViewer as a Panel application."""
 
 import argparse
-import inspect
-from pathlib import Path
 from typing import Callable, Optional
 
 import panel as pn
 
 from ccflow import ModelRegistry
-from ccflow.utils.hydra import load_config
+from ccflow.utils.hydra import add_hydra_config_args, add_panel_server_args, load_config, resolve_config_paths
 
 from .registry import ModelRegistryViewer
 
@@ -22,64 +20,13 @@ def _get_ui_args_parser() -> argparse.ArgumentParser:
         description="Serve ModelRegistryViewer as a Panel application",
     )
 
-    # Registry loading arguments (similar to utils.hydra)
-    parser.add_argument(
-        "overrides",
-        nargs="*",
-        help="Key=value arguments to override config values",
-    )
-    parser.add_argument(
-        "--config-path",
-        "-cp",
-        help="Path to the Hydra config directory",
-    )
-    parser.add_argument(
-        "--config-name",
-        "-cn",
-        help="Name of the config file (without .yaml extension)",
-    )
-    parser.add_argument(
-        "--config-dir",
-        "-cd",
-        help="Additional config directory to add to search path",
-    )
-    parser.add_argument(
-        "--config-dir-config-name",
-        "-cdcn",
-        help="Config name to look for within config-dir",
-    )
-    parser.add_argument(
-        "--basepath",
-        help="Base path for searching config directories",
-    )
+    # Standard hydra config loading arguments
+    add_hydra_config_args(parser)
 
-    # UI server arguments
-    parser.add_argument(
-        "--address",
-        type=str,
-        default="127.0.0.1",
-        help="Address to bind the server to (default: 127.0.0.1)",
-    )
-    parser.add_argument(
-        "--port",
-        type=int,
-        default=8080,
-        help="Port to bind the server to (default: 8080)",
-    )
-    parser.add_argument(
-        "--allow-websocket-origin",
-        type=str,
-        nargs="+",
-        default=["*"],
-        help="Allowed websocket origins (default: *)",
-    )
-    parser.add_argument(
-        "--show",
-        action="store_true",
-        help="Open browser automatically",
-    )
+    # Standard Panel server arguments
+    add_panel_server_args(parser)
 
-    # Viewer layout arguments
+    # Viewer-specific arguments
     parser.add_argument(
         "--browser-width",
         type=int,
@@ -122,21 +69,8 @@ def registry_viewer_cli(
     parser = _get_ui_args_parser()
     args = parser.parse_args()
 
-    # Resolve config path (same logic as cfg_explain_cli)
-    if args.config_path:
-        root_config_dir = args.config_path
-    elif hydra_main and config_path:
-        root_config_dir = str(Path(inspect.getfile(hydra_main.__wrapped__)).parent / config_path)
-    else:
-        raise ValueError("Must provide --config-path.")
-
-    # Resolve config name
-    if args.config_name:
-        root_config_name = args.config_name
-    elif config_name:
-        root_config_name = config_name
-    else:
-        raise ValueError("Must provide --config-name.")
+    # Resolve config paths using shared helper
+    root_config_dir, root_config_name = resolve_config_paths(args, config_path, config_name, hydra_main)
 
     # Load config using hydra utilities
     result = load_config(

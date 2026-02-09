@@ -1,10 +1,196 @@
+import argparse
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 from hydra import compose, initialize
 
-from ccflow.utils.hydra import get_args_parser_default, load_config
+from ccflow.utils.hydra import (
+    add_hydra_config_args,
+    add_panel_server_args,
+    get_args_parser_default,
+    load_config,
+    resolve_config_paths,
+)
+
+
+class TestAddHydraConfigArgs:
+    """Tests for add_hydra_config_args helper function."""
+
+    def test_adds_all_arguments(self):
+        """Test that all expected arguments are added."""
+        parser = argparse.ArgumentParser()
+        add_hydra_config_args(parser)
+        args = parser.parse_args([])
+
+        assert hasattr(args, "overrides")
+        assert hasattr(args, "config_path")
+        assert hasattr(args, "config_name")
+        assert hasattr(args, "config_dir")
+        assert hasattr(args, "config_dir_config_name")
+        assert hasattr(args, "basepath")
+
+    def test_default_values(self):
+        """Test default values for all arguments."""
+        parser = argparse.ArgumentParser()
+        add_hydra_config_args(parser)
+        args = parser.parse_args([])
+
+        assert args.overrides == []
+        assert args.config_path is None
+        assert args.config_name is None
+        assert args.config_dir is None
+        assert args.config_dir_config_name is None
+        assert args.basepath is None
+
+    def test_short_flags(self):
+        """Test short flag aliases work correctly."""
+        parser = argparse.ArgumentParser()
+        add_hydra_config_args(parser)
+        args = parser.parse_args(["-cp", "/path", "-cn", "name", "-cd", "/dir", "-cdcn", "dirname"])
+
+        assert args.config_path == "/path"
+        assert args.config_name == "name"
+        assert args.config_dir == "/dir"
+        assert args.config_dir_config_name == "dirname"
+
+    def test_overrides_positional(self):
+        """Test overrides are captured as positional arguments."""
+        parser = argparse.ArgumentParser()
+        add_hydra_config_args(parser)
+        args = parser.parse_args(["key1=value1", "key2=value2", "+group=option"])
+
+        assert args.overrides == ["key1=value1", "key2=value2", "+group=option"]
+
+
+class TestAddPanelServerArgs:
+    """Tests for add_panel_server_args helper function."""
+
+    def test_adds_all_arguments(self):
+        """Test that all expected arguments are added."""
+        parser = argparse.ArgumentParser()
+        add_panel_server_args(parser)
+        args = parser.parse_args([])
+
+        assert hasattr(args, "address")
+        assert hasattr(args, "port")
+        assert hasattr(args, "allow_websocket_origin")
+        assert hasattr(args, "basic_auth")
+        assert hasattr(args, "cookie_secret")
+        assert hasattr(args, "show")
+
+    def test_default_values(self):
+        """Test default values for all arguments."""
+        parser = argparse.ArgumentParser()
+        add_panel_server_args(parser)
+        args = parser.parse_args([])
+
+        assert args.address == "127.0.0.1"
+        assert args.port == 8080
+        assert args.allow_websocket_origin == ["*"]
+        assert args.basic_auth is None
+        assert args.cookie_secret == "secret"
+        assert args.show is False
+
+    def test_sets_epilog(self):
+        """Test that epilog is set on the parser."""
+        parser = argparse.ArgumentParser()
+        add_panel_server_args(parser)
+
+        assert parser.epilog is not None
+        assert "server" in parser.epilog.lower()
+
+    def test_custom_values(self):
+        """Test setting custom values for arguments."""
+        parser = argparse.ArgumentParser()
+        add_panel_server_args(parser)
+        args = parser.parse_args(
+            [
+                "--address",
+                "0.0.0.0",
+                "--port",
+                "9000",
+                "--basic-auth",
+                "user:pass",
+                "--cookie-secret",
+                "mysecret",
+                "--show",
+            ]
+        )
+
+        assert args.address == "0.0.0.0"
+        assert args.port == 9000
+        assert args.basic_auth == "user:pass"
+        assert args.cookie_secret == "mysecret"
+        assert args.show is True
+
+    def test_websocket_origin_multiple(self):
+        """Test multiple websocket origins."""
+        parser = argparse.ArgumentParser()
+        add_panel_server_args(parser)
+        args = parser.parse_args(["--allow-websocket-origin", "localhost:8080", "example.com"])
+
+        assert args.allow_websocket_origin == ["localhost:8080", "example.com"]
+
+
+class TestResolveConfigPaths:
+    """Tests for resolve_config_paths helper function."""
+
+    def test_uses_args_config_path(self):
+        """Test that args.config_path takes precedence."""
+        args = argparse.Namespace(config_path="/from/args", config_name="name")
+        root_dir, root_name = resolve_config_paths(args, config_path="/default", config_name="default")
+
+        assert root_dir == "/from/args"
+        assert root_name == "name"
+
+    def test_uses_args_config_name(self):
+        """Test that args.config_name takes precedence."""
+        args = argparse.Namespace(config_path="/path", config_name="from_args")
+        root_dir, root_name = resolve_config_paths(args, config_path="", config_name="default")
+
+        assert root_name == "from_args"
+
+    def test_falls_back_to_config_name_default(self):
+        """Test fallback to config_name parameter when args.config_name is None."""
+        args = argparse.Namespace(config_path="/path", config_name=None)
+        root_dir, root_name = resolve_config_paths(args, config_path="", config_name="default_name")
+
+        assert root_name == "default_name"
+
+    def test_raises_without_config_path(self):
+        """Test ValueError when no config_path available."""
+        args = argparse.Namespace(config_path=None, config_name="name")
+
+        with pytest.raises(ValueError, match="Must provide --config-path"):
+            resolve_config_paths(args, config_path="", config_name="name", hydra_main=None)
+
+    def test_raises_without_config_name(self):
+        """Test ValueError when no config_name available."""
+        args = argparse.Namespace(config_path="/path", config_name=None)
+
+        with pytest.raises(ValueError, match="Must provide --config-name"):
+            resolve_config_paths(args, config_path="", config_name="", hydra_main=None)
+
+    def test_uses_hydra_main_for_config_path(self):
+        """Test that hydra_main is used to resolve config_path."""
+        # Create a mock hydra_main with __wrapped__ attribute
+        mock_func = MagicMock()
+        mock_func.__wrapped__ = lambda: None
+        # Mock inspect.getfile to return a known path
+        import ccflow.utils.hydra as hydra_module
+
+        original_getfile = hydra_module.inspect.getfile
+
+        try:
+            hydra_module.inspect.getfile = lambda x: "/some/module/path.py"
+            args = argparse.Namespace(config_path=None, config_name="name")
+            root_dir, root_name = resolve_config_paths(args, config_path="config", config_name="name", hydra_main=mock_func)
+
+            assert root_dir == "/some/module/config"
+        finally:
+            hydra_module.inspect.getfile = original_getfile
 
 
 @pytest.fixture
