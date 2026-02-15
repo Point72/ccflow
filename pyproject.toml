@@ -163,8 +163,9 @@ artifacts = []
 src = "/"
 
 [tool.hatch.build.targets.sdist]
-<<<<<<< before updating
-packages = ["ccflow"]
+packages = [
+    "ccflow",
+]
 exclude = [
     "/.github",
     "/.gitignore",
@@ -172,20 +173,13 @@ exclude = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["ccflow"]
+packages = [
+    "ccflow",
+]
 exclude = [
     "/.github",
     "/.gitignore",
     "/docs",
-=======
-packages = [
-    "ccflow",
-]
-
-[tool.hatch.build.targets.wheel]
-packages = [
-    "ccflow",
->>>>>>> after updating
 ]
 
 [tool.hatch.build.targets.wheel.shared-data]
@@ -221,11 +215,7 @@ section-order = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-<<<<<<< before updating
-"__init__.py" = ["F401", "F403"]
-=======
 "__init__.py" = [
     "F401",
     "F403",
 ]
->>>>>>> after updating
