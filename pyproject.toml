@@ -2,7 +2,7 @@
 requires = [
     "hatchling",
 ]
-build-backend="hatchling.build"
+build-backend = "hatchling.build"
 
 [project]
 name = "ccflow"
@@ -71,12 +71,12 @@ full = [
 develop = [
     "build",
     "bump-my-version",
-    "check-manifest",
-    "codespell>=2.4,<2.5",
+    "check-dist",
+    "codespell",
     "hatchling",
-    "mdformat>=0.7.22,<1.1",
+    "mdformat",
     "mdformat-tables>=1",
-    "ruff>=0.9,<0.15",
+    "ruff",
     "toml",
     "twine",
     "ty",
@@ -135,13 +135,6 @@ filename = "pyproject.toml"
 search = 'version = "{current_version}"'
 replace = 'version = "{new_version}"'
 
-[tool.check-manifest]
-ignore = [
-    ".copier-answers.yaml",
-    "Makefile",
-    "docs/**/*",
-]
-
 [tool.coverage.run]
 branch = true
 omit = [
@@ -167,9 +160,7 @@ packages = [
     "ccflow",
 ]
 exclude = [
-    "/.github",
-    "/.gitignore",
-    "/docs",
+    "docs",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -177,9 +168,7 @@ packages = [
     "ccflow",
 ]
 exclude = [
-    "/.github",
-    "/.gitignore",
-    "/docs",
+    "docs",
 ]
 
 [tool.hatch.build.targets.wheel.shared-data]
