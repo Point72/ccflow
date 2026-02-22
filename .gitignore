@@ -156,16 +156,13 @@ ccflow/labextension
 # Rust
 target
 
-<<<<<<< before updating
+# Hydra
+outputs/
+multirun/
+
 # Examples
-outputs
 raw.html
 extracted.csv
 etl.db
 lobsters.html
 lobsters.csv
-=======
-# Hydra
-outputs/
-multirun/
->>>>>>> after updating
