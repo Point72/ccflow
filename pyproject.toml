@@ -76,14 +76,8 @@ develop = [
     "hatchling",
     "mdformat",
     "mdformat-tables>=1",
-<<<<<<< before updating
-    "ruff>=0.9,<0.15",
-    "toml",
-=======
-    "pytest",
-    "pytest-cov",
     "ruff",
->>>>>>> after updating
+    "toml",
     "twine",
     "ty",
     "uv",
@@ -166,9 +160,7 @@ packages = [
     "ccflow",
 ]
 exclude = [
-    "/.github",
-    "/.gitignore",
-    "/docs",
+    "docs",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -176,9 +168,7 @@ packages = [
     "ccflow",
 ]
 exclude = [
-    "/.github",
-    "/.gitignore",
-    "/docs",
+    "docs",
 ]
 
 [tool.hatch.build.targets.wheel.shared-data]
