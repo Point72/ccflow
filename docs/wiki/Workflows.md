@@ -182,7 +182,7 @@ from ccflow import (
 print(DateContext(date=date.today()))
 print(DatetimeContext(dt=datetime.now()))
 print(DateRangeContext(start_date=date(2022, 1, 1), end_date=date(2023, 2, 2)))
-print(VersionedDateContext(date=date.today(), entry_time_cutoff=datetime.utcnow()))
+print(VersionedDateContext(date=date.today(), entry_time_cutoff=datetime.now(datetime.timezone.utc)))
 print(UniverseContext(universe="US"))
 print(UniverseDateContext(universe="US", date=date.today()))
 print(ModelDateContext(mode="MyModel", date=date.today()))
