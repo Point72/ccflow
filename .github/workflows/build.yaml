@@ -53,7 +53,7 @@ jobs:
       run: make coverage
 
     - name: Upload test results (Python)
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       with:
         name: py-test-results-${{ matrix.os }}-${{ matrix.python-version }}-
         path: junit.xml
@@ -74,7 +74,7 @@ jobs:
     - name: Twine check
       run: make dist
 
-    - uses: actions/upload-artifact@v6
+    - uses: actions/upload-artifact@v7
       with:
         name: dist-${{matrix.os}}
         path: dist
