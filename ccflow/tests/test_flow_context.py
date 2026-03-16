@@ -436,10 +436,7 @@ class TestLazy:
         model = load_data()
 
         # Use Lazy to create a transform that shifts dates
-        lazy_fn = Lazy(model)(
-            start_date=lambda ctx: ctx.start_date - timedelta(days=7),
-            end_date=lambda ctx: ctx.end_date
-        )
+        lazy_fn = Lazy(model)(start_date=lambda ctx: ctx.start_date - timedelta(days=7), end_date=lambda ctx: ctx.end_date)
 
         ctx = FlowContext(start_date=date(2024, 1, 15), end_date=date(2024, 1, 31))
         result = lazy_fn(ctx)

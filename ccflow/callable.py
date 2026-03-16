@@ -333,7 +333,7 @@ def _resolve_deps_and_call(model, context, fn):
         for dep_model, contexts in deps_result:
             resolved = dep_model(contexts[0]) if contexts else dep_model(context)
             # Unwrap GenericResult if present (consistent with auto-detected deps)
-            if hasattr(resolved, 'value'):
+            if hasattr(resolved, "value"):
                 resolved = resolved.value
             resolved_values[id(dep_model)] = resolved
     else:

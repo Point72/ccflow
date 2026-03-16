@@ -439,7 +439,7 @@ def flow_model(
                     else:
                         # Auto-detection fallback: call directly
                         resolved = value(context)
-                        if hasattr(resolved, 'value'):
+                        if hasattr(resolved, "value"):
                             return resolved.value
                         return resolved
 
