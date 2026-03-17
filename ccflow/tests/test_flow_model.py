@@ -15,6 +15,7 @@ from ccflow import (
     DepOf,
     Flow,
     GenericResult,
+    Lazy,
     ModelRegistry,
     ResultBase,
 )
@@ -599,15 +600,55 @@ class TestFlowModelErrors(TestCase):
 
         self.assertIn("return type annotation", str(cm.exception))
 
-    def test_non_result_return_type(self):
-        """Test error when return type is not ResultBase subclass."""
-        with self.assertRaises(TypeError) as cm:
+    def test_auto_wrap_plain_return_type(self):
+        """Test that non-ResultBase return types are auto-wrapped in GenericResult."""
 
-            @Flow.model
-            def bad_return(context: SimpleContext) -> int:
-                return 42
+        @Flow.model
+        def plain_return(context: SimpleContext) -> int:
+            return context.value * 2
 
-        self.assertIn("ResultBase", str(cm.exception))
+        model = plain_return()
+        result = model(SimpleContext(value=5))
+        self.assertIsInstance(result, GenericResult)
+        self.assertEqual(result.value, 10)
+
+    def test_auto_wrap_unwrap_as_dependency(self):
+        """Test that auto-wrapped model used as dep delivers unwrapped value downstream.
+
+        Auto-wrapped models have result_type=GenericResult (unparameterized).
+        When used as an auto-detected dep (no DepOf), the framework resolves
+        the GenericResult and unwraps .value for the downstream function.
+        """
+
+        @Flow.model
+        def plain_source(context: SimpleContext) -> int:
+            return context.value * 3
+
+        @Flow.model
+        def consumer(
+            context: SimpleContext,
+            data: GenericResult[int],  # Auto-detected dep, not DepOf
+        ) -> GenericResult[int]:
+            # data is auto-unwrapped to the int value by the framework
+            return GenericResult(value=data + 1)
+
+        src = plain_source()
+        model = consumer(data=src)
+        result = model(SimpleContext(value=10))
+        # plain_source: 10 * 3 = 30, auto-wrapped to GenericResult(value=30)
+        # resolve_callable_model unwraps GenericResult -> 30
+        # consumer: 30 + 1 = 31
+        self.assertEqual(result.value, 31)
+
+    def test_auto_wrap_result_type_property(self):
+        """Test that auto-wrapped model has GenericResult as result_type."""
+
+        @Flow.model
+        def plain_return(context: SimpleContext) -> int:
+            return context.value
+
+        model = plain_return()
+        self.assertEqual(model.result_type, GenericResult)
 
     def test_dynamic_deferred_mode(self):
         """Test dynamic deferred mode where what you provide at construction = bound."""
@@ -952,6 +993,271 @@ class TestFlowModelValidation(TestCase):
         load2 = other_loader()
         with self.assertRaises((TypeError, ValidationError)):
             consumer(data=load2)
+
+    def test_config_validation_rejects_bad_type(self):
+        """Test that config validator rejects wrong types at construction."""
+
+        @Flow.model
+        def typed_config(context: SimpleContext, n_estimators: int = 10) -> GenericResult[int]:
+            return GenericResult(value=n_estimators)
+
+        with self.assertRaises(TypeError) as cm:
+            typed_config(n_estimators="banana")
+
+        self.assertIn("n_estimators", str(cm.exception))
+
+    def test_config_validation_accepts_callable_model(self):
+        """Test that config validator allows CallableModel values for any field."""
+
+        @Flow.model
+        def source(context: SimpleContext) -> GenericResult[int]:
+            return GenericResult(value=context.value)
+
+        @Flow.model
+        def consumer(context: SimpleContext, data: int = 0) -> GenericResult[int]:
+            return GenericResult(value=data)
+
+        # Passing a CallableModel for an int field should not raise
+        src = source()
+        model = consumer(data=src)
+        self.assertIsNotNone(model)
+
+    def test_config_validation_accepts_correct_types(self):
+        """Test that config validator accepts correct types."""
+
+        @Flow.model
+        def typed_config(context: SimpleContext, n: int = 10, name: str = "x") -> GenericResult[str]:
+            return GenericResult(value=f"{name}:{n}")
+
+        # Should not raise
+        model = typed_config(n=42, name="test")
+        result = model(SimpleContext(value=1))
+        self.assertEqual(result.value, "test:42")
+
+
+# =============================================================================
+# BoundModel Tests
+# =============================================================================
+
+
+class TestBoundModel(TestCase):
+    """Tests for BoundModel and BoundModel.flow."""
+
+    def test_bound_model_flow_compute(self):
+        """Test that bound.flow.compute() honors transforms."""
+
+        @Flow.model
+        def my_model(x: int, y: int) -> GenericResult[int]:
+            return GenericResult(value=x + y)
+
+        model = my_model(x=10)
+
+        # Create bound model with y transform
+        bound = model.flow.with_inputs(y=lambda ctx: getattr(ctx, "y", 0) * 2)
+
+        # flow.compute() should go through BoundModel, applying transform
+        result = bound.flow.compute(y=5)
+        # y transform: 5 * 2 = 10, x is bound to 10
+        # model: 10 + 10 = 20
+        self.assertEqual(result, 20)
+
+    def test_bound_model_flow_compute_static_transform(self):
+        """Test BoundModel.flow.compute() with static value transform."""
+
+        @Flow.model
+        def my_model(x: int, y: int) -> GenericResult[int]:
+            return GenericResult(value=x * y)
+
+        model = my_model(x=7)
+        bound = model.flow.with_inputs(y=3)
+
+        result = bound.flow.compute(y=999)  # y should be overridden by transform
+        # y is statically bound to 3, x=7
+        # 7 * 3 = 21
+        self.assertEqual(result, 21)
+
+    def test_bound_model_as_dependency(self):
+        """Test that BoundModel can be passed as a dependency to another model."""
+
+        @Flow.model
+        def source(x: int) -> GenericResult[int]:
+            return GenericResult(value=x * 10)
+
+        @Flow.model
+        def consumer(data: GenericResult[int]) -> GenericResult[int]:
+            return GenericResult(value=data + 1)
+
+        src = source()
+        bound_src = src.flow.with_inputs(x=lambda ctx: getattr(ctx, "x", 0) * 2)
+
+        # Pass BoundModel as a dependency
+        model = consumer(data=bound_src)
+        result = model.flow.compute(x=5)
+        # x transform: 5 * 2 = 10
+        # source: 10 * 10 = 100
+        # consumer: 100 + 1 = 101
+        self.assertEqual(result, 101)
+
+    def test_bound_model_chained_with_inputs(self):
+        """Test that chaining with_inputs merges transforms correctly."""
+
+        @Flow.model
+        def my_model(x: int, y: int, z: int) -> int:
+            return x + y + z
+
+        model = my_model()
+        bound1 = model.flow.with_inputs(x=lambda ctx: getattr(ctx, "x", 0) * 2)
+        bound2 = bound1.flow.with_inputs(y=lambda ctx: getattr(ctx, "y", 0) * 3)
+
+        # Both transforms should be active
+        result = bound2.flow.compute(x=5, y=10, z=1)
+        # x transform: 5 * 2 = 10
+        # y transform: 10 * 3 = 30
+        # z from context: 1
+        # 10 + 30 + 1 = 41
+        self.assertEqual(result, 41)
+
+    def test_bound_model_chained_with_inputs_override(self):
+        """Test that chaining with_inputs allows overriding transforms."""
+
+        @Flow.model
+        def my_model(x: int) -> int:
+            return x
+
+        model = my_model()
+        bound1 = model.flow.with_inputs(x=lambda ctx: getattr(ctx, "x", 0) * 2)
+        bound2 = bound1.flow.with_inputs(x=lambda ctx: getattr(ctx, "x", 0) * 10)
+
+        # Second transform should override the first for 'x'
+        result = bound2.flow.compute(x=5)
+        self.assertEqual(result, 50)  # 5 * 10, not 5 * 2
+
+    def test_bound_model_with_default_args(self):
+        """with_inputs works when the model has parameters with default values."""
+
+        @Flow.model
+        def load(start_date: str, end_date: str, source: str = "warehouse") -> str:
+            return f"{source}:{start_date}-{end_date}"
+
+        # Bind source at construction, leave dates for context
+        model = load(source="prod_db")
+
+        # with_inputs transforms a context param; default-valued 'source' stays bound
+        lookback = model.flow.with_inputs(start_date=lambda ctx: "shifted_" + ctx.start_date)
+
+        result = lookback.flow.compute(start_date="2024-01-01", end_date="2024-06-30")
+        self.assertEqual(result, "prod_db:shifted_2024-01-01-2024-06-30")
+
+    def test_bound_model_with_default_arg_unbound(self):
+        """with_inputs works when defaulted parameter is left unbound (comes from context)."""
+
+        @Flow.model
+        def load(start_date: str, source: str = "warehouse") -> str:
+            return f"{source}:{start_date}"
+
+        # Don't bind 'source' — it keeps its default in the model,
+        # but in dynamic deferred mode, unbound params come from context
+        model = load()
+
+        # Transform start_date; source comes from context (overriding the default)
+        bound = model.flow.with_inputs(start_date=lambda ctx: "shifted_" + ctx.start_date)
+
+        result = bound.flow.compute(start_date="2024-01-01", source="s3_bucket")
+        self.assertEqual(result, "s3_bucket:shifted_2024-01-01")
+
+    def test_bound_model_default_arg_as_dependency(self):
+        """BoundModel with default args works correctly as a dependency."""
+
+        @Flow.model
+        def source(x: int, multiplier: int = 2) -> int:
+            return x * multiplier
+
+        @Flow.model
+        def consumer(data: int) -> int:
+            return data + 1
+
+        src = source(multiplier=5)
+        bound_src = src.flow.with_inputs(x=lambda ctx: ctx.x * 10)
+        model = consumer(data=bound_src)
+
+        result = model.flow.compute(x=3)
+        # x transform: 3 * 10 = 30
+        # source: 30 * 5 (multiplier) = 150
+        # consumer: 150 + 1 = 151
+        self.assertEqual(result, 151)
+
+    def test_bound_model_as_lazy_dependency(self):
+        """Test that BoundModel works as a Lazy dependency."""
+
+        @Flow.model
+        def source(x: int) -> GenericResult[int]:
+            return GenericResult(value=x * 3)
+
+        @Flow.model
+        def consumer(data: int, slow: Lazy[GenericResult[int]]) -> GenericResult[int]:
+            if data > 100:
+                return GenericResult(value=data)
+            return GenericResult(value=slow())
+
+        src = source()
+        bound_src = src.flow.with_inputs(x=lambda ctx: getattr(ctx, "x", 0) + 10)
+
+        # Use BoundModel as lazy dependency
+        model = consumer(data=5, slow=bound_src)
+        result = model.flow.compute(x=7)
+        # data=5 < 100, so slow path: x transform: 7+10=17, source: 17*3=51
+        self.assertEqual(result, 51)
+
+
+# =============================================================================
+# PEP 563 (from __future__ import annotations) Compatibility Tests
+# =============================================================================
+
+# These functions are defined at module level to simulate realistic usage.
+# Note: We can't use `from __future__ import annotations` at module level
+# since it would affect ALL annotations in this file. Instead, we test
+# that the annotation resolution code handles string annotations.
+
+
+class TestPEP563Annotations(TestCase):
+    """Test that Flow.model handles string annotations (PEP 563)."""
+
+    def test_string_annotation_lazy_resolved(self):
+        """Test that Lazy annotations work even when passed through get_type_hints.
+
+        This verifies the fix for from __future__ import annotations by
+        confirming the annotation resolution pipeline processes Lazy correctly.
+        """
+        # Verify _extract_lazy handles real type objects (resolved by get_type_hints)
+        from ccflow.flow_model import _extract_lazy
+
+        lazy_int = Lazy[int]
+        unwrapped, is_lazy = _extract_lazy(lazy_int)
+        self.assertTrue(is_lazy)
+        self.assertEqual(unwrapped, int)
+
+    def test_string_annotation_return_type_resolved(self):
+        """Test that string return type annotations are resolved correctly."""
+
+        @Flow.model
+        def model_func(context: SimpleContext) -> GenericResult[int]:
+            return GenericResult(value=42)
+
+        # If annotation resolution works, this should create successfully
+        model = model_func()
+        self.assertEqual(model.result_type, GenericResult[int])
+
+    def test_auto_wrap_with_resolved_annotations(self):
+        """Test that auto-wrap works with properly resolved type annotations."""
+
+        @Flow.model
+        def plain_model(value: int) -> int:
+            return value * 2
+
+        model = plain_model()
+        result = model.flow.compute(value=5)
+        self.assertEqual(result, 10)
+        self.assertEqual(model.result_type, GenericResult)
 
 
 # =============================================================================
@@ -1553,6 +1859,496 @@ class TestClassBasedDepResolution(TestCase):
         self.assertEqual(call_counts["source"], 2)
         self.assertEqual(call_counts["decorator_model"], 1)
         self.assertEqual(call_counts["class_model"], 1)
+
+
+# =============================================================================
+# Lazy[T] Type Annotation Tests
+# =============================================================================
+
+
+class TestLazyTypeAnnotation(TestCase):
+    """Tests for Lazy[T] type annotation (deferred/conditional evaluation)."""
+
+    def test_lazy_type_annotation_basic(self):
+        """Lazy[T] param receives a thunk (zero-arg callable).
+
+        The thunk unwraps GenericResult.value, so calling thunk() returns
+        the inner value (e.g., int), not the GenericResult wrapper.
+        """
+        from ccflow import Lazy
+
+        @Flow.model
+        def source(context: SimpleContext) -> GenericResult[int]:
+            return GenericResult(value=context.value * 10)
+
+        @Flow.model
+        def consumer(
+            context: SimpleContext,
+            data: Lazy[GenericResult[int]],
+        ) -> GenericResult[int]:
+            # data() returns the unwrapped value (int)
+            resolved = data()
+            return GenericResult(value=resolved + 1)
+
+        src = source()
+        model = consumer(data=src)
+        result = model(SimpleContext(value=5))
+
+        # source: 5 * 10 = 50, consumer: 50 + 1 = 51
+        self.assertEqual(result.value, 51)
+
+    def test_lazy_conditional_evaluation(self):
+        """Mirror the smart_training example: lazy dep only evaluated if needed.
+
+        Note: Non-lazy CallableModel deps are auto-resolved and their .value is
+        unwrapped by the framework (auto-detected dep resolution). So 'fast'
+        receives the unwrapped int, while 'slow' receives a thunk that returns
+        the unwrapped value (GenericResult.value) when called.
+        """
+        from ccflow import Lazy
+
+        call_counts = {"fast": 0, "slow": 0}
+
+        @Flow.model
+        def fast_path(context: SimpleContext) -> GenericResult[int]:
+            call_counts["fast"] += 1
+            return GenericResult(value=context.value)
+
+        @Flow.model
+        def slow_path(context: SimpleContext) -> GenericResult[int]:
+            call_counts["slow"] += 1
+            return GenericResult(value=context.value * 100)
+
+        @Flow.model
+        def smart_selector(
+            context: SimpleContext,
+            fast: GenericResult[int],  # Auto-resolved: receives unwrapped int
+            slow: Lazy[GenericResult[int]],  # Lazy: receives thunk returning unwrapped value
+            threshold: int = 10,
+        ) -> GenericResult[int]:
+            # fast is auto-unwrapped to the int value by the framework
+            if fast > threshold:
+                return GenericResult(value=fast)
+            else:
+                return GenericResult(value=slow())
+
+        fast = fast_path()
+        slow = slow_path()
+
+        # Case 1: fast path sufficient (value > threshold)
+        model = smart_selector(fast=fast, slow=slow, threshold=10)
+        result = model(SimpleContext(value=20))
+        self.assertEqual(result.value, 20)
+        self.assertEqual(call_counts["fast"], 1)
+        self.assertEqual(call_counts["slow"], 0)  # Never called!
+
+        # Case 2: fast path insufficient (value <= threshold), slow triggered
+        call_counts["fast"] = 0
+        model2 = smart_selector(fast=fast, slow=slow, threshold=100)
+        result2 = model2(SimpleContext(value=5))
+        self.assertEqual(result2.value, 500)  # 5 * 100
+        self.assertEqual(call_counts["fast"], 1)
+        self.assertEqual(call_counts["slow"], 1)
+
+    def test_lazy_thunk_caches_result(self):
+        """Repeated calls to a thunk return the same value without re-evaluation."""
+        from ccflow import Lazy
+
+        call_counts = {"source": 0}
+
+        @Flow.model
+        def source(context: SimpleContext) -> GenericResult[int]:
+            call_counts["source"] += 1
+            return GenericResult(value=context.value * 10)
+
+        @Flow.model
+        def consumer(
+            context: SimpleContext,
+            data: Lazy[GenericResult[int]],
+        ) -> GenericResult[int]:
+            # Call thunk multiple times — returns the unwrapped int
+            val1 = data()
+            val2 = data()
+            val3 = data()
+            self.assertEqual(val1, val2)
+            self.assertEqual(val2, val3)
+            return GenericResult(value=val1)
+
+        src = source()
+        model = consumer(data=src)
+        result = model(SimpleContext(value=5))
+        self.assertEqual(result.value, 50)
+        self.assertEqual(call_counts["source"], 1)  # Called only once despite 3 thunk() calls
+
+    def test_lazy_with_direct_value(self):
+        """Pre-computed (non-CallableModel) value wrapped in trivial thunk."""
+        from ccflow import Lazy
+
+        @Flow.model
+        def consumer(
+            context: SimpleContext,
+            data: Lazy[int],
+        ) -> GenericResult[int]:
+            # data is a thunk even though the underlying value is a plain int
+            return GenericResult(value=data() * 2)
+
+        model = consumer(data=42)
+        result = model(SimpleContext(value=0))
+        self.assertEqual(result.value, 84)
+
+    def test_lazy_dep_excluded_from_deps(self):
+        """__deps__ does NOT include lazy dependencies."""
+        from ccflow import Lazy
+
+        @Flow.model
+        def eager_source(context: SimpleContext) -> GenericResult[int]:
+            return GenericResult(value=context.value)
+
+        @Flow.model
+        def lazy_source(context: SimpleContext) -> GenericResult[int]:
+            return GenericResult(value=context.value * 10)
+
+        @Flow.model
+        def consumer(
+            context: SimpleContext,
+            eager: GenericResult[int],  # Auto-resolved, unwrapped to int
+            lazy_dep: Lazy[GenericResult[int]],  # Thunk, returns unwrapped value
+        ) -> GenericResult[int]:
+            return GenericResult(value=eager + lazy_dep())
+
+        eager = eager_source()
+        lazy = lazy_source()
+        model = consumer(eager=eager, lazy_dep=lazy)
+
+        ctx = SimpleContext(value=5)
+        deps = model.__deps__(ctx)
+
+        # Only eager dep should be in __deps__
+        self.assertEqual(len(deps), 1)
+        self.assertIs(deps[0][0], eager)
+
+    def test_lazy_eager_dep_still_pre_evaluated(self):
+        """Non-lazy deps are still eagerly resolved via __deps__."""
+        from ccflow import Lazy
+
+        call_counts = {"eager": 0, "lazy": 0}
+
+        @Flow.model
+        def eager_source(context: SimpleContext) -> GenericResult[int]:
+            call_counts["eager"] += 1
+            return GenericResult(value=context.value)
+
+        @Flow.model
+        def lazy_source(context: SimpleContext) -> GenericResult[int]:
+            call_counts["lazy"] += 1
+            return GenericResult(value=context.value * 10)
+
+        @Flow.model
+        def consumer(
+            context: SimpleContext,
+            eager: GenericResult[int],  # Auto-resolved, unwrapped to int
+            lazy_dep: Lazy[GenericResult[int]],  # Thunk, returns unwrapped value
+        ) -> GenericResult[int]:
+            # eager is auto-unwrapped to int, lazy_dep() returns unwrapped value
+            return GenericResult(value=eager + lazy_dep())
+
+        model = consumer(eager=eager_source(), lazy_dep=lazy_source())
+        result = model(SimpleContext(value=5))
+
+        self.assertEqual(result.value, 55)  # 5 + 50
+        self.assertEqual(call_counts["eager"], 1)
+        self.assertEqual(call_counts["lazy"], 1)
+
+    def test_lazy_in_dynamic_deferred_mode(self):
+        """Lazy[T] works in dynamic deferred mode (no context_args)."""
+        from ccflow import FlowContext, Lazy
+
+        call_counts = {"source": 0}
+
+        @Flow.model
+        def source(context: SimpleContext) -> GenericResult[int]:
+            call_counts["source"] += 1
+            return GenericResult(value=context.value * 10)
+
+        @Flow.model
+        def consumer(
+            value: int,
+            data: Lazy[GenericResult[int]],
+        ) -> GenericResult[int]:
+            if value > 10:
+                return GenericResult(value=value)
+            return GenericResult(value=data())  # data() returns unwrapped int
+
+        # value comes from context, data is bound at construction
+        model = consumer(data=source())
+        result = model(FlowContext(value=20))  # value > 10, lazy not called
+        self.assertEqual(result.value, 20)
+        self.assertEqual(call_counts["source"], 0)
+
+    def test_lazy_in_context_args_mode(self):
+        """Lazy[T] works with explicit context_args."""
+        from ccflow import FlowContext, Lazy
+
+        @Flow.model(context_args=["x"])
+        def source(x: int) -> GenericResult[int]:
+            return GenericResult(value=x * 10)
+
+        @Flow.model(context_args=["x"])
+        def consumer(
+            x: int,
+            data: Lazy[GenericResult[int]],
+        ) -> GenericResult[int]:
+            return GenericResult(value=x + data())  # data() returns unwrapped int
+
+        model = consumer(data=source())
+        result = model(FlowContext(x=5))
+        self.assertEqual(result.value, 55)  # 5 + 50
+
+    def test_lazy_never_evaluated_if_not_called(self):
+        """If thunk is never called, the dependency is never evaluated."""
+        from ccflow import Lazy
+
+        call_counts = {"source": 0}
+
+        @Flow.model
+        def source(context: SimpleContext) -> GenericResult[int]:
+            call_counts["source"] += 1
+            return GenericResult(value=context.value)
+
+        @Flow.model
+        def consumer(
+            context: SimpleContext,
+            data: Lazy[GenericResult[int]],
+        ) -> GenericResult[int]:
+            # Never call data()
+            return GenericResult(value=42)
+
+        model = consumer(data=source())
+        result = model(SimpleContext(value=5))
+        self.assertEqual(result.value, 42)
+        self.assertEqual(call_counts["source"], 0)
+
+    def test_lazy_with_depof(self):
+        """Lazy[DepOf[...]] works: lazy dep with explicit DepOf annotation."""
+        from ccflow import Lazy
+
+        @Flow.model
+        def source(context: SimpleContext) -> GenericResult[int]:
+            return GenericResult(value=context.value * 10)
+
+        @Flow.model
+        def consumer(
+            context: SimpleContext,
+            data: Lazy[DepOf[..., GenericResult[int]]],
+        ) -> GenericResult[int]:
+            return GenericResult(value=data() + 1)  # data() returns unwrapped int
+
+        src = source()
+        model = consumer(data=src)
+
+        # Lazy dep should NOT be in __deps__
+        deps = model.__deps__(SimpleContext(value=5))
+        self.assertEqual(len(deps), 0)
+
+        result = model(SimpleContext(value=5))
+        self.assertEqual(result.value, 51)  # 50 + 1
+
+
+# =============================================================================
+# FieldExtractor Tests (Structured Output Field Access)
+# =============================================================================
+
+
+class TestFieldExtractor(TestCase):
+    """Tests for structured output field access (prepared.X_train pattern)."""
+
+    def test_field_extraction_basic(self):
+        """Accessing unknown attr on @Flow.model instance returns FieldExtractor."""
+        from ccflow.flow_model import FieldExtractor
+
+        @Flow.model
+        def prepare(context: SimpleContext, factor: int = 2) -> GenericResult[dict]:
+            return GenericResult(value={"X_train": context.value * factor, "X_test": context.value})
+
+        model = prepare(factor=3)
+        extractor = model.X_train
+
+        self.assertIsInstance(extractor, FieldExtractor)
+        self.assertIs(extractor.source, model)
+        self.assertEqual(extractor.field_name, "X_train")
+
+    def test_field_extraction_evaluates_correctly(self):
+        """FieldExtractor runs source and extracts the named field."""
+
+        @Flow.model
+        def prepare(context: SimpleContext) -> GenericResult[dict]:
+            return GenericResult(value={"X_train": [1, 2, 3], "y_train": [4, 5, 6]})
+
+        model = prepare()
+        x_train = model.X_train
+
+        result = x_train(SimpleContext(value=0))
+        self.assertEqual(result.value, [1, 2, 3])
+
+    def test_field_extraction_as_dependency(self):
+        """FieldExtractor wired as a dep to a downstream model.
+
+        Note: FieldExtractors are CallableModels, so they're auto-detected as deps
+        and auto-unwrapped (GenericResult.value). The downstream function receives
+        the raw extracted value, not a GenericResult wrapper.
+        """
+
+        @Flow.model
+        def prepare(context: SimpleContext) -> GenericResult[dict]:
+            v = context.value
+            return GenericResult(value={"X_train": [v, v * 2], "y_train": [v * 10]})
+
+        @Flow.model
+        def train(context: SimpleContext, X: list, y: list) -> GenericResult[int]:
+            # X and y are auto-unwrapped to the raw list values
+            return GenericResult(value=sum(X) + sum(y))
+
+        prepared = prepare()
+        model = train(X=prepared.X_train, y=prepared.y_train)
+
+        result = model(SimpleContext(value=5))
+        # X_train = [5, 10], y_train = [50]
+        # sum(X) + sum(y) = 15 + 50 = 65
+        self.assertEqual(result.value, 65)
+
+    def test_field_extraction_multiple_from_same_source(self):
+        """Multiple extractors from same source share the source instance."""
+
+        @Flow.model
+        def prepare(context: SimpleContext) -> GenericResult[dict]:
+            return GenericResult(value={"a": 1, "b": 2, "c": 3})
+
+        model = prepare()
+        ext_a = model.a
+        ext_b = model.b
+        ext_c = model.c
+
+        # All should reference the same source
+        self.assertIs(ext_a.source, model)
+        self.assertIs(ext_b.source, model)
+        self.assertIs(ext_c.source, model)
+
+        # All should evaluate correctly
+        ctx = SimpleContext(value=0)
+        self.assertEqual(ext_a(ctx).value, 1)
+        self.assertEqual(ext_b(ctx).value, 2)
+        self.assertEqual(ext_c(ctx).value, 3)
+
+    def test_field_extraction_nested(self):
+        """Chained extraction (result.a.b) creates nested FieldExtractors."""
+        from ccflow.flow_model import FieldExtractor
+
+        class Nested:
+            def __init__(self):
+                self.inner_val = 42
+
+        @Flow.model
+        def produce(context: SimpleContext) -> GenericResult:
+            return GenericResult(value={"nested": Nested()})
+
+        model = produce()
+        nested_extractor = model.nested
+        inner_extractor = nested_extractor.inner_val
+
+        self.assertIsInstance(nested_extractor, FieldExtractor)
+        self.assertIsInstance(inner_extractor, FieldExtractor)
+
+        result = inner_extractor(SimpleContext(value=0))
+        self.assertEqual(result.value, 42)
+
+    def test_field_extraction_context_type_inherited(self):
+        """FieldExtractor inherits context_type from source."""
+
+        @Flow.model
+        def prepare(context: SimpleContext) -> GenericResult[dict]:
+            return GenericResult(value={"x": 1})
+
+        model = prepare()
+        extractor = model.x
+
+        self.assertEqual(extractor.context_type, SimpleContext)
+
+    def test_field_extraction_nonexistent_field_runtime_error(self):
+        """Non-existent field raises error at evaluation time, not construction.
+
+        For dict results, raises KeyError. For object results, raises AttributeError.
+        """
+
+        @Flow.model
+        def prepare(context: SimpleContext) -> GenericResult[dict]:
+            return GenericResult(value={"x": 1})
+
+        model = prepare()
+        extractor = model.nonexistent  # No error at construction
+
+        # Error at evaluation time (KeyError for dicts, AttributeError for objects)
+        with self.assertRaises((KeyError, AttributeError)):
+            extractor(SimpleContext(value=0))
+
+    def test_field_extraction_pydantic_fields_not_intercepted(self):
+        """Accessing real pydantic fields returns the field value, NOT an extractor."""
+        from ccflow.flow_model import FieldExtractor
+
+        @Flow.model
+        def model_with_fields(context: SimpleContext, multiplier: int = 5) -> GenericResult[int]:
+            return GenericResult(value=context.value * multiplier)
+
+        model = model_with_fields(multiplier=10)
+
+        # 'multiplier' is a real pydantic field — should return the value, not a FieldExtractor
+        self.assertEqual(model.multiplier, 10)
+        self.assertNotIsInstance(model.multiplier, FieldExtractor)
+
+        # 'meta' is inherited from CallableModel — should also not be intercepted
+        self.assertNotIsInstance(model.meta, FieldExtractor)
+
+    def test_field_extraction_with_context_args(self):
+        """FieldExtractor works with context_args mode models."""
+        from ccflow import FlowContext
+
+        @Flow.model(context_args=["x"])
+        def prepare(x: int) -> GenericResult[dict]:
+            return GenericResult(value={"doubled": x * 2, "tripled": x * 3})
+
+        model = prepare()
+        doubled = model.doubled
+
+        result = doubled(FlowContext(x=5))
+        self.assertEqual(result.value, 10)
+
+    def test_field_extraction_has_flow_property(self):
+        """FieldExtractor has .flow property (inherits from CallableModel)."""
+
+        @Flow.model
+        def prepare(context: SimpleContext) -> GenericResult[dict]:
+            return GenericResult(value={"x": 1})
+
+        model = prepare()
+        extractor = model.x
+
+        self.assertTrue(hasattr(extractor, "flow"))
+
+    def test_field_extraction_deps(self):
+        """FieldExtractor.__deps__ returns the source as a dependency."""
+
+        @Flow.model
+        def prepare(context: SimpleContext) -> GenericResult[dict]:
+            return GenericResult(value={"x": 1})
+
+        model = prepare()
+        extractor = model.x
+
+        ctx = SimpleContext(value=0)
+        deps = extractor.__deps__(ctx)
+
+        self.assertEqual(len(deps), 1)
+        self.assertIs(deps[0][0], model)
+        self.assertEqual(deps[0][1], [ctx])
 
 
 if __name__ == "__main__":

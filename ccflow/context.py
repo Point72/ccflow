@@ -1,7 +1,7 @@
 """This module defines re-usable contexts for the "Callable Model" framework defined in flow.callable.py."""
 
 from datetime import date, datetime
-from typing import Any, Generic, Hashable, Optional, Sequence, Set, TypeVar
+from typing import Generic, Hashable, Optional, Sequence, Set, TypeVar
 
 from deprecated import deprecated
 from pydantic import ConfigDict, field_validator, model_validator
@@ -102,28 +102,9 @@ class FlowContext(ContextBase):
     - Proliferation of dynamic _funcname_Context classes
     - Class registration overhead for serialization
     - Pickling issues with Ray/distributed computing
-
-    Fields are stored in __pydantic_extra__ and accessed via __getattr__.
     """
 
     model_config = ConfigDict(extra="allow", frozen=True)
-
-    def __getattr__(self, name: str) -> Any:
-        """Access fields stored in __pydantic_extra__."""
-        # Use object.__getattribute__ to avoid infinite recursion
-        try:
-            extra = object.__getattribute__(self, "__pydantic_extra__")
-            if extra is not None and name in extra:
-                return extra[name]
-        except AttributeError:
-            pass
-        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
-
-    def __repr__(self) -> str:
-        """Show all fields including extra fields."""
-        extra = object.__getattribute__(self, "__pydantic_extra__") or {}
-        fields = ", ".join(f"{k}={v!r}" for k, v in extra.items())
-        return f"FlowContext({fields})"
 
 
 C = TypeVar("C", bound=Hashable)

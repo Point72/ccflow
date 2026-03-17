@@ -12,18 +12,119 @@ and enables clean pickling for distributed computing (e.g., Ray).
 import inspect
 import logging
 from functools import wraps
-from typing import Annotated, Any, Callable, Dict, List, Optional, Tuple, Type, Union, get_origin
+from typing import Annotated, Any, Callable, Dict, List, Optional, Tuple, Type, Union, get_args, get_origin
 
 from pydantic import Field, TypeAdapter
 from typing_extensions import TypedDict
 
 from .base import ContextBase, ResultBase
+from .callable import CallableModel, Flow, GraphDepList, _CallableModel
 from .context import FlowContext
 from .dep import Dep, extract_dep
+from .local_persistence import register_ccflow_import_path
+from .result import GenericResult
 
-__all__ = ("flow_model", "FlowAPI", "BoundModel", "Lazy")
+__all__ = ("flow_model", "FlowAPI", "BoundModel", "Lazy", "FieldExtractor")
+
+
+class _LazyMarker:
+    """Sentinel that marks a parameter as lazily evaluated via Lazy[T]."""
+
+    pass
+
+
+def _extract_lazy(annotation) -> Tuple[Any, bool]:
+    """Check if annotation is Lazy[T]. Returns (base_type, is_lazy).
+
+    Handles nested Annotated types — e.g. Lazy[Annotated[T, Dep(...)]] produces
+    Annotated[Annotated[T, Dep(...)], _LazyMarker()], so we need to check the
+    outermost Annotated layer for _LazyMarker.
+    """
+    if get_origin(annotation) is Annotated:
+        args = get_args(annotation)
+        for metadata in args[1:]:
+            if isinstance(metadata, _LazyMarker):
+                return args[0], True
+    return annotation, False
+
+
+def _make_lazy_thunk(model, context):
+    """Create a zero-arg callable that evaluates model(context) on demand.
+
+    The thunk caches its result so repeated calls don't re-evaluate.
+    """
+    _cache = {}
+
+    def thunk():
+        if "result" not in _cache:
+            result = model(context)
+            if isinstance(result, GenericResult):
+                result = result.value
+            _cache["result"] = result
+        return _cache["result"]
+
+    return thunk
+
 
 log = logging.getLogger(__name__)
+
+
+def _context_values(context: ContextBase) -> Dict[str, Any]:
+    """Return a plain mapping of all context values.
+
+    `dict(context)` uses pydantic's public iteration behavior, which includes
+    both declared fields and any allowed extra fields.
+    """
+
+    return dict(context)
+
+
+def _build_typed_dict_adapter(name: str, schema: Dict[str, Type]) -> TypeAdapter:
+    """Build a TypeAdapter for a runtime TypedDict schema."""
+
+    if not schema:
+        return TypeAdapter(dict)
+    return TypeAdapter(TypedDict(name, schema))
+
+
+def _build_config_validators(
+    all_param_types: Dict[str, Type], dep_fields: Dict[str, Tuple[Type, Dep]]
+) -> Tuple[Dict[str, Type], Dict[str, TypeAdapter]]:
+    """Precompute validators for non-dependency config fields."""
+
+    validatable_types: Dict[str, Type] = {}
+    for name, typ in all_param_types.items():
+        if name in dep_fields:
+            continue
+        try:
+            TypeAdapter(typ)
+            validatable_types[name] = typ
+        except Exception:
+            pass
+
+    validators = {name: TypeAdapter(typ) for name, typ in validatable_types.items()}
+    return validatable_types, validators
+
+
+def _validate_config_kwargs(kwargs: Dict[str, Any], validatable_types: Dict[str, Type], validators: Dict[str, TypeAdapter]) -> None:
+    """Validate plain config inputs while still allowing dependency objects."""
+
+    if not validators:
+        return
+
+    from .callable import CallableModel as _CM
+
+    for field_name, validator in validators.items():
+        if field_name not in kwargs:
+            continue
+        value = kwargs[field_name]
+        if value is None or isinstance(value, (_CM, BoundModel)):
+            continue
+        try:
+            validator.validate_python(value)
+        except Exception:
+            expected_type = validatable_types[field_name]
+            raise TypeError(f"Field '{field_name}': expected {expected_type}, got {type(value).__name__} ({value!r})")
 
 
 class FlowAPI:
@@ -61,7 +162,7 @@ class FlowAPI:
         result = self._model(ctx)
 
         # Unwrap GenericResult if present
-        if hasattr(result, "value"):
+        if isinstance(result, GenericResult):
             return result.value
         return result
 
@@ -111,6 +212,20 @@ class BoundModel:
 
     Created by model.flow.with_inputs(). Applies transforms to context
     before delegating to the underlying model.
+
+    Context propagation across dependencies:
+        Each BoundModel transforms the context locally — only for the model it
+        wraps. When used as a dependency inside another model, the FlowContext
+        flows through the chain unchanged until it reaches this BoundModel,
+        which intercepts it, applies its transforms, and passes the modified
+        context to the wrapped model. Upstream models never see the transform.
+
+    Chaining with_inputs:
+        Calling ``bound.flow.with_inputs(...)`` merges the new transforms with
+        the existing ones (new overrides old for the same key). All transforms
+        are applied to the incoming context in one pass — they don't compose
+        sequentially (each transform sees the original context, not the output
+        of a previous transform).
     """
 
     def __init__(self, model: "CallableModel", input_transforms: Dict[str, Any]):  # noqa: F821
@@ -120,13 +235,7 @@ class BoundModel:
     def __call__(self, context: ContextBase) -> Any:
         """Call the model with transformed context."""
         # Build new context dict with transforms applied
-        ctx_dict = {}
-
-        # Get fields from context
-        if hasattr(context, "__pydantic_extra__") and context.__pydantic_extra__:
-            ctx_dict.update(context.__pydantic_extra__)
-        for field in context.__class__.model_fields:
-            ctx_dict[field] = getattr(context, field)
+        ctx_dict = _context_values(context)
 
         # Apply transforms
         for name, transform in self._input_transforms.items():
@@ -140,35 +249,125 @@ class BoundModel:
         return self._model(new_ctx)
 
     @property
-    def flow(self) -> FlowAPI:
+    def flow(self) -> "FlowAPI":
         """Access the flow API."""
-        return FlowAPI(self._model)
+        return _BoundFlowAPI(self)
+
+
+class _BoundFlowAPI(FlowAPI):
+    """FlowAPI that delegates to a BoundModel, honoring transforms."""
+
+    def __init__(self, bound_model: BoundModel):
+        self._bound = bound_model
+        super().__init__(bound_model._model)
+
+    def compute(self, **kwargs) -> Any:
+        validator = self._model._get_context_validator()
+        validated = validator.validate_python(kwargs)
+        ctx = FlowContext(**validated)
+        result = self._bound(ctx)  # Call through BoundModel, not _model
+        if isinstance(result, GenericResult):
+            return result.value
+        return result
+
+    def with_inputs(self, **transforms) -> "BoundModel":
+        """Chain transforms: merge new transforms with existing ones.
+
+        New transforms override existing ones for the same key.
+        """
+        merged = {**self._bound._input_transforms, **transforms}
+        return BoundModel(model=self._bound._model, input_transforms=merged)
+
+
+class _FieldExtractorMixin:
+    """Turn unknown public attributes into FieldExtractors.
+
+    Real model attributes are still resolved by the normal pydantic/base-model
+    attribute path via ``super().__getattr__``.
+    """
+
+    def __getattr__(self, name):
+        try:
+            return super().__getattr__(name)
+        except AttributeError:
+            if name.startswith("_"):
+                raise AttributeError(f"'{type(self).__name__}' has no attribute '{name}'") from None
+            return FieldExtractor(source=self, field_name=name)
+
+
+class _GeneratedFlowModelBase(_FieldExtractorMixin, CallableModel):
+    """Shared behavior for models generated by ``@Flow.model``."""
+
+    @property
+    def context_type(self) -> Type[ContextBase]:
+        return self.__class__.__flow_model_context_type__
+
+    @property
+    def result_type(self) -> Type[ResultBase]:
+        return self.__class__.__flow_model_return_type__
+
+    @property
+    def flow(self) -> FlowAPI:
+        return FlowAPI(self)
+
+    def _get_context_validator(self) -> TypeAdapter:
+        """Get or create the context validator for this generated model."""
+
+        cls = self.__class__
+        explicit_args = getattr(cls, "__flow_model_explicit_context_args__", None)
+
+        if explicit_args is not None or not getattr(cls, "__flow_model_use_context_args__", True):
+            if cls._cached_context_validator is None:
+                if cls._context_td is not None:
+                    cls._cached_context_validator = TypeAdapter(cls._context_td)
+                elif cls._context_schema:
+                    cls._cached_context_validator = _build_typed_dict_adapter(f"{cls.__name__}Inputs", cls._context_schema)
+                else:
+                    cls._cached_context_validator = TypeAdapter(cls.__flow_model_context_type__)
+            return cls._cached_context_validator
+
+        if not hasattr(self, "_instance_context_validator"):
+            all_param_types = getattr(cls, "__flow_model_all_param_types__", {})
+            bound_fields = getattr(self, "_bound_fields", set())
+            unbound_schema = {name: typ for name, typ in all_param_types.items() if name not in bound_fields}
+            object.__setattr__(self, "_instance_context_validator", _build_typed_dict_adapter(f"{cls.__name__}Inputs", unbound_schema))
+        return self._instance_context_validator
 
 
 class Lazy:
     """Deferred model execution with runtime context overrides.
 
-    Wraps a CallableModel to allow context fields to be determined at
-    runtime rather than at construction time. Use in with_inputs() when
-    you need values that aren't available until execution.
+    Has two distinct uses:
 
-    Example:
-        # Create a model that needs runtime-determined context
-        market_data = load_market_data(symbols=["AAPL"])
+    1. **Type annotation** — ``Lazy[T]`` marks a parameter as lazily evaluated.
+       The framework will NOT pre-evaluate the dependency; instead the function
+       receives a zero-arg thunk that triggers evaluation on demand::
 
-        # Use Lazy to defer the start_date calculation
-        lookback_data = market_data.flow.with_inputs(
-            start_date=Lazy(market_data)(start_date=lambda ctx: ctx.start_date - timedelta(days=7))
-        )
+           @Flow.model
+           def smart_training(
+               data: PreparedData,
+               fast_metrics: Metrics,
+               slow_metrics: Lazy[Metrics],  # NOT eagerly evaluated
+               threshold: float = 0.9,
+           ) -> Metrics:
+               if fast_metrics.r2 > threshold:
+                   return fast_metrics
+               return slow_metrics()  # Evaluated on demand
 
-        # More commonly, use Lazy for self-referential transforms:
-        adjusted_model = model.flow.with_inputs(
-            value=Lazy(other_model)(multiplier=2)  # Call other_model with multiplier=2
-        )
+    2. **Runtime helper** — ``Lazy(model)(overrides)`` creates a callable that
+       applies context overrides before calling the model.  Used with
+       ``with_inputs()`` for deferred execution::
 
-    The __call__ method returns a callable that, when invoked with a context,
-    calls the wrapped model with the specified overrides applied.
+           lookback = Lazy(model)(start_date=lambda ctx: ctx.start_date - timedelta(days=7))
     """
+
+    def __class_getitem__(cls, item):
+        """Support Lazy[T] syntax as a type annotation marker.
+
+        Returns Annotated[T, _LazyMarker()] so the framework can detect
+        lazy parameters during signature analysis.
+        """
+        return Annotated[item, _LazyMarker()]
 
     def __init__(self, model: "CallableModel"):  # noqa: F821
         """Wrap a model for deferred execution.
@@ -193,11 +392,7 @@ class Lazy:
 
         def execute_with_overrides(context: ContextBase) -> Any:
             # Build context dict from incoming context
-            ctx_dict = {}
-            if hasattr(context, "__pydantic_extra__") and context.__pydantic_extra__:
-                ctx_dict.update(context.__pydantic_extra__)
-            for field in context.__class__.model_fields:
-                ctx_dict[field] = getattr(context, field)
+            ctx_dict = _context_values(context)
 
             # Apply overrides
             for name, value in overrides.items():
@@ -275,18 +470,23 @@ def _get_dep_info(annotation) -> Tuple[Type, Optional[Dep]]:
     return extract_dep(annotation)
 
 
+_UNSET = object()
+
+
 def flow_model(
     func: Callable = None,
     *,
     # Context handling
     context_args: Optional[List[str]] = None,
     # Flow.call options (passed to generated __call__)
-    cacheable: bool = False,
-    volatile: bool = False,
-    log_level: int = logging.DEBUG,
-    validate_result: bool = True,
-    verbose: bool = True,
-    evaluator: Optional[Any] = None,
+    # Default to _UNSET so FlowOptionsOverride can control these globally.
+    # Only explicitly user-provided values are passed to Flow.call.
+    cacheable: Any = _UNSET,
+    volatile: Any = _UNSET,
+    log_level: Any = _UNSET,
+    validate_result: Any = _UNSET,
+    verbose: Any = _UNSET,
+    evaluator: Any = _UNSET,
 ) -> Callable:
     """Decorator that generates a CallableModel class from a plain Python function.
 
@@ -297,12 +497,12 @@ def flow_model(
     Args:
         func: The function to decorate
         context_args: List of parameter names that come from context (for unpacked mode)
-        cacheable: Enable caching of results
-        volatile: Mark as volatile (always re-execute)
-        log_level: Logging verbosity
-        validate_result: Validate return type
-        verbose: Verbose logging output
-        evaluator: Custom evaluator
+        cacheable: Enable caching of results (default: unset, inherits from FlowOptionsOverride)
+        volatile: Mark as volatile (always re-execute) (default: unset, inherits from FlowOptionsOverride)
+        log_level: Logging verbosity (default: unset, inherits from FlowOptionsOverride)
+        validate_result: Validate return type (default: unset, inherits from FlowOptionsOverride)
+        verbose: Verbose logging output (default: unset, inherits from FlowOptionsOverride)
+        evaluator: Custom evaluator (default: unset, inherits from FlowOptionsOverride)
 
     Two Context Modes:
         1. Explicit context parameter: Function has a 'context' parameter annotated
@@ -323,29 +523,40 @@ def flow_model(
     """
 
     def decorator(fn: Callable) -> Callable:
-        # Import here to avoid circular imports
-        from .callable import CallableModel, Flow, GraphDepList
+        import typing as _typing
 
         sig = inspect.signature(fn)
         params = sig.parameters
 
+        # Resolve string annotations (PEP 563 / from __future__ import annotations)
+        # into real type objects. include_extras=True preserves Annotated metadata.
+        try:
+            _resolved_hints = _typing.get_type_hints(fn, include_extras=True)
+        except Exception:
+            _resolved_hints = {}
+
         # Validate return type
-        return_type = sig.return_annotation
+        return_type = _resolved_hints.get("return", sig.return_annotation)
         if return_type is inspect.Signature.empty:
             raise TypeError(f"Function {fn.__name__} must have a return type annotation")
-        # Check that return type is a ResultBase subclass
+        # Check if return type is a ResultBase subclass; if not, auto-wrap in GenericResult
         return_origin = get_origin(return_type) or return_type
+        auto_wrap_result = False
         if not (isinstance(return_origin, type) and issubclass(return_origin, ResultBase)):
-            raise TypeError(f"Function {fn.__name__} must return a ResultBase subclass, got {return_type}")
+            auto_wrap_result = True
+            internal_return_type = GenericResult  # unparameterized for safety
+        else:
+            internal_return_type = return_type
 
         # Determine context mode
         if "context" in params or "_" in params:
             # Mode 1: Explicit context parameter (named 'context' or '_' for unused)
             context_param_name = "context" if "context" in params else "_"
             context_param = params[context_param_name]
-            if context_param.annotation is inspect.Parameter.empty:
+            context_annotation = _resolved_hints.get(context_param_name, context_param.annotation)
+            if context_annotation is inspect.Parameter.empty:
                 raise TypeError(f"Function {fn.__name__}: '{context_param_name}' parameter must have a type annotation")
-            context_type = context_param.annotation
+            context_type = context_annotation
             if not (isinstance(context_type, type) and issubclass(context_type, ContextBase)):
                 raise TypeError(f"Function {fn.__name__}: '{context_param_name}' must be annotated with a ContextBase subclass")
             model_field_params = {name: param for name, param in params.items() if name not in (context_param_name, "self")}
@@ -372,19 +583,28 @@ def flow_model(
             use_context_args = True
             explicit_context_args = None  # Dynamic - determined at construction
 
-        # Analyze parameters to find dependencies and regular fields
+        # Analyze parameters to find dependencies, lazy fields, and regular fields
         dep_fields: Dict[str, Tuple[Type, Dep]] = {}  # name -> (base_type, Dep)
         model_fields: Dict[str, Tuple[Type, Any]] = {}  # name -> (type, default)
+        lazy_fields: set = set()  # Names of parameters marked with Lazy[T]
 
         # In dynamic deferred mode (no explicit context_args), all fields are optional
         # because values not provided at construction come from context at runtime
         dynamic_deferred_mode = use_context_args and explicit_context_args is None
 
         for name, param in model_field_params.items():
-            if param.annotation is inspect.Parameter.empty:
+            # Use resolved hint (handles PEP 563 string annotations)
+            annotation = _resolved_hints.get(name, param.annotation)
+            if annotation is inspect.Parameter.empty:
                 raise TypeError(f"Parameter '{name}' must have a type annotation")
 
-            base_type, dep = _get_dep_info(param.annotation)
+            # Check for Lazy[T] annotation first
+            unwrapped_annotation, is_lazy = _extract_lazy(annotation)
+            if is_lazy:
+                lazy_fields.add(name)
+
+            # Extract Dep info from the (possibly unwrapped) annotation
+            base_type, dep = _get_dep_info(unwrapped_annotation)
             if param.default is not inspect.Parameter.empty:
                 default = param.default
             elif dynamic_deferred_mode:
@@ -409,7 +629,7 @@ def flow_model(
         # Capture variables for closures
         ctx_param_name = context_param_name if not use_context_args else "context"
         all_param_names = list(model_fields.keys())  # All non-context params (model fields)
-        all_param_types = {name: param.annotation for name, param in model_field_params.items()}
+        all_param_types = {name: _resolved_hints.get(name, param.annotation) for name, param in model_field_params.items()}
         # For explicit context_args mode, we also need the list of context arg names
         ctx_args_for_closure = context_args if context_args is not None else []
         is_dynamic_mode = use_context_args and explicit_context_args is None
@@ -420,26 +640,14 @@ def flow_model(
                 # Import here (inside function) to avoid pickling issues with ContextVar
                 from .callable import _resolved_deps
 
-                # Check if this model has custom deps (from @func.deps decorator)
-                has_custom_deps = getattr(self.__class__, "__has_custom_deps__", False)
-
                 def resolve_callable_model(name, value, store):
-                    """Resolve a CallableModel field.
-
-                    When has_custom_deps is True and the value is NOT in the store,
-                    it means the custom deps function chose not to include this dep.
-                    In that case, we return None (the field's default) instead of
-                    calling the CallableModel directly.
-                    """
+                    """Resolve a CallableModel field."""
                     if id(value) in store:
                         return store[id(value)]
-                    elif has_custom_deps:
-                        # Custom deps excluded this field - use None
-                        return None
                     else:
                         # Auto-detection fallback: call directly
                         resolved = value(context)
-                        if hasattr(resolved, "value"):
+                        if isinstance(resolved, GenericResult):
                             return resolved.value
                         return resolved
 
@@ -447,16 +655,28 @@ def flow_model(
                 fn_kwargs = {}
                 store = _resolved_deps.get()
 
+                def _resolve_field(name, value):
+                    """Resolve a single field value, handling lazy wrapping."""
+                    is_dep = isinstance(value, (CallableModel, BoundModel))
+                    if name in lazy_fields:
+                        # Lazy field: wrap in a thunk regardless of type
+                        if is_dep:
+                            return _make_lazy_thunk(value, context)
+                        else:
+                            # Non-dep value: wrap in trivial thunk
+                            return lambda v=value: v
+                    elif is_dep:
+                        return resolve_callable_model(name, value, store)
+                    else:
+                        return value
+
                 if not use_context_args:
                     # Mode 1: Explicit context param - pass context directly
                     fn_kwargs[ctx_param_name] = context
                     # Add model fields
                     for name in all_param_names:
                         value = getattr(self, name)
-                        if isinstance(value, CallableModel):
-                            fn_kwargs[name] = resolve_callable_model(name, value, store)
-                        else:
-                            fn_kwargs[name] = value
+                        fn_kwargs[name] = _resolve_field(name, value)
                 elif not is_dynamic_mode:
                     # Mode 2: Explicit context_args - get those from context, rest from self
                     for name in ctx_args_for_closure:
@@ -464,10 +684,7 @@ def flow_model(
                     # Add model fields
                     for name in all_param_names:
                         value = getattr(self, name)
-                        if isinstance(value, CallableModel):
-                            fn_kwargs[name] = resolve_callable_model(name, value, store)
-                        else:
-                            fn_kwargs[name] = value
+                        fn_kwargs[name] = _resolve_field(name, value)
                 else:
                     # Mode 3: Dynamic deferred mode - unbound from context, bound from self
                     bound_fields = getattr(self, "_bound_fields", set())
@@ -476,15 +693,15 @@ def flow_model(
                         if name in bound_fields:
                             # Bound at construction - get from self
                             value = getattr(self, name)
-                            if isinstance(value, CallableModel):
-                                fn_kwargs[name] = resolve_callable_model(name, value, store)
-                            else:
-                                fn_kwargs[name] = value
+                            fn_kwargs[name] = _resolve_field(name, value)
                         else:
                             # Unbound - get from context
                             fn_kwargs[name] = getattr(context, name)
 
-                return fn(**fn_kwargs)
+                raw_result = fn(**fn_kwargs)
+                if auto_wrap_result:
+                    return GenericResult(value=raw_result)
+                return raw_result
 
             # Set proper signature for CallableModel validation
             __call__.__signature__ = inspect.Signature(
@@ -492,22 +709,24 @@ def flow_model(
                     inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
                     inspect.Parameter("context", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=context_type),
                 ],
-                return_annotation=return_type,
+                return_annotation=internal_return_type,
             )
             return __call__
 
         call_impl = make_call_impl()
 
-        # Apply Flow.call decorator
-        flow_options = {
-            "cacheable": cacheable,
-            "volatile": volatile,
-            "log_level": log_level,
-            "validate_result": validate_result,
-            "verbose": verbose,
-        }
-        if evaluator is not None:
-            flow_options["evaluator"] = evaluator
+        # Apply Flow.call decorator — only include options the user explicitly set
+        flow_options = {}
+        for opt_name, opt_val in [
+            ("cacheable", cacheable),
+            ("volatile", volatile),
+            ("log_level", log_level),
+            ("validate_result", validate_result),
+            ("verbose", verbose),
+            ("evaluator", evaluator),
+        ]:
+            if opt_val is not _UNSET:
+                flow_options[opt_name] = opt_val
 
         decorated_call = Flow.call(**flow_options)(call_impl)
 
@@ -515,10 +734,12 @@ def flow_model(
         def make_deps_impl():
             def __deps__(self, context) -> GraphDepList:
                 deps = []
-                # Check ALL fields for CallableModels (auto-detection)
+                # Check ALL fields for CallableModels/BoundModels (auto-detection)
                 for name in model_fields:
+                    if name in lazy_fields:
+                        continue  # Lazy deps are NOT pre-evaluated
                     value = getattr(self, name)
-                    if isinstance(value, CallableModel):
+                    if isinstance(value, (CallableModel, BoundModel)):
                         if name in dep_fields:
                             # Explicit DepOf with transform (backwards compat)
                             _, dep_obj = dep_fields[name]
@@ -582,17 +803,20 @@ def flow_model(
 
             namespace["__validate_deps__"] = make_dep_validator(dep_fields, context_type)
 
+        _validatable_types, _config_validators = _build_config_validators(all_param_types, dep_fields)
+
         # Create the class using type()
-        GeneratedModel = type(f"_{fn.__name__}_Model", (CallableModel,), namespace)
+        GeneratedModel = type(f"_{fn.__name__}_Model", (_GeneratedFlowModelBase,), namespace)
 
         # Set class-level attributes after class creation (to avoid pydantic processing)
         GeneratedModel.__flow_model_context_type__ = context_type
-        GeneratedModel.__flow_model_return_type__ = return_type
+        GeneratedModel.__flow_model_return_type__ = internal_return_type
         GeneratedModel.__flow_model_func__ = fn
         GeneratedModel.__flow_model_dep_fields__ = dep_fields
         GeneratedModel.__flow_model_use_context_args__ = use_context_args
         GeneratedModel.__flow_model_explicit_context_args__ = explicit_context_args
         GeneratedModel.__flow_model_all_param_types__ = all_param_types  # All param name -> type
+        GeneratedModel.__flow_model_auto_wrap__ = auto_wrap_result
 
         # Build context_schema and matched_context_type
         context_schema: Dict[str, Type] = {}
@@ -617,68 +841,9 @@ def flow_model(
         # Validator is created lazily to survive pickling
         GeneratedModel._cached_context_validator = None
 
-        # Method to get/create context validator (lazy for pickling support)
-        def _get_context_validator(self) -> TypeAdapter:
-            """Get or create the context validator.
-
-            For dynamic deferred mode, builds schema from unbound fields.
-            For explicit context_args or explicit context mode, uses cached schema.
-            """
-            cls = self.__class__
-            explicit_args = getattr(cls, "__flow_model_explicit_context_args__", None)
-
-            # For explicit context_args or explicit context mode, use cached validator
-            if explicit_args is not None or not getattr(cls, "__flow_model_use_context_args__", True):
-                if cls._cached_context_validator is None:
-                    if cls._context_td is not None:
-                        cls._cached_context_validator = TypeAdapter(cls._context_td)
-                    elif cls._context_schema:
-                        td = TypedDict(f"{cls.__name__}Inputs", cls._context_schema)
-                        cls._cached_context_validator = TypeAdapter(td)
-                    else:
-                        cls._cached_context_validator = TypeAdapter(cls.__flow_model_context_type__)
-                return cls._cached_context_validator
-
-            # Dynamic mode: build schema from unbound fields (instance-specific)
-            # Cache on instance since bound_fields varies per instance
-            if not hasattr(self, "_instance_context_validator"):
-                all_param_types = getattr(cls, "__flow_model_all_param_types__", {})
-                bound_fields = getattr(self, "_bound_fields", set())
-                unbound_schema = {name: typ for name, typ in all_param_types.items() if name not in bound_fields}
-                if unbound_schema:
-                    td = TypedDict(f"{cls.__name__}Inputs", unbound_schema)
-                    object.__setattr__(self, "_instance_context_validator", TypeAdapter(td))
-                else:
-                    # No unbound fields - empty validator
-                    object.__setattr__(self, "_instance_context_validator", TypeAdapter(dict))
-            return self._instance_context_validator
-
-        GeneratedModel._get_context_validator = _get_context_validator
-
-        # Override context_type property after class creation
-        @property
-        def context_type_getter(self) -> Type[ContextBase]:
-            return self.__class__.__flow_model_context_type__
-
-        # Override result_type property after class creation
-        @property
-        def result_type_getter(self) -> Type[ResultBase]:
-            return self.__class__.__flow_model_return_type__
-
-        # Add .flow property for the new API
-        @property
-        def flow_getter(self) -> FlowAPI:
-            return FlowAPI(self)
-
-        GeneratedModel.context_type = context_type_getter
-        GeneratedModel.result_type = result_type_getter
-        GeneratedModel.flow = flow_getter
-
         # Register the MODEL class for serialization (needed for model_dump/_target_).
         # Note: We do NOT register dynamic context classes anymore - context handling
         # uses FlowContext + TypedDict instead, which don't need registration.
-        from .local_persistence import register_ccflow_import_path
-
         register_ccflow_import_path(GeneratedModel)
 
         # Rebuild the model to process annotations properly
@@ -687,6 +852,8 @@ def flow_model(
         # Create factory function that returns model instances
         @wraps(fn)
         def factory(**kwargs) -> GeneratedModel:
+            _validate_config_kwargs(kwargs, _validatable_types, _config_validators)
+
             instance = GeneratedModel(**kwargs)
             # Track which fields were explicitly provided at construction
             # These are "bound" - everything else comes from context at runtime
@@ -697,49 +864,68 @@ def flow_model(
         factory._generated_model = GeneratedModel
         factory.__doc__ = fn.__doc__
 
-        # Add .deps decorator for customizing __deps__
-        def deps_decorator(deps_fn):
-            """Decorator to customize the __deps__ method.
-
-            Usage:
-                @Flow.model
-                def my_func(start_date: date, prices: dict) -> GenericResult[...]:
-                    ...
-
-                @my_func.deps
-                def _(self, context):
-                    # Custom context transform
-                    lookback_ctx = FlowContext(
-                        start_date=context.start_date - timedelta(days=30),
-                        end_date=context.end_date,
-                    )
-                    return [(self.prices, [lookback_ctx])]
-            """
-            from .callable import GraphDepList
-
-            # Rename the function to __deps__ so Flow.deps accepts it
-            deps_fn.__name__ = "__deps__"
-            deps_fn.__qualname__ = f"{GeneratedModel.__qualname__}.__deps__"
-            # Set proper signature to match __call__'s context type
-            deps_fn.__signature__ = inspect.Signature(
-                parameters=[
-                    inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
-                    inspect.Parameter("context", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=context_type),
-                ],
-                return_annotation=GraphDepList,
-            )
-            # Wrap with Flow.deps and replace on the class
-            decorated = Flow.deps(deps_fn)
-            GeneratedModel.__deps__ = decorated
-            # Mark that this model has custom deps (so _resolve_deps_and_call will call it)
-            GeneratedModel.__has_custom_deps__ = True
-            return factory  # Return factory for chaining
-
-        factory.deps = deps_decorator
-
         return factory
 
     # Handle both @Flow.model and @Flow.model(...) syntax
     if func is not None:
         return decorator(func)
     return decorator
+
+
+# =============================================================================
+# FieldExtractor — structured output field access
+# =============================================================================
+
+
+class FieldExtractor(_FieldExtractorMixin, CallableModel):
+    """Extracts a named field from a source model's result.
+
+    Created automatically by accessing an unknown attribute on a @Flow.model
+    instance (e.g., ``prepared.X_train``). The extractor is itself a
+    CallableModel, so it can be wired as a dependency to downstream models.
+
+    When evaluated, it runs the source model and returns
+    ``GenericResult(value=getattr(source_result, field_name))``.
+
+    Multiple extractors from the same source share the source model instance.
+    If caching is enabled on the evaluator, the source is evaluated only once.
+    """
+
+    source: Any  # The source CallableModel
+    field_name: str  # The attribute to extract
+
+    @property
+    def context_type(self):
+        if isinstance(self.source, _CallableModel):
+            return self.source.context_type
+        return ContextBase
+
+    @property
+    def result_type(self):
+        return GenericResult
+
+    @Flow.call
+    def __call__(self, context: ContextBase) -> GenericResult:
+        # Lazy import: _resolved_deps is a ContextVar that can't be pickled
+        from .callable import _resolved_deps
+
+        store = _resolved_deps.get()
+        if id(self.source) in store:
+            result = store[id(self.source)]
+        else:
+            result = self.source(context)
+            if isinstance(result, GenericResult):
+                result = result.value
+        # Support both attribute access and dict key access
+        if isinstance(result, dict):
+            return GenericResult(value=result[self.field_name])
+        return GenericResult(value=getattr(result, self.field_name))
+
+    @Flow.deps
+    def __deps__(self, context: ContextBase) -> GraphDepList:
+        if isinstance(self.source, _CallableModel):
+            return [(self.source, [context])]
+        return []
+
+
+register_ccflow_import_path(FieldExtractor)

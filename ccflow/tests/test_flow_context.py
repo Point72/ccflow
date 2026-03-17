@@ -26,12 +26,12 @@ class TestFlowContext:
         assert ctx.end_date == date(2024, 1, 31)
 
     def test_flow_context_extra_fields(self):
-        """FlowContext stores fields in __pydantic_extra__."""
+        """FlowContext exposes arbitrary fields through normal model APIs."""
         ctx = FlowContext(x=1, y="hello", z=[1, 2, 3])
         assert ctx.x == 1
         assert ctx.y == "hello"
         assert ctx.z == [1, 2, 3]
-        assert ctx.__pydantic_extra__ == {"x": 1, "y": "hello", "z": [1, 2, 3]}
+        assert dict(ctx) == {"x": 1, "y": "hello", "z": [1, 2, 3]}
 
     def test_flow_context_frozen(self):
         """FlowContext is immutable (frozen)."""
