@@ -60,7 +60,7 @@ diamond_aggregator:
 
 # DateRangeContext with transform
 flow_date_loader:
-    _target_: ccflow.tests.test_flow_model.date_range_loader
+    _target_: ccflow.tests.test_flow_model.date_range_loader_previous_day
     source: market_data
     include_weekends: false
 

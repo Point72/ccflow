@@ -1,25 +1,22 @@
 """Tests for Flow.model decorator."""
 
 from datetime import date, timedelta
-from typing import Annotated
 from unittest import TestCase
 
-from pydantic import ValidationError
 from ray.cloudpickle import dumps as rcpdumps, loads as rcploads
 
 from ccflow import (
     CallableModel,
     ContextBase,
     DateRangeContext,
-    Dep,
-    DepOf,
     Flow,
+    FlowOptionsOverride,
     GenericResult,
     Lazy,
     ModelRegistry,
     ResultBase,
 )
-from ccflow.callable import resolve
+from ccflow.evaluators.common import MemoryCacheEvaluator
 
 
 class SimpleContext(ContextBase):
@@ -136,9 +133,9 @@ class TestFlowModelBasic(TestCase):
             return GenericResult(value=context.value + base)
 
         @Flow.model
-        def consumer(_: SimpleContext, data: DepOf[..., GenericResult[int]]) -> GenericResult[int]:
+        def consumer(_: SimpleContext, data: int) -> GenericResult[int]:
             # Context not used directly, just passed to dependency
-            return GenericResult(value=data.value * 2)
+            return GenericResult(value=data * 2)
 
         load = loader(base=100)
         consume = consumer(data=load)
@@ -214,10 +211,10 @@ class TestFlowModelContextArgs(TestCase):
 
 
 class TestFlowModelDependencies(TestCase):
-    """Tests for Flow.model with dependencies."""
+    """Tests for Flow.model with upstream CallableModel inputs."""
 
-    def test_simple_dependency_with_depof(self):
-        """Test simple dependency using DepOf shorthand."""
+    def test_simple_dependency(self):
+        """Test passing an upstream model as a normal parameter."""
 
         @Flow.model
         def loader(context: SimpleContext, value: int) -> GenericResult[int]:
@@ -226,10 +223,10 @@ class TestFlowModelDependencies(TestCase):
         @Flow.model
         def consumer(
             context: SimpleContext,
-            data: DepOf[..., GenericResult[int]],
+            data: int,
             multiplier: int = 1,
         ) -> GenericResult[int]:
-            return GenericResult(value=data.value * multiplier)
+            return GenericResult(value=data * multiplier)
 
         # Create pipeline
         load = loader(value=10)
@@ -241,39 +238,17 @@ class TestFlowModelDependencies(TestCase):
         # loader returns 10 + 5 = 15, consumer multiplies by 2 = 30
         self.assertEqual(result.value, 30)
 
-    def test_dependency_with_explicit_dep(self):
-        """Test dependency using explicit Dep() annotation."""
-
-        @Flow.model
-        def loader(context: SimpleContext) -> GenericResult[int]:
-            return GenericResult(value=context.value * 2)
-
-        @Flow.model
-        def consumer(
-            context: SimpleContext,
-            data: Annotated[GenericResult[int], Dep()],
-        ) -> GenericResult[int]:
-            return GenericResult(value=data.value + 100)
-
-        load = loader()
-        consume = consumer(data=load)
-
-        result = consume(SimpleContext(value=10))
-        # loader: 10 * 2 = 20, consumer: 20 + 100 = 120
-        self.assertEqual(result.value, 120)
-
     def test_dependency_with_direct_value(self):
-        """Test that Dep fields can accept direct values (not CallableModel)."""
+        """Test that dependency-shaped parameters can also take direct values."""
 
         @Flow.model
         def consumer(
             context: SimpleContext,
-            data: DepOf[..., GenericResult[int]],
+            data: int,
         ) -> GenericResult[int]:
-            return GenericResult(value=data.value + context.value)
+            return GenericResult(value=data + context.value)
 
-        # Pass direct value instead of CallableModel
-        consume = consumer(data=GenericResult(value=100))
+        consume = consumer(data=100)
 
         result = consume(SimpleContext(value=5))
         self.assertEqual(result.value, 105)
@@ -288,9 +263,9 @@ class TestFlowModelDependencies(TestCase):
         @Flow.model
         def consumer(
             context: SimpleContext,
-            data: DepOf[..., GenericResult[int]],
+            data: int,
         ) -> GenericResult[int]:
-            return GenericResult(value=data.value)
+            return GenericResult(value=data)
 
         load = loader()
         consume = consumer(data=load)
@@ -309,105 +284,80 @@ class TestFlowModelDependencies(TestCase):
         @Flow.model
         def consumer(
             context: SimpleContext,
-            data: DepOf[..., GenericResult[int]],
+            data: int,
         ) -> GenericResult[int]:
-            return GenericResult(value=data.value)
+            return GenericResult(value=data)
 
-        consume = consumer(data=GenericResult(value=100))
+        consume = consumer(data=100)
 
         deps = consume.__deps__(SimpleContext(value=10))
         self.assertEqual(len(deps), 0)
 
 
 # =============================================================================
-# Transform Tests
+# with_inputs Tests
 # =============================================================================
 
 
-class TestFlowModelTransforms(TestCase):
-    """Tests for Flow.model with context transforms."""
+class TestFlowModelWithInputs(TestCase):
+    """Tests for Flow.model with .flow.with_inputs()."""
 
-    def test_transform_in_dep(self):
-        """Test dependency with context transform."""
+    def test_transformed_dependency_with_inputs(self):
+        """Test dependency context transformation via .flow.with_inputs()."""
 
         @Flow.model
         def loader(context: SimpleContext) -> GenericResult[int]:
             return GenericResult(value=context.value)
 
         @Flow.model
-        def consumer(
-            context: SimpleContext,
-            data: Annotated[
-                GenericResult[int],
-                Dep(transform=lambda ctx: ctx.model_copy(update={"value": ctx.value + 10})),
-            ],
-        ) -> GenericResult[int]:
-            return GenericResult(value=data.value * 2)
+        def consumer(context: SimpleContext, data: int) -> GenericResult[int]:
+            return GenericResult(value=data * 2)
 
-        load = loader()
+        load = loader().flow.with_inputs(value=lambda ctx: ctx.value + 10)
         consume = consumer(data=load)
 
-        ctx = SimpleContext(value=5)
-        result = consume(ctx)
-
-        # Transform adds 10 to context.value: 5 + 10 = 15
-        # Loader returns that: 15
-        # Consumer multiplies by 2: 30
+        result = consume(SimpleContext(value=5))
         self.assertEqual(result.value, 30)
 
-    def test_transform_in_deps_method(self):
-        """Test that transform is applied in __deps__ method."""
-
-        def transform_fn(ctx):
-            return ctx.model_copy(update={"value": ctx.value * 3})
+    def test_with_inputs_changes_dependency_context_in_deps(self):
+        """Test that BoundModel contributes transformed dependency contexts."""
 
         @Flow.model
         def loader(context: SimpleContext) -> GenericResult[int]:
             return GenericResult(value=context.value)
 
         @Flow.model
-        def consumer(
-            context: SimpleContext,
-            data: Annotated[GenericResult[int], Dep(transform=transform_fn)],
-        ) -> GenericResult[int]:
-            return GenericResult(value=data.value)
+        def consumer(context: SimpleContext, data: int) -> GenericResult[int]:
+            return GenericResult(value=data)
 
-        load = loader()
+        load = loader().flow.with_inputs(value=lambda ctx: ctx.value * 3)
         consume = consumer(data=load)
 
-        ctx = SimpleContext(value=7)
-        deps = consume.__deps__(ctx)
-
-        # Transform should be applied
+        deps = consume.__deps__(SimpleContext(value=7))
         self.assertEqual(len(deps), 1)
         transformed_ctx = deps[0][1][0]
-        self.assertEqual(transformed_ctx.value, 21)  # 7 * 3
+        self.assertEqual(transformed_ctx.value, 21)
 
-    def test_date_range_transform(self):
-        """Test transform pattern with date ranges using context_args."""
+    def test_date_range_transform_with_inputs(self):
+        """Test date-range lookback wiring via .flow.with_inputs()."""
 
         @Flow.model(context_args=["start_date", "end_date"])
         def range_loader(start_date: date, end_date: date, source: str) -> GenericResult[str]:
             return GenericResult(value=f"{source}:{start_date}")
 
-        def lookback_transform(ctx: DateRangeContext) -> DateRangeContext:
-            return ctx.model_copy(update={"start_date": ctx.start_date - timedelta(days=1)})
-
         @Flow.model(context_args=["start_date", "end_date"])
         def range_processor(
             start_date: date,
             end_date: date,
-            data: Annotated[GenericResult[str], Dep(transform=lookback_transform)],
+            data: str,
         ) -> GenericResult[str]:
-            return GenericResult(value=f"processed:{data.value}")
+            return GenericResult(value=f"processed:{data}")
 
-        loader = range_loader(source="db")
+        loader = range_loader(source="db").flow.with_inputs(start_date=lambda ctx: ctx.start_date - timedelta(days=1))
         processor = range_processor(data=loader)
 
         ctx = DateRangeContext(start_date=date(2024, 1, 10), end_date=date(2024, 1, 31))
         result = processor(ctx)
-
-        # Transform should shift start_date back by 1 day
         self.assertEqual(result.value, "processed:db:2024-01-09")
 
 
@@ -429,18 +379,18 @@ class TestFlowModelPipeline(TestCase):
         @Flow.model
         def stage2(
             context: SimpleContext,
-            input_data: DepOf[..., GenericResult[int]],
+            input_data: int,
             multiplier: int,
         ) -> GenericResult[int]:
-            return GenericResult(value=input_data.value * multiplier)
+            return GenericResult(value=input_data * multiplier)
 
         @Flow.model
         def stage3(
             context: SimpleContext,
-            input_data: DepOf[..., GenericResult[int]],
+            input_data: int,
             offset: int = 0,
         ) -> GenericResult[int]:
-            return GenericResult(value=input_data.value + offset)
+            return GenericResult(value=input_data + offset)
 
         # Build pipeline
         s1 = stage1(base=100)
@@ -465,24 +415,24 @@ class TestFlowModelPipeline(TestCase):
         @Flow.model
         def branch_a(
             context: SimpleContext,
-            data: DepOf[..., GenericResult[int]],
+            data: int,
         ) -> GenericResult[int]:
-            return GenericResult(value=data.value * 2)
+            return GenericResult(value=data * 2)
 
         @Flow.model
         def branch_b(
             context: SimpleContext,
-            data: DepOf[..., GenericResult[int]],
+            data: int,
         ) -> GenericResult[int]:
-            return GenericResult(value=data.value + 100)
+            return GenericResult(value=data + 100)
 
         @Flow.model
         def merger(
             context: SimpleContext,
-            a: DepOf[..., GenericResult[int]],
-            b: DepOf[..., GenericResult[int]],
+            a: int,
+            b: int,
         ) -> GenericResult[int]:
-            return GenericResult(value=a.value + b.value)
+            return GenericResult(value=a + b)
 
         src = source()
         a = branch_a(data=src)
@@ -568,10 +518,10 @@ class TestFlowModelIntegration(TestCase):
         @Flow.model
         def generated_consumer(
             context: SimpleContext,
-            data: DepOf[..., GenericResult[int]],
+            data: int,
             multiplier: int,
         ) -> GenericResult[int]:
-            return GenericResult(value=data.value * multiplier)
+            return GenericResult(value=data * multiplier)
 
         manual = ManualModel(offset=50)
         generated = generated_consumer(data=manual, multiplier=2)
@@ -616,7 +566,7 @@ class TestFlowModelErrors(TestCase):
         """Test that auto-wrapped model used as dep delivers unwrapped value downstream.
 
         Auto-wrapped models have result_type=GenericResult (unparameterized).
-        When used as an auto-detected dep (no DepOf), the framework resolves
+        When used as an auto-detected dep, the framework resolves
         the GenericResult and unwraps .value for the downstream function.
         """
 
@@ -627,7 +577,7 @@ class TestFlowModelErrors(TestCase):
         @Flow.model
         def consumer(
             context: SimpleContext,
-            data: GenericResult[int],  # Auto-detected dep, not DepOf
+            data: GenericResult[int],  # Auto-detected dep
         ) -> GenericResult[int]:
             # data is auto-unwrapped to the int value by the framework
             return GenericResult(value=data + 1)
@@ -712,287 +662,12 @@ class TestFlowModelErrors(TestCase):
 
 
 # =============================================================================
-# Dep and DepOf Tests
-# =============================================================================
-
-
-class TestDepAndDepOf(TestCase):
-    """Tests for Dep and DepOf classes."""
-
-    def test_depof_creates_annotated(self):
-        """Test that DepOf[..., T] creates Annotated[Union[T, CallableModel], Dep()]."""
-        from typing import Union as TypingUnion, get_args, get_origin
-
-        annotation = DepOf[..., GenericResult[int]]
-        self.assertEqual(get_origin(annotation), Annotated)
-
-        args = get_args(annotation)
-        # First arg is Union[ResultType, CallableModel]
-        self.assertEqual(get_origin(args[0]), TypingUnion)
-        union_args = get_args(args[0])
-        self.assertIn(GenericResult[int], union_args)
-        self.assertIn(CallableModel, union_args)
-        # Second arg is Dep()
-        self.assertIsInstance(args[1], Dep)
-        self.assertIsNone(args[1].context_type)  # ... means inherit from parent
-
-    def test_depof_with_generic_type(self):
-        """Test DepOf with nested generic types."""
-        from typing import List as TypingList, Union as TypingUnion, get_args, get_origin
-
-        annotation = DepOf[..., GenericResult[TypingList[str]]]
-        self.assertEqual(get_origin(annotation), Annotated)
-
-        args = get_args(annotation)
-        # First arg is Union[ResultType, CallableModel]
-        self.assertEqual(get_origin(args[0]), TypingUnion)
-        union_args = get_args(args[0])
-        self.assertIn(GenericResult[TypingList[str]], union_args)
-        self.assertIn(CallableModel, union_args)
-
-    def test_depof_with_context_type(self):
-        """Test DepOf[ContextType, ResultType] syntax."""
-        from typing import Union as TypingUnion, get_args, get_origin
-
-        annotation = DepOf[SimpleContext, GenericResult[int]]
-        self.assertEqual(get_origin(annotation), Annotated)
-
-        args = get_args(annotation)
-        # First arg is Union[ResultType, CallableModel]
-        self.assertEqual(get_origin(args[0]), TypingUnion)
-        union_args = get_args(args[0])
-        self.assertIn(GenericResult[int], union_args)
-        self.assertIn(CallableModel, union_args)
-        # Second arg is Dep with context_type
-        self.assertIsInstance(args[1], Dep)
-        self.assertEqual(args[1].context_type, SimpleContext)
-
-    def test_extract_dep_with_annotated(self):
-        """Test extract_dep with Annotated type."""
-        from ccflow.dep import extract_dep
-
-        dep = Dep(context_type=SimpleContext)
-        annotation = Annotated[GenericResult[int], dep]
-
-        base_type, extracted_dep = extract_dep(annotation)
-        self.assertEqual(base_type, GenericResult[int])
-        self.assertEqual(extracted_dep, dep)
-
-    def test_extract_dep_with_depof(self):
-        """Test extract_dep with DepOf type."""
-        from typing import Union as TypingUnion, get_args, get_origin
-
-        from ccflow.dep import extract_dep
-
-        annotation = DepOf[..., GenericResult[str]]
-        base_type, extracted_dep = extract_dep(annotation)
-
-        # base_type is Union[ResultType, CallableModel]
-        self.assertEqual(get_origin(base_type), TypingUnion)
-        union_args = get_args(base_type)
-        self.assertIn(GenericResult[str], union_args)
-        self.assertIn(CallableModel, union_args)
-        self.assertIsInstance(extracted_dep, Dep)
-
-    def test_extract_dep_without_dep(self):
-        """Test extract_dep with regular type (no Dep)."""
-        from ccflow.dep import extract_dep
-
-        base_type, extracted_dep = extract_dep(int)
-        self.assertEqual(base_type, int)
-        self.assertIsNone(extracted_dep)
-
-    def test_extract_dep_annotated_without_dep(self):
-        """Test extract_dep with Annotated but no Dep marker."""
-        from ccflow.dep import extract_dep
-
-        annotation = Annotated[int, "some metadata"]
-        base_type, extracted_dep = extract_dep(annotation)
-
-        # When no Dep marker is found, returns original annotation unchanged
-        self.assertEqual(base_type, annotation)
-        self.assertIsNone(extracted_dep)
-
-    def test_is_compatible_type_simple(self):
-        """Test _is_compatible_type with simple types."""
-        from ccflow.dep import _is_compatible_type
-
-        self.assertTrue(_is_compatible_type(int, int))
-        self.assertFalse(_is_compatible_type(int, str))
-        self.assertTrue(_is_compatible_type(bool, int))  # bool is subclass of int
-
-    def test_is_compatible_type_generic(self):
-        """Test _is_compatible_type with generic types."""
-        from ccflow.dep import _is_compatible_type
-
-        self.assertTrue(_is_compatible_type(GenericResult[int], GenericResult[int]))
-        self.assertFalse(_is_compatible_type(GenericResult[int], GenericResult[str]))
-        self.assertTrue(_is_compatible_type(GenericResult, GenericResult))
-
-    def test_is_compatible_type_none(self):
-        """Test _is_compatible_type with None."""
-        from ccflow.dep import _is_compatible_type
-
-        self.assertTrue(_is_compatible_type(None, None))
-        self.assertFalse(_is_compatible_type(None, int))
-        self.assertFalse(_is_compatible_type(int, None))
-
-    def test_is_compatible_type_subclass(self):
-        """Test _is_compatible_type with subclasses."""
-        from ccflow.dep import _is_compatible_type
-
-        self.assertTrue(_is_compatible_type(MyResult, ResultBase))
-        self.assertFalse(_is_compatible_type(ResultBase, MyResult))
-
-    def test_dep_validate_dependency_success(self):
-        """Test Dep.validate_dependency with valid dependency."""
-
-        @Flow.model
-        def valid_dep(context: SimpleContext) -> GenericResult[int]:
-            return GenericResult(value=context.value)
-
-        dep = Dep()
-        model = valid_dep()
-
-        # Should not raise
-        dep.validate_dependency(model, GenericResult[int], SimpleContext, "data")
-
-    def test_dep_validate_dependency_context_mismatch(self):
-        """Test Dep.validate_dependency with context type mismatch."""
-
-        class OtherContext(ContextBase):
-            other: str
-
-        @Flow.model
-        def other_dep(context: OtherContext) -> GenericResult[int]:
-            return GenericResult(value=42)
-
-        dep = Dep(context_type=SimpleContext)
-        model = other_dep()
-
-        with self.assertRaises(TypeError) as cm:
-            dep.validate_dependency(model, GenericResult[int], SimpleContext, "data")
-
-        self.assertIn("context_type", str(cm.exception))
-
-    def test_dep_validate_dependency_result_mismatch(self):
-        """Test Dep.validate_dependency with result type mismatch."""
-
-        @Flow.model
-        def wrong_result(context: SimpleContext) -> MyResult:
-            return MyResult(data="test")
-
-        dep = Dep()
-        model = wrong_result()
-
-        with self.assertRaises(TypeError) as cm:
-            dep.validate_dependency(model, GenericResult[int], SimpleContext, "data")
-
-        self.assertIn("result_type", str(cm.exception))
-
-    def test_dep_validate_dependency_non_callable(self):
-        """Test Dep.validate_dependency with non-CallableModel value."""
-        dep = Dep()
-        # Should not raise for non-CallableModel values
-        dep.validate_dependency(GenericResult(value=42), GenericResult[int], SimpleContext, "data")
-        dep.validate_dependency("string", GenericResult[int], SimpleContext, "data")
-        dep.validate_dependency(123, GenericResult[int], SimpleContext, "data")
-
-    def test_dep_hash(self):
-        """Test Dep is hashable for use in sets/dicts."""
-        dep1 = Dep()
-        dep2 = Dep(context_type=SimpleContext)
-
-        # Should be hashable
-        dep_set = {dep1, dep2}
-        self.assertEqual(len(dep_set), 2)
-
-        dep_dict = {dep1: "value1", dep2: "value2"}
-        self.assertEqual(dep_dict[dep1], "value1")
-        self.assertEqual(dep_dict[dep2], "value2")
-
-    def test_dep_apply_with_transform(self):
-        """Test Dep.apply with transform function."""
-
-        def transform(ctx):
-            return ctx.model_copy(update={"value": ctx.value * 2})
-
-        dep = Dep(transform=transform)
-
-        ctx = SimpleContext(value=10)
-        result = dep.apply(ctx)
-
-        self.assertEqual(result.value, 20)
-
-    def test_dep_apply_without_transform(self):
-        """Test Dep.apply without transform (identity)."""
-        dep = Dep()
-
-        ctx = SimpleContext(value=10)
-        result = dep.apply(ctx)
-
-        self.assertIs(result, ctx)
-
-    def test_dep_repr(self):
-        """Test Dep string representation."""
-        dep1 = Dep()
-        self.assertEqual(repr(dep1), "Dep()")
-
-        dep2 = Dep(context_type=SimpleContext)
-        self.assertIn("SimpleContext", repr(dep2))
-
-        dep3 = Dep(transform=lambda x: x)
-        self.assertIn("transform=", repr(dep3))
-
-    def test_dep_equality(self):
-        """Test Dep equality comparison."""
-        dep1 = Dep()
-        dep2 = Dep()
-        dep3 = Dep(context_type=SimpleContext)
-
-        # Note: Two Dep() instances with no arguments are equal
-        self.assertEqual(dep1, dep2)
-        self.assertNotEqual(dep1, dep3)
-
-
-# =============================================================================
 # Validation Tests
 # =============================================================================
 
 
 class TestFlowModelValidation(TestCase):
-    """Tests for dependency validation in Flow.model."""
-
-    def test_context_type_validation(self):
-        """Test that context_type mismatch is detected."""
-
-        class OtherContext(ContextBase):
-            other: str
-
-        @Flow.model
-        def simple_loader(context: SimpleContext) -> GenericResult[int]:
-            return GenericResult(value=context.value)
-
-        @Flow.model
-        def other_loader(context: OtherContext) -> GenericResult[int]:
-            return GenericResult(value=42)
-
-        @Flow.model
-        def consumer(
-            context: SimpleContext,
-            data: Annotated[GenericResult[int], Dep(context_type=SimpleContext)],
-        ) -> GenericResult[int]:
-            return GenericResult(value=data.value)
-
-        # Should work with matching context
-        load1 = simple_loader()
-        consume1 = consumer(data=load1)
-        self.assertIsNotNone(consume1)
-
-        # Should fail with mismatched context
-        load2 = other_loader()
-        with self.assertRaises((TypeError, ValidationError)):
-            consumer(data=load2)
+    """Tests for Flow.model validation behavior."""
 
     def test_config_validation_rejects_bad_type(self):
         """Test that config validator rejects wrong types at construction."""
@@ -1208,6 +883,36 @@ class TestBoundModel(TestCase):
         # data=5 < 100, so slow path: x transform: 7+10=17, source: 17*3=51
         self.assertEqual(result, 51)
 
+    def test_bound_and_unbound_models_share_memory_cache(self):
+        """Shifted and unshifted models should share one evaluator cache.
+
+        They should not share the same cache key when the effective contexts
+        differ, but repeated evaluations of either model should still hit the
+        same underlying MemoryCacheEvaluator instance rather than re-executing.
+        """
+
+        call_counts = {"source": 0}
+
+        @Flow.model
+        def source(context: SimpleContext) -> GenericResult[int]:
+            call_counts["source"] += 1
+            return GenericResult(value=context.value * 10)
+
+        base = source()
+        shifted = base.flow.with_inputs(value=lambda ctx: ctx.value + 1)
+        evaluator = MemoryCacheEvaluator()
+        ctx = SimpleContext(value=5)
+
+        with FlowOptionsOverride(options={"evaluator": evaluator, "cacheable": True}):
+            self.assertEqual(base(ctx).value, 50)
+            self.assertEqual(shifted(ctx).value, 60)
+            self.assertEqual(base(ctx).value, 50)
+            self.assertEqual(shifted(ctx).value, 60)
+
+        # One execution for the unshifted context and one for the shifted context.
+        self.assertEqual(call_counts["source"], 2)
+        self.assertEqual(len(evaluator.cache), 2)
+
 
 # =============================================================================
 # PEP 563 (from __future__ import annotations) Compatibility Tests
@@ -1296,27 +1001,27 @@ def data_source(context: SimpleContext, base_value: int) -> GenericResult[int]:
 @Flow.model
 def data_transformer(
     context: SimpleContext,
-    source: DepOf[..., GenericResult[int]],
+    source: int,
     factor: int = 2,
 ) -> GenericResult[int]:
     """Transform data by multiplying with factor."""
-    return GenericResult(value=source.value * factor)
+    return GenericResult(value=source * factor)
 
 
 @Flow.model
 def data_aggregator(
     context: SimpleContext,
-    input_a: DepOf[..., GenericResult[int]],
-    input_b: DepOf[..., GenericResult[int]],
+    input_a: int,
+    input_b: int,
     operation: str = "add",
 ) -> GenericResult[int]:
     """Aggregate two inputs."""
     if operation == "add":
-        return GenericResult(value=input_a.value + input_b.value)
+        return GenericResult(value=input_a + input_b)
     elif operation == "multiply":
-        return GenericResult(value=input_a.value * input_b.value)
+        return GenericResult(value=input_a * input_b)
     else:
-        return GenericResult(value=input_a.value - input_b.value)
+        return GenericResult(value=input_a - input_b)
 
 
 @Flow.model
@@ -1328,26 +1033,21 @@ def pipeline_stage1(context: SimpleContext, initial: int) -> GenericResult[int]:
 @Flow.model
 def pipeline_stage2(
     context: SimpleContext,
-    stage1_output: DepOf[..., GenericResult[int]],
+    stage1_output: int,
     multiplier: int = 2,
 ) -> GenericResult[int]:
     """Second stage of pipeline."""
-    return GenericResult(value=stage1_output.value * multiplier)
+    return GenericResult(value=stage1_output * multiplier)
 
 
 @Flow.model
 def pipeline_stage3(
     context: SimpleContext,
-    stage2_output: DepOf[..., GenericResult[int]],
+    stage2_output: int,
     offset: int = 0,
 ) -> GenericResult[int]:
     """Third stage of pipeline."""
-    return GenericResult(value=stage2_output.value + offset)
-
-
-def lookback_one_day(ctx: DateRangeContext) -> DateRangeContext:
-    """Transform that extends start_date back by one day."""
-    return ctx.model_copy(update={"start_date": ctx.start_date - timedelta(days=1)})
+    return GenericResult(value=stage2_output + offset)
 
 
 @Flow.model
@@ -1355,20 +1055,37 @@ def date_range_loader(
     context: DateRangeContext,
     source: str,
     include_weekends: bool = True,
-) -> GenericResult[str]:
+) -> GenericResult[dict]:
     """Load data for a date range."""
-    return GenericResult(value=f"{source}:{context.start_date} to {context.end_date}")
+    return GenericResult(
+        value={
+            "source": source,
+            "start_date": str(context.start_date),
+            "end_date": str(context.end_date),
+        }
+    )
+
+
+@Flow.model
+def date_range_loader_previous_day(
+    context: DateRangeContext,
+    source: str,
+    include_weekends: bool = True,
+) -> dict:
+    """Hydra helper that applies a one-day lookback before delegating."""
+    shifted = context.model_copy(update={"start_date": context.start_date - timedelta(days=1)})
+    return date_range_loader(source=source, include_weekends=include_weekends)(shifted).value
 
 
 @Flow.model
 def date_range_processor(
     context: DateRangeContext,
-    raw_data: Annotated[GenericResult[str], Dep(transform=lookback_one_day)],
+    raw_data: dict,
     normalize: bool = False,
 ) -> GenericResult[str]:
-    """Process date range data with lookback."""
+    """Process date range data."""
     prefix = "normalized:" if normalize else "raw:"
-    return GenericResult(value=f"{prefix}{raw_data.value}")
+    return GenericResult(value=f"{prefix}{raw_data['source']}:{raw_data['start_date']} to {raw_data['end_date']}")
 
 
 @Flow.model
@@ -1386,31 +1103,37 @@ def hydra_source_model(context: SimpleContext, base: int) -> GenericResult[int]:
 @Flow.model
 def hydra_consumer_model(
     context: SimpleContext,
-    source: DepOf[..., GenericResult[int]],
+    source: int,
     factor: int = 1,
 ) -> GenericResult[int]:
     """Consumer model for dependency testing."""
-    return GenericResult(value=source.value * factor)
+    return GenericResult(value=source * factor)
 
 
 # --- context_args fixtures for Hydra testing ---
 
 
 @Flow.model(context_args=["start_date", "end_date"])
-def context_args_loader(start_date: date, end_date: date, source: str) -> GenericResult[str]:
+def context_args_loader(start_date: date, end_date: date, source: str) -> GenericResult[dict]:
     """Loader using context_args with DateRangeContext."""
-    return GenericResult(value=f"{source}:{start_date} to {end_date}")
+    return GenericResult(
+        value={
+            "source": source,
+            "start_date": str(start_date),
+            "end_date": str(end_date),
+        }
+    )
 
 
 @Flow.model(context_args=["start_date", "end_date"])
 def context_args_processor(
     start_date: date,
     end_date: date,
-    data: DepOf[..., GenericResult[str]],
+    data: dict,
     prefix: str = "processed",
 ) -> GenericResult[str]:
     """Processor using context_args with dependency."""
-    return GenericResult(value=f"{prefix}:{data.value}")
+    return GenericResult(value=f"{prefix}:{data['source']}:{data['start_date']} to {data['end_date']}")
 
 
 class TestFlowModelHydra(TestCase):
@@ -1475,390 +1198,6 @@ class TestFlowModelHydra(TestCase):
         result = model(SimpleContext(value=5))
         # source: 5 * 10 = 50, consumer: 50 * 2 = 100
         self.assertEqual(result.value, 100)
-
-
-# =============================================================================
-# Class-based CallableModel with Auto-Resolution Tests
-# =============================================================================
-
-
-class TestClassBasedDepResolution(TestCase):
-    """Tests for auto-resolution of DepOf fields in class-based CallableModels.
-
-    Key pattern: Fields use DepOf annotation, __call__ only takes context,
-    and resolved values are accessed via self.field_name during __call__.
-    """
-
-    def test_class_based_auto_resolve_basic(self):
-        """Test that DepOf fields are auto-resolved and accessible via resolve()."""
-
-        @Flow.model
-        def data_source(context: SimpleContext) -> GenericResult[int]:
-            return GenericResult(value=context.value * 10)
-
-        class Consumer(CallableModel):
-            # DepOf expands to Annotated[Union[ResultType, CallableModel], Dep()]
-            source: DepOf[..., GenericResult[int]]
-
-            @Flow.call
-            def __call__(self, context: SimpleContext) -> GenericResult[int]:
-                # Access resolved value via resolve()
-                return GenericResult(value=resolve(self.source).value + 1)
-
-            @Flow.deps
-            def __deps__(self, context: SimpleContext):
-                return [(self.source, [context])]
-
-        src = data_source()
-        consumer = Consumer(source=src)
-
-        result = consumer(SimpleContext(value=5))
-        # source: 5 * 10 = 50, consumer: 50 + 1 = 51
-        self.assertEqual(result.value, 51)
-
-    def test_class_based_with_custom_transform(self):
-        """Test that custom __deps__ transform is used."""
-
-        @Flow.model
-        def data_source(context: SimpleContext) -> GenericResult[int]:
-            return GenericResult(value=context.value * 10)
-
-        class Consumer(CallableModel):
-            source: DepOf[..., GenericResult[int]]
-            offset: int = 100
-
-            @Flow.call
-            def __call__(self, context: SimpleContext) -> GenericResult[int]:
-                return GenericResult(value=resolve(self.source).value + self.offset)
-
-            @Flow.deps
-            def __deps__(self, context: SimpleContext):
-                # Apply custom transform
-                transformed_ctx = SimpleContext(value=context.value + 5)
-                return [(self.source, [transformed_ctx])]
-
-        src = data_source()
-        consumer = Consumer(source=src, offset=1)
-
-        result = consumer(SimpleContext(value=5))
-        # transformed context: 5 + 5 = 10
-        # source: 10 * 10 = 100
-        # consumer: 100 + 1 = 101
-        self.assertEqual(result.value, 101)
-
-    def test_class_based_with_annotated_transform(self):
-        """Test that Dep transform is used when field not in __deps__."""
-
-        @Flow.model
-        def data_source(context: SimpleContext) -> GenericResult[int]:
-            return GenericResult(value=context.value * 10)
-
-        def double_value(ctx: SimpleContext) -> SimpleContext:
-            return SimpleContext(value=ctx.value * 2)
-
-        class Consumer(CallableModel):
-            source: Annotated[DepOf[..., GenericResult[int]], Dep(transform=double_value)]
-
-            @Flow.call
-            def __call__(self, context: SimpleContext) -> GenericResult[int]:
-                return GenericResult(value=resolve(self.source).value + 1)
-
-            @Flow.deps
-            def __deps__(self, context: SimpleContext):
-                return []  # Empty - uses Dep annotation transform from field
-
-        src = data_source()
-        consumer = Consumer(source=src)
-
-        result = consumer(SimpleContext(value=5))
-        # transform: 5 * 2 = 10
-        # source: 10 * 10 = 100
-        # consumer: 100 + 1 = 101
-        self.assertEqual(result.value, 101)
-
-    def test_class_based_multiple_deps(self):
-        """Test auto-resolution with multiple dependencies."""
-
-        @Flow.model
-        def source_a(context: SimpleContext) -> GenericResult[int]:
-            return GenericResult(value=context.value)
-
-        @Flow.model
-        def source_b(context: SimpleContext) -> GenericResult[int]:
-            return GenericResult(value=context.value * 2)
-
-        class Aggregator(CallableModel):
-            a: DepOf[..., GenericResult[int]]
-            b: DepOf[..., GenericResult[int]]
-
-            @Flow.call
-            def __call__(self, context: SimpleContext) -> GenericResult[int]:
-                return GenericResult(value=resolve(self.a).value + resolve(self.b).value)
-
-            @Flow.deps
-            def __deps__(self, context: SimpleContext):
-                return [(self.a, [context]), (self.b, [context])]
-
-        agg = Aggregator(a=source_a(), b=source_b())
-
-        result = agg(SimpleContext(value=10))
-        # a: 10, b: 20, aggregator: 30
-        self.assertEqual(result.value, 30)
-
-    def test_class_based_deps_with_instance_field_access(self):
-        """Test that __deps__ can access instance fields for configurable transforms.
-
-        This is the key advantage of class-based models over @Flow.model:
-        transforms can use instance fields like window size.
-        """
-
-        @Flow.model
-        def data_source(context: SimpleContext) -> GenericResult[int]:
-            return GenericResult(value=context.value)
-
-        class Consumer(CallableModel):
-            source: DepOf[..., GenericResult[int]]
-            lookback: int = 5  # Configurable instance field
-
-            @Flow.call
-            def __call__(self, context: SimpleContext) -> GenericResult[int]:
-                return GenericResult(value=resolve(self.source).value * 2)
-
-            @Flow.deps
-            def __deps__(self, context: SimpleContext):
-                # Access self.lookback in transform - this is why we use class-based!
-                transformed = SimpleContext(value=context.value + self.lookback)
-                return [(self.source, [transformed])]
-
-        src = data_source()
-        consumer = Consumer(source=src, lookback=10)
-
-        result = consumer(SimpleContext(value=5))
-        # transformed: 5 + 10 = 15
-        # source: 15
-        # consumer: 15 * 2 = 30
-        self.assertEqual(result.value, 30)
-
-    def test_class_based_with_direct_value(self):
-        """Test that DepOf fields can accept pre-resolved values."""
-
-        class Consumer(CallableModel):
-            source: DepOf[..., GenericResult[int]]
-
-            @Flow.call
-            def __call__(self, context: SimpleContext) -> GenericResult[int]:
-                # resolve() passes through non-CallableModel values unchanged
-                return GenericResult(value=resolve(self.source).value + context.value)
-
-            @Flow.deps
-            def __deps__(self, context: SimpleContext):
-                # No deps when source is already resolved
-                return []
-
-        # Pass direct value instead of CallableModel
-        consumer = Consumer(source=GenericResult(value=100))
-
-        result = consumer(SimpleContext(value=5))
-        self.assertEqual(result.value, 105)
-
-    def test_class_based_no_double_call(self):
-        """Test that dependencies are not called twice during DepOf resolution.
-
-        This verifies that the auto-resolution mechanism doesn't accidentally
-        evaluate the same dependency multiple times.
-        """
-        call_counts = {"source": 0}
-
-        @Flow.model
-        def counting_source(context: SimpleContext) -> GenericResult[int]:
-            call_counts["source"] += 1
-            return GenericResult(value=context.value * 10)
-
-        class Consumer(CallableModel):
-            data: DepOf[..., GenericResult[int]]
-
-            @Flow.call
-            def __call__(self, context: SimpleContext) -> GenericResult[int]:
-                return GenericResult(value=resolve(self.data).value + 1)
-
-            @Flow.deps
-            def __deps__(self, context: SimpleContext):
-                return [(self.data, [context])]
-
-        src = counting_source()
-        consumer = Consumer(data=src)
-
-        # Call consumer - source should only be called once
-        result = consumer(SimpleContext(value=5))
-
-        self.assertEqual(result.value, 51)  # 5 * 10 + 1
-        self.assertEqual(call_counts["source"], 1, "Source should only be called once")
-
-    def test_class_based_nested_depof_no_double_call(self):
-        """Test nested DepOf chain (A -> B -> C) has no double-calls at any layer.
-
-        This tests a 3-layer dependency chain where:
-        - layer_c is the leaf (no dependencies)
-        - layer_b depends on layer_c
-        - layer_a depends on layer_b
-
-        Each layer should be called exactly once.
-        """
-        call_counts = {"layer_a": 0, "layer_b": 0, "layer_c": 0}
-
-        # Layer C: leaf node (no dependencies)
-        @Flow.model
-        def layer_c(context: SimpleContext) -> GenericResult[int]:
-            call_counts["layer_c"] += 1
-            return GenericResult(value=context.value)
-
-        # Layer B: depends on layer_c
-        class LayerB(CallableModel):
-            source: DepOf[..., GenericResult[int]]
-
-            @Flow.call
-            def __call__(self, context: SimpleContext) -> GenericResult[int]:
-                call_counts["layer_b"] += 1
-                return GenericResult(value=resolve(self.source).value * 10)
-
-            @Flow.deps
-            def __deps__(self, context: SimpleContext):
-                return [(self.source, [context])]
-
-        # Layer A: depends on layer_b
-        class LayerA(CallableModel):
-            source: DepOf[..., GenericResult[int]]
-
-            @Flow.call
-            def __call__(self, context: SimpleContext) -> GenericResult[int]:
-                call_counts["layer_a"] += 1
-                return GenericResult(value=resolve(self.source).value + 1)
-
-            @Flow.deps
-            def __deps__(self, context: SimpleContext):
-                return [(self.source, [context])]
-
-        # Build the chain: A -> B -> C
-        c = layer_c()
-        b = LayerB(source=c)
-        a = LayerA(source=b)
-
-        # Call layer_a - each layer should be called exactly once
-        result = a(SimpleContext(value=5))
-
-        # Verify result: C returns 5, B returns 5*10=50, A returns 50+1=51
-        self.assertEqual(result.value, 51)
-
-        # Verify each layer called exactly once
-        self.assertEqual(call_counts["layer_c"], 1, "layer_c should be called exactly once")
-        self.assertEqual(call_counts["layer_b"], 1, "layer_b should be called exactly once")
-        self.assertEqual(call_counts["layer_a"], 1, "layer_a should be called exactly once")
-
-    def test_resolve_direct_value_passthrough(self):
-        """Test that resolve() passes through non-CallableModel values unchanged."""
-
-        class Consumer(CallableModel):
-            data: DepOf[..., GenericResult[int]]
-
-            @Flow.call
-            def __call__(self, context: SimpleContext) -> GenericResult[int]:
-                # resolve() should return the GenericResult directly (pass-through)
-                resolved = resolve(self.data)
-                # Verify it's the actual GenericResult, not a CallableModel
-                assert isinstance(resolved, GenericResult)
-                return GenericResult(value=resolved.value * 2)
-
-            @Flow.deps
-            def __deps__(self, context: SimpleContext):
-                return []
-
-        # Pass a direct value, not a CallableModel
-        direct_result = GenericResult(value=42)
-        consumer = Consumer(data=direct_result)
-
-        result = consumer(SimpleContext(value=5))
-        self.assertEqual(result.value, 84)  # 42 * 2
-
-    def test_resolve_outside_call_raises_error(self):
-        """Test that resolve() raises RuntimeError when called outside __call__."""
-
-        @Flow.model
-        def source(context: SimpleContext) -> GenericResult[int]:
-            return GenericResult(value=context.value)
-
-        class Consumer(CallableModel):
-            data: DepOf[..., GenericResult[int]]
-
-            @Flow.call
-            def __call__(self, context: SimpleContext) -> GenericResult[int]:
-                return GenericResult(value=resolve(self.data).value)
-
-            @Flow.deps
-            def __deps__(self, context: SimpleContext):
-                return [(self.data, [context])]
-
-        src = source()
-        consumer = Consumer(data=src)
-
-        # Calling resolve() outside of __call__ should raise RuntimeError
-        with self.assertRaises(RuntimeError) as cm:
-            resolve(consumer.data)
-
-        self.assertIn("resolve() can only be used inside __call__", str(cm.exception))
-
-    def test_flow_model_uses_unified_resolution_path(self):
-        """Test that @Flow.model uses the same resolution path as class-based CallableModel.
-
-        This verifies the consolidation of resolution logic - both @Flow.model and
-        class-based models should use _resolve_deps_and_call in callable.py.
-        """
-        call_counts = {"source": 0, "decorator_model": 0, "class_model": 0}
-
-        @Flow.model
-        def shared_source(context: SimpleContext) -> GenericResult[int]:
-            call_counts["source"] += 1
-            return GenericResult(value=context.value * 2)
-
-        # @Flow.model consumer
-        @Flow.model
-        def decorator_consumer(
-            context: SimpleContext,
-            data: DepOf[..., GenericResult[int]],
-        ) -> GenericResult[int]:
-            call_counts["decorator_model"] += 1
-            return GenericResult(value=data.value + 100)
-
-        # Class-based consumer (same logic)
-        class ClassConsumer(CallableModel):
-            data: DepOf[..., GenericResult[int]]
-
-            @Flow.call
-            def __call__(self, context: SimpleContext) -> GenericResult[int]:
-                call_counts["class_model"] += 1
-                return GenericResult(value=resolve(self.data).value + 100)
-
-            @Flow.deps
-            def __deps__(self, context: SimpleContext):
-                return [(self.data, [context])]
-
-        # Test both consumers with the same source
-        src = shared_source()
-        dec_consumer = decorator_consumer(data=src)
-        cls_consumer = ClassConsumer(data=src)
-
-        ctx = SimpleContext(value=10)
-
-        # Both should produce the same result
-        dec_result = dec_consumer(ctx)
-        cls_result = cls_consumer(ctx)
-
-        self.assertEqual(dec_result.value, cls_result.value)
-        self.assertEqual(dec_result.value, 120)  # 10 * 2 + 100
-
-        # Source should be called exactly twice (once per consumer)
-        self.assertEqual(call_counts["source"], 2)
-        self.assertEqual(call_counts["decorator_model"], 1)
-        self.assertEqual(call_counts["class_model"], 1)
 
 
 # =============================================================================
@@ -2128,8 +1467,8 @@ class TestLazyTypeAnnotation(TestCase):
         self.assertEqual(result.value, 42)
         self.assertEqual(call_counts["source"], 0)
 
-    def test_lazy_with_depof(self):
-        """Lazy[DepOf[...]] works: lazy dep with explicit DepOf annotation."""
+    def test_lazy_with_upstream_model(self):
+        """Lazy[T] works when bound to an upstream model."""
         from ccflow import Lazy
 
         @Flow.model
@@ -2139,7 +1478,7 @@ class TestLazyTypeAnnotation(TestCase):
         @Flow.model
         def consumer(
             context: SimpleContext,
-            data: Lazy[DepOf[..., GenericResult[int]]],
+            data: Lazy[GenericResult[int]],
         ) -> GenericResult[int]:
             return GenericResult(value=data() + 1)  # data() returns unwrapped int
 

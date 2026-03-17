@@ -124,7 +124,14 @@ class TestFlowModelHydraYAML(TestCase):
 
         ctx = DateRangeContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31))
         result = loader(ctx)
-        self.assertEqual(result.value, "data_source:2024-01-01 to 2024-01-31")
+        self.assertEqual(
+            result.value,
+            {
+                "source": "data_source",
+                "start_date": "2024-01-01",
+                "end_date": "2024-01-31",
+            },
+        )
 
     def test_context_args_pipeline_from_yaml(self):
         """Test context_args pipeline with dependencies from YAML."""
@@ -423,12 +430,9 @@ class TestFlowModelHydraDateRangeTransforms(TestCase):
         self.assertEqual(len(deps), 1)
         dep_model, dep_contexts = deps[0]
 
-        # The transform should extend start_date back by one day
-        transformed_ctx = dep_contexts[0]
-        self.assertEqual(transformed_ctx.start_date, date(2024, 1, 9))
-        self.assertEqual(transformed_ctx.end_date, date(2024, 1, 31))
-
         self.assertIs(dep_model, r["flow_date_loader"])
+        self.assertEqual(dep_contexts[0], ctx)
+        self.assertEqual(dep_model(ctx).value["start_date"], "2024-01-09")
 
 
 if __name__ == "__main__":

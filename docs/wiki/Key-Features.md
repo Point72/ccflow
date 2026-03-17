@@ -24,7 +24,19 @@ As an example, you may have a `SQLReader` callable model that when called with a
 
 ### Flow.model Decorator
 
-The `@Flow.model` decorator provides a simpler way to define `CallableModel`s using plain Python functions instead of classes. It automatically generates a `CallableModel` class with proper `__call__` and `__deps__` methods.
+The `@Flow.model` decorator provides a simpler way to define `CallableModel`s
+using plain Python functions instead of classes. It automatically generates a
+standard `CallableModel` class with proper `__call__` and `__deps__` methods,
+so it still uses the normal ccflow framework for evaluation, caching,
+serialization, and registry loading.
+
+You can execute a generated model in two equivalent ways:
+
+- call it directly with a context object: `model(ctx)`
+- use `.flow.compute(...)` to supply runtime inputs as keyword arguments
+
+`.flow.compute(...)` is mainly an explicit, ergonomic way to mark the deferred
+execution point.
 
 **Basic Example:**
 
@@ -45,79 +57,130 @@ ctx = DateRangeContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31))
 result = loader(ctx)
 ```
 
-**Composing Dependencies with `Dep` and `DepOf`:**
+**Default `@Flow.model` Style:**
 
-Use `Dep()` or `DepOf` to mark parameters that accept other `CallableModel`s as dependencies. The framework automatically resolves the dependency graph.
+Use this when you want the simplest API and do not need to declare a formal
+context shape up front.
 
-For `@Flow.model`, regular parameters can also accept a `CallableModel` value at
-construction time. This lets you either inject a literal value or splice in an
-upstream computation for the same parameter. Use `Dep`/`DepOf` when you need
-context transforms or explicit dependency metadata.
+```python
+from ccflow import Flow
 
-> **Rule of thumb:** `@Flow.model` works best when the dependency wiring is declarative and local to the signature. If the main point of the node is custom graph logic or transforms that depend on instance fields, use a class-based `CallableModel` instead.
+@Flow.model
+def add(x: int, y: int) -> int:
+    return x + y
+
+model = add(x=10)
+
+# `x` is bound when the model is created.
+# `y` is supplied later at execution time.
+assert model.flow.compute(y=5) == 15
+
+# `.flow.with_inputs(...)` rewrites runtime inputs for this call path.
+doubled_y = model.flow.with_inputs(y=lambda ctx: ctx.y * 2)
+assert doubled_y.flow.compute(y=5) == 20
+```
+
+In this mode:
+
+- bound parameters are model configuration
+- unbound parameters are runtime inputs for that model instance
+
+**Composing Dependencies with Normal Parameters:**
+
+Any non-context parameter can be bound either to a literal value or to another
+`CallableModel`. If you pass an upstream model, `@Flow.model` evaluates it with
+the current context and passes the resolved value into your function.
 
 ```python
 from datetime import date, timedelta
-from typing import Annotated
-from ccflow import Flow, GenericResult, DateRangeContext, Dep, DepOf
+from ccflow import DateRangeContext, Flow
 
-def previous_window(ctx: DateRangeContext) -> DateRangeContext:
-    window = ctx.end_date - ctx.start_date
-    return ctx.model_copy(
-        update={
-            "start_date": ctx.start_date - window - timedelta(days=1),
-            "end_date": ctx.start_date - timedelta(days=1),
-        }
-    )
+@Flow.model(context_args=["start_date", "end_date"])
+def load_revenue(start_date: date, end_date: date, region: str) -> float:
+    days = (end_date - start_date).days + 1
+    return 1000.0 + days * 10.0
 
-@Flow.model
-def load_revenue(context: DateRangeContext, region: str) -> GenericResult[float]:
-    # Pretend this queries a warehouse
-    return GenericResult(value=125.0)
-
-@Flow.model
+@Flow.model(context_args=["start_date", "end_date"])
 def revenue_growth(
-    context: DateRangeContext,
-    current: DepOf[..., GenericResult[float]],
-    previous: Annotated[GenericResult[float], Dep(transform=previous_window)],
-) -> GenericResult[dict]:
-    growth = (current.value - previous.value) / previous.value
-    return GenericResult(value={"as_of": context.end_date, "growth": growth})
+    start_date: date,
+    end_date: date,
+    current: float,
+    previous: float,
+) -> dict:
+    return {
+        "window_end": end_date,
+        "growth_pct": round((current - previous) / previous * 100, 2),
+    }
 
-# Build the pipeline. The same loader is reused with two contexts:
-# - current window: original context
-# - previous window: transformed via Dep(transform=...)
-revenue = load_revenue(region="us")
-growth = revenue_growth(current=revenue, previous=revenue)
+current = load_revenue(region="us")
+previous = current.flow.with_inputs(
+    start_date=lambda ctx: ctx.start_date - timedelta(days=30),
+    end_date=lambda ctx: ctx.end_date - timedelta(days=30),
+)
+growth = revenue_growth(current=current, previous=previous)
 
-ctx = DateRangeContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31))
-result = growth(ctx)
+ctx = DateRangeContext(
+    start_date=date(2024, 1, 1),
+    end_date=date(2024, 1, 31),
+)
+
+# Standard ccflow execution
+direct = growth(ctx).value
+
+# Equivalent explicit deferred entry point
+computed = growth.flow.compute(
+    start_date=date(2024, 1, 1),
+    end_date=date(2024, 1, 31),
+)
+
+assert direct == computed
 ```
 
-`DepOf` is also useful when you want the same parameter to accept either an
-upstream model or a precomputed value:
+This pattern is the main story for transformed dependencies. `@Flow.model`
+still produces an ordinary `CallableModel`; `.flow.compute(...)` is just a
+clearer way to say "supply the runtime inputs here."
+
+**Why `context_args` Exists:**
+
+Without `context_args`, runtime inputs are inferred from whichever parameters
+are still unbound on a particular model instance. That is flexible and
+ergonomic.
+
+Use `context_args` when some parameters are semantically "the execution
+context" and you want that split to stay stable and explicit:
+
+- the runtime context should be stable across instances
+- the split between config and runtime inputs matters semantically
+- the model is naturally "run over a context" such as date windows,
+  partitions, or scenarios
+- you want the generated model to match a built-in context type like
+  `DateRangeContext` when possible
+
+**Deferred Execution Helpers:**
 
 ```python
-from ccflow import DateRangeContext, DepOf, Flow, GenericResult
+from ccflow import Flow
 
 @Flow.model
-def load_signal(context: DateRangeContext, source: str) -> GenericResult[float]:
-    return GenericResult(value=0.87)
+def add(x: int, y: int) -> int:
+    return x + y
 
-@Flow.model
-def publish_signal(
-    context: DateRangeContext,
-    signal: DepOf[..., GenericResult[float]],
-    threshold: float = 0.8,
-) -> GenericResult[dict]:
-    return GenericResult(value={
-        "as_of": context.end_date,
-        "signal": signal.value,
-        "go_live": signal.value >= threshold,
-    })
+model = add(x=10)
+assert model.flow.compute(y=5) == 15
 
-live = publish_signal(signal=load_signal(source="prod"))
-override = publish_signal(signal=GenericResult(value=0.95), threshold=0.9)
+shifted = model.flow.with_inputs(y=lambda ctx: ctx.y * 2)
+assert shifted.flow.compute(y=5) == 20
+```
+
+If you already have a real context object, you can call the model directly
+instead:
+
+```python
+from ccflow import FlowContext
+
+ctx = FlowContext(y=5)
+assert model(ctx).value == 15
+assert shifted(ctx).value == 20
 ```
 
 **Hydra/YAML Configuration:**
@@ -165,27 +228,6 @@ result = loader(ctx)  # "my_database:2024-01-01 to 2024-01-31"
 ```
 
 The `context_args` parameter specifies which function parameters should be extracted from the context. Those fields are validated through a runtime schema built from the parameter annotations. For well-known shapes such as `start_date` / `end_date`, the generated model uses a concrete built-in context type like `DateRangeContext`; otherwise it uses `FlowContext`, a universal frozen carrier for the validated fields.
-
-**Deferred Execution Helpers:**
-
-Generated models also expose a `.flow` helper namespace:
-
-```python
-from ccflow import Flow, GenericResult
-
-@Flow.model
-def add(x: int, y: int) -> GenericResult[int]:
-    return GenericResult(value=x + y)
-
-model = add(x=10)
-
-# Validate and execute by passing context fields as kwargs
-assert model.flow.compute(y=5) == 15
-
-# Derive a new model by transforming context inputs
-shifted = model.flow.with_inputs(y=lambda ctx: ctx.y * 2)
-assert shifted.flow.compute(y=5) == 20
-```
 
 If a `@Flow.model` function returns a plain value instead of a `ResultBase`
 subclass, the generated model automatically wraps that value in `GenericResult`
