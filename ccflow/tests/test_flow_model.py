@@ -6,6 +6,7 @@ from unittest import TestCase
 from ray.cloudpickle import dumps as rcpdumps, loads as rcploads
 
 from ccflow import (
+    BaseModel,
     CallableModel,
     ContextBase,
     DateRangeContext,
@@ -708,6 +709,51 @@ class TestFlowModelValidation(TestCase):
         model = typed_config(n=42, name="test")
         result = model(SimpleContext(value=1))
         self.assertEqual(result.value, "test:42")
+
+    def test_config_validation_rejects_registry_alias_for_incompatible_type(self):
+        """Registry aliases should not silently bypass scalar type validation."""
+
+        class DummyConfig(BaseModel):
+            x: int = 1
+
+        registry = ModelRegistry.root()
+        registry.clear()
+        try:
+            registry.add("dummy_config", DummyConfig())
+
+            @Flow.model
+            def typed_config(context: SimpleContext, n: int = 10) -> GenericResult[int]:
+                return GenericResult(value=n)
+
+            with self.assertRaises(TypeError) as cm:
+                typed_config(n="dummy_config")
+
+            self.assertIn("n", str(cm.exception))
+        finally:
+            registry.clear()
+
+    def test_config_validation_accepts_registry_alias_for_callable_dependency(self):
+        """Registry aliases still work for CallableModel dependencies."""
+
+        registry = ModelRegistry.root()
+        registry.clear()
+        try:
+
+            @Flow.model
+            def source(context: SimpleContext) -> GenericResult[int]:
+                return GenericResult(value=context.value * 2)
+
+            @Flow.model
+            def consumer(context: SimpleContext, data: int = 0) -> GenericResult[int]:
+                return GenericResult(value=data + 1)
+
+            registry.add("source_model", source())
+            model = consumer(data="source_model")
+
+            result = model(SimpleContext(value=5))
+            self.assertEqual(result.value, 11)
+        finally:
+            registry.clear()
 
 
 # =============================================================================
@@ -1688,6 +1734,38 @@ class TestFieldExtractor(TestCase):
         self.assertEqual(len(deps), 1)
         self.assertIs(deps[0][0], model)
         self.assertEqual(deps[0][1], [ctx])
+
+    def test_field_extraction_from_bound_model(self):
+        """Field extraction should still work after .flow.with_inputs()."""
+
+        @Flow.model
+        def prepare(x: int) -> GenericResult[dict]:
+            return GenericResult(value={"doubled": x * 2})
+
+        bound = prepare().flow.with_inputs(x=lambda ctx: ctx.x + 1)
+        extractor = bound.doubled
+
+        result = extractor.flow.compute(x=5)
+        self.assertEqual(result, 12)
+
+    def test_field_extraction_deps_from_bound_model(self):
+        """Bound-model extractors should preserve transformed dependency contexts."""
+        from ccflow import FlowContext
+
+        @Flow.model
+        def prepare(x: int) -> GenericResult[dict]:
+            return GenericResult(value={"doubled": x * 2})
+
+        model = prepare()
+        bound = model.flow.with_inputs(x=lambda ctx: ctx.x + 1)
+        extractor = bound.doubled
+
+        ctx = FlowContext(x=5)
+        deps = extractor.__deps__(ctx)
+
+        self.assertEqual(len(deps), 1)
+        self.assertIs(deps[0][0], model)
+        self.assertEqual(deps[0][1][0].x, 6)
 
 
 if __name__ == "__main__":

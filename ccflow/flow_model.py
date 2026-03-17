@@ -98,6 +98,36 @@ def _transform_repr(transform: Any) -> str:
     return repr(transform)
 
 
+def _is_model_dependency(value: Any) -> bool:
+    return isinstance(value, (CallableModel, BoundModel))
+
+
+def _resolve_registry_candidate(value: str) -> Any:
+    from .base import BaseModel as _BM
+
+    try:
+        candidate = _BM.model_validate(value)
+    except Exception:
+        return None
+    return candidate if isinstance(candidate, _BM) else None
+
+
+def _registry_candidate_allowed(expected_type: Type, candidate: Any) -> bool:
+    if _is_model_dependency(candidate):
+        return True
+    try:
+        TypeAdapter(expected_type).validate_python(candidate)
+    except Exception:
+        return False
+    return True
+
+
+def _make_field_extractor(source: Any, name: str) -> "FieldExtractor":
+    if name.startswith("_"):
+        raise AttributeError(f"'{type(source).__name__}' has no attribute '{name}'")
+    return FieldExtractor(source=source, field_name=name)
+
+
 def _build_typed_dict_adapter(name: str, schema: Dict[str, Type]) -> TypeAdapter:
     """Build a TypeAdapter for a runtime TypedDict schema."""
 
@@ -144,16 +174,18 @@ def _validate_config_kwargs(kwargs: Dict[str, Any], validatable_types: Dict[str,
         return
 
     from .base import ModelRegistry as _MR
-    from .callable import CallableModel as _CM
 
     for field_name, validator in validators.items():
         if field_name not in kwargs:
             continue
         value = kwargs[field_name]
-        if value is None or isinstance(value, (_CM, BoundModel)):
+        if value is None or _is_model_dependency(value):
             continue
         if isinstance(value, str) and value in _MR.root():
-            continue
+            candidate = _resolve_registry_candidate(value)
+            expected_type = validatable_types[field_name]
+            if candidate is not None and _registry_candidate_allowed(expected_type, candidate):
+                continue
         try:
             validator.validate_python(value)
         except Exception:
@@ -302,6 +334,9 @@ class BoundModel:
         """Call the model with transformed context."""
         return self._model(self._transform_context(context))
 
+    def __getattr__(self, name):
+        return _make_field_extractor(self, name)
+
     def __repr__(self) -> str:
         transforms = ", ".join(f"{name}={_transform_repr(transform)}" for name, transform in self._input_transforms.items())
         return f"{self._model!r}.flow.with_inputs({transforms})"
@@ -310,6 +345,10 @@ class BoundModel:
     def flow(self) -> "FlowAPI":
         """Access the flow API."""
         return _BoundFlowAPI(self)
+
+    @property
+    def context_type(self) -> Type[ContextBase]:
+        return self._model.context_type
 
 
 class _BoundFlowAPI(FlowAPI):
@@ -349,9 +388,7 @@ class _FieldExtractorMixin:
                 raise AttributeError(name)
             return super_getattr(name)
         except AttributeError:
-            if name.startswith("_"):
-                raise AttributeError(f"'{type(self).__name__}' has no attribute '{name}'") from None
-            return FieldExtractor(source=self, field_name=name)
+            return _make_field_extractor(self, name)
 
 
 class _GeneratedFlowModelBase(_FieldExtractorMixin, CallableModel):
@@ -374,8 +411,6 @@ class _GeneratedFlowModelBase(_FieldExtractorMixin, CallableModel):
         if not isinstance(values, dict):
             return values
 
-        from .base import BaseModel as _BM
-
         param_types = getattr(cls, "__flow_model_all_param_types__", {})
         resolved = dict(values)
         for field_name, expected_type in param_types.items():
@@ -386,11 +421,10 @@ class _GeneratedFlowModelBase(_FieldExtractorMixin, CallableModel):
                 continue
             if expected_type is str:
                 continue
-            try:
-                candidate = _BM.model_validate(value)
-            except Exception:
+            candidate = _resolve_registry_candidate(value)
+            if candidate is None:
                 continue
-            if isinstance(candidate, _BM):
+            if _registry_candidate_allowed(expected_type, candidate):
                 resolved[field_name] = candidate
         return resolved
 
@@ -936,6 +970,8 @@ class FieldExtractor(_FieldExtractorMixin, CallableModel):
 
     @property
     def context_type(self):
+        if isinstance(self.source, BoundModel):
+            return self.source.context_type
         if isinstance(self.source, _CallableModel):
             return self.source.context_type
         return ContextBase
@@ -956,6 +992,8 @@ class FieldExtractor(_FieldExtractorMixin, CallableModel):
 
     @Flow.deps
     def __deps__(self, context: ContextBase) -> GraphDepList:
+        if isinstance(self.source, BoundModel):
+            return [(self.source._model, [self.source._transform_context(context)])]
         if isinstance(self.source, _CallableModel):
             return [(self.source, [context])]
         return []
