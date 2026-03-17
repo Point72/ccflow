@@ -192,11 +192,45 @@ schema, creates a `FlowContext`, executes the model, and unwraps
 It is not the only execution path. Because the generated object is still a
 standard `CallableModel`, calling `model(context)` remains fully supported.
 
+## FieldExtractor
+
+Accessing an unknown public attribute on a `@Flow.model` instance returns a
+`FieldExtractor`. It is itself a `CallableModel` that runs the source model,
+then extracts the named field from the result (via `getattr` or dict key
+access).
+
+```python
+from ccflow import ContextBase, Flow, GenericResult
+
+
+class TrainingContext(ContextBase):
+    seed: int
+
+
+@Flow.model
+def prepare(context: TrainingContext) -> GenericResult[dict]:
+    s = context.seed
+    return GenericResult(value={"X_train": [s, s * 2], "y_train": [s * 10]})
+
+
+@Flow.model
+def train(context: TrainingContext, X: list, y: list) -> GenericResult[int]:
+    return GenericResult(value=sum(X) + sum(y))
+
+
+prepared = prepare()
+model = train(X=prepared.X_train, y=prepared.y_train)
+```
+
+Multiple extractors from the same source share the source model instance. If
+caching is enabled the source is evaluated only once.
+
 ## Lazy Inputs
 
 `Lazy[T]` marks a parameter as on-demand. Instead of eagerly resolving an
 upstream model, the generated model passes a zero-argument thunk. The thunk
-caches its first result.
+caches its first result. Lazy dependencies are excluded from the `__deps__`
+graph, so they are not pre-evaluated by the evaluator infrastructure.
 
 ```python
 from ccflow import Flow, Lazy
@@ -243,3 +277,27 @@ At call time it:
 
 That keeps transformed dependency wiring explicit without adding special
 annotation machinery to the core API.
+
+## Flow.call with `auto_context`
+
+Separately from `@Flow.model`, `Flow.call(auto_context=...)` provides a similar
+convenience for class-based `CallableModel`s. Instead of defining a separate
+`ContextBase` subclass, the decorator generates one from the function's
+keyword-only parameters.
+
+```python
+from ccflow import CallableModel, Flow, GenericResult
+
+
+class MyModel(CallableModel):
+    @Flow.call(auto_context=True)
+    def __call__(self, *, x: int, y: str = "default") -> GenericResult:
+        return GenericResult(value=f"{x}-{y}")
+```
+
+Passing a `ContextBase` subclass (e.g., `auto_context=DateContext`) makes the
+generated context inherit from that class, so it remains compatible with
+infrastructure that expects the parent type.
+
+The generated class is registered via `create_ccflow_model` for serialization
+support.

@@ -30,6 +30,10 @@ standard `CallableModel` class with proper `__call__` and `__deps__` methods,
 so it still uses the normal ccflow framework for evaluation, caching,
 serialization, and registry loading.
 
+If a `@Flow.model` function returns a plain value instead of a `ResultBase`
+subclass, the generated model automatically wraps it in `GenericResult` at
+runtime so it still behaves like a normal `CallableModel`.
+
 You can execute a generated model in two equivalent ways:
 
 - call it directly with a context object: `model(ctx)`
@@ -38,7 +42,16 @@ You can execute a generated model in two equivalent ways:
 `.flow.compute(...)` is mainly an explicit, ergonomic way to mark the deferred
 execution point.
 
-**Basic Example:**
+#### Context Modes
+
+There are three ways to define how a `@Flow.model` function receives its
+runtime context.
+
+**Mode 1 — Explicit context parameter:**
+
+The function takes a `context` parameter (or `_` if unused) annotated with a
+`ContextBase` subclass. This is the most direct mode and behaves like a
+traditional `CallableModel.__call__`.
 
 ```python
 from datetime import date
@@ -46,21 +59,56 @@ from ccflow import Flow, GenericResult, DateRangeContext
 
 @Flow.model
 def load_data(context: DateRangeContext, source: str) -> GenericResult[dict]:
-    # Your data loading logic here
     return GenericResult(value=query_db(source, context.start_date, context.end_date))
 
-# Create model instance
 loader = load_data(source="my_database")
 
-# Execute with context
 ctx = DateRangeContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31))
 result = loader(ctx)
 ```
 
-**Default `@Flow.model` Style:**
+**Mode 2 — Unpacked context with `context_args`:**
 
-Use this when you want the simplest API and do not need to declare a formal
-context shape up front.
+Instead of receiving a context object, you list which parameters should come
+from the context at runtime. The remaining parameters are model configuration.
+
+```python
+from datetime import date
+from ccflow import Flow, GenericResult, DateRangeContext
+
+@Flow.model(context_args=["start_date", "end_date"])
+def load_data(start_date: date, end_date: date, source: str) -> GenericResult[str]:
+    return GenericResult(value=f"{source}:{start_date} to {end_date}")
+
+loader = load_data(source="my_database")
+
+# For well-known field sets the decorator matches a built-in context type
+assert loader.context_type == DateRangeContext
+
+ctx = DateRangeContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31))
+result = loader(ctx)
+```
+
+For well-known shapes such as `start_date` / `end_date` with `date`
+annotations, the generated model uses a concrete built-in context type like
+`DateRangeContext`. Otherwise it falls back to `FlowContext`, a universal
+frozen carrier for the validated fields.
+
+Use `context_args` when some parameters are semantically "the execution
+context" and you want that split to stay stable and explicit:
+
+- the runtime context should be stable across instances
+- the split between config and runtime inputs matters semantically
+- the model is naturally "run over a context" such as date windows,
+  partitions, or scenarios
+- you want the generated model to match a built-in context type like
+  `DateRangeContext` when possible
+
+**Mode 3 — Default deferred style (no explicit context):**
+
+When there is no `context` parameter and no `context_args`, all parameters are
+potential configuration or runtime inputs. Parameters provided at construction
+are bound (configuration); everything else comes from the context at runtime.
 
 ```python
 from ccflow import Flow
@@ -80,12 +128,7 @@ doubled_y = model.flow.with_inputs(y=lambda ctx: ctx.y * 2)
 assert doubled_y.flow.compute(y=5) == 20
 ```
 
-In this mode:
-
-- bound parameters are model configuration
-- unbound parameters are runtime inputs for that model instance
-
-**Composing Dependencies with Normal Parameters:**
+#### Composing Dependencies
 
 Any non-context parameter can be bound either to a literal value or to another
 `CallableModel`. If you pass an upstream model, `@Flow.model` evaluates it with
@@ -136,30 +179,19 @@ computed = growth.flow.compute(
 assert direct == computed
 ```
 
-This pattern is the main story for transformed dependencies. `@Flow.model`
-still produces an ordinary `CallableModel`; `.flow.compute(...)` is just a
-clearer way to say "supply the runtime inputs here."
+#### Deferred Execution Helpers
 
-**Why `context_args` Exists:**
+**`.flow.compute(**kwargs)`** validates the keyword arguments against the
+generated context schema, wraps them in a `FlowContext`, calls the model, and
+unwraps `GenericResult.value` if present.
 
-Without `context_args`, runtime inputs are inferred from whichever parameters
-are still unbound on a particular model instance. That is flexible and
-ergonomic.
-
-Use `context_args` when some parameters are semantically "the execution
-context" and you want that split to stay stable and explicit:
-
-- the runtime context should be stable across instances
-- the split between config and runtime inputs matters semantically
-- the model is naturally "run over a context" such as date windows,
-  partitions, or scenarios
-- you want the generated model to match a built-in context type like
-  `DateRangeContext` when possible
-
-**Deferred Execution Helpers:**
+**`.flow.with_inputs(**transforms)`** returns a `BoundModel` that applies
+context transforms before delegating to the underlying model. Each transform
+is either a static value or a `(ctx) -> value` callable. Transforms are local
+to the wrapped model — upstream models never see them.
 
 ```python
-from ccflow import Flow
+from ccflow import Flow, FlowContext
 
 @Flow.model
 def add(x: int, y: int) -> int:
@@ -170,22 +202,105 @@ assert model.flow.compute(y=5) == 15
 
 shifted = model.flow.with_inputs(y=lambda ctx: ctx.y * 2)
 assert shifted.flow.compute(y=5) == 20
-```
 
-If you already have a real context object, you can call the model directly
-instead:
-
-```python
-from ccflow import FlowContext
-
+# You can also call with a context object directly
 ctx = FlowContext(y=5)
 assert model(ctx).value == 15
 assert shifted(ctx).value == 20
 ```
 
-**Hydra/YAML Configuration:**
+#### Field Extraction
 
-`Flow.model` decorated functions work seamlessly with Hydra configuration and the `ModelRegistry`:
+Accessing an unknown attribute on a `@Flow.model` instance returns a
+`FieldExtractor` — a `CallableModel` that runs the source model and extracts
+the named field from its result. This makes it easy to wire individual output
+fields into downstream models.
+
+```python
+from ccflow import ContextBase, Flow, GenericResult
+
+class TrainingContext(ContextBase):
+    seed: int
+
+@Flow.model
+def prepare(context: TrainingContext) -> GenericResult[dict]:
+    s = context.seed
+    return GenericResult(value={"X_train": [s, s * 2], "y_train": [s * 10]})
+
+@Flow.model
+def train(context: TrainingContext, X: list, y: list) -> GenericResult[int]:
+    return GenericResult(value=sum(X) + sum(y))
+
+prepared = prepare()
+model = train(X=prepared.X_train, y=prepared.y_train)
+result = model(TrainingContext(seed=5))
+# X_train = [5, 10], y_train = [50] -> 15 + 50 = 65
+assert result.value == 65
+```
+
+Multiple extractors from the same source share the source model instance, so
+with caching enabled the source is only evaluated once.
+
+#### Lazy Dependencies with `Lazy[T]`
+
+Mark a parameter with `Lazy[T]` to defer its evaluation. Instead of eagerly
+resolving the upstream model, the generated model passes a zero-argument thunk
+that evaluates on first call and caches the result. The thunk unwraps
+`GenericResult` automatically, so `T` should be the inner value type.
+
+```python
+from ccflow import ContextBase, Flow, GenericResult, Lazy
+
+class SimpleContext(ContextBase):
+    value: int
+
+@Flow.model
+def fast_path(context: SimpleContext) -> GenericResult[int]:
+    return GenericResult(value=context.value)
+
+@Flow.model
+def slow_path(context: SimpleContext) -> GenericResult[int]:
+    return GenericResult(value=context.value * 100)
+
+@Flow.model
+def smart_selector(
+    context: SimpleContext,
+    fast: int,        # Eagerly resolved and unwrapped
+    slow: Lazy[int],  # Deferred — receives a thunk returning unwrapped int
+    threshold: int = 10,
+) -> GenericResult[int]:
+    if fast > threshold:
+        return GenericResult(value=fast)
+    return GenericResult(value=slow())  # Evaluated only when called
+
+model = smart_selector(
+    fast=fast_path(),
+    slow=slow_path(),
+    threshold=10,
+)
+```
+
+`Lazy` dependencies are excluded from the model's `__deps__` graph, so they
+are not pre-evaluated by the evaluator infrastructure.
+
+#### Decorator Options
+
+`@Flow.model(...)` accepts the same options as `Flow.call` to control execution
+behavior:
+
+- `cacheable` — enable caching of results
+- `volatile` — mark as volatile (always re-execute)
+- `log_level` — logging verbosity
+- `validate_result` — validate return type
+- `verbose` — verbose logging output
+- `evaluator` — custom evaluator
+
+When not explicitly set, these inherit from any active `FlowOptionsOverride`.
+
+#### Hydra / YAML Configuration
+
+`@Flow.model` decorated functions work seamlessly with Hydra configuration and
+the `ModelRegistry`:
 
 ```yaml
 # config.yaml
@@ -202,36 +317,50 @@ aggregated:
   transformed: transformed  # Reference by registry name
 ```
 
-When loaded via `ModelRegistry.load_config()`, references by name ensure the same object instance is shared across all consumers.
+```python
+from ccflow import ModelRegistry
 
-**Auto-Unpacked Context with `context_args`:**
+registry = ModelRegistry.root()
+registry.load_config_from_path("config.yaml")
 
-Instead of taking an explicit `context` parameter, you can use `context_args` to automatically unpack context fields as function parameters. This is useful when you want cleaner function signatures:
+# References by name ensure the same object instance is shared
+model = registry["aggregated"]
+```
+
+### Flow.call with `auto_context`
+
+For class-based `CallableModel`s, `Flow.call(auto_context=...)` provides a
+similar convenience. Instead of defining a separate `ContextBase` subclass, the
+decorator generates one from the function's keyword-only parameters.
+
+```python
+from ccflow import CallableModel, Flow, GenericResult
+
+class MyModel(CallableModel):
+    @Flow.call(auto_context=True)
+    def __call__(self, *, x: int, y: str = "default") -> GenericResult:
+        return GenericResult(value=f"{x}-{y}")
+
+model = MyModel()
+result = model(x=42, y="hello")
+assert result.value == "42-hello"
+```
+
+You can also pass a parent context class so the generated context inherits
+from it:
 
 ```python
 from datetime import date
-from ccflow import Flow, GenericResult, DateRangeContext
+from ccflow import CallableModel, DateContext, Flow, GenericResult
 
-# Instead of: def load_data(context: DateRangeContext, source: str)
-# Use context_args to unpack the context fields directly:
-@Flow.model(context_args=["start_date", "end_date"])
-def load_data(start_date: date, end_date: date, source: str) -> GenericResult[str]:
-    return GenericResult(value=f"{source}:{start_date} to {end_date}")
-
-# The decorator matches common built-in context types when possible
-loader = load_data(source="my_database")
-assert loader.context_type == DateRangeContext
-
-# Execute with context as usual
-ctx = DateRangeContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31))
-result = loader(ctx)  # "my_database:2024-01-01 to 2024-01-31"
+class MyModel(CallableModel):
+    @Flow.call(auto_context=DateContext)
+    def __call__(self, *, date: date, extra: int = 0) -> GenericResult:
+        return GenericResult(value=date.day + extra)
 ```
 
-The `context_args` parameter specifies which function parameters should be extracted from the context. Those fields are validated through a runtime schema built from the parameter annotations. For well-known shapes such as `start_date` / `end_date`, the generated model uses a concrete built-in context type like `DateRangeContext`; otherwise it uses `FlowContext`, a universal frozen carrier for the validated fields.
-
-If a `@Flow.model` function returns a plain value instead of a `ResultBase`
-subclass, the generated model automatically wraps that value in `GenericResult`
-at runtime so it still behaves like a normal `CallableModel`.
+The generated context class is a proper `ContextBase` subclass, so it works
+with all existing evaluator and registry infrastructure.
 
 ## Model Registry
 

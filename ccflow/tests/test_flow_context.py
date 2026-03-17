@@ -12,8 +12,20 @@ from datetime import date, timedelta
 import cloudpickle
 import pytest
 
-from ccflow import Flow, FlowAPI, FlowContext, GenericResult
+from ccflow import CallableModel, ContextBase, Flow, FlowAPI, FlowContext, GenericResult
 from ccflow.context import DateRangeContext
+
+
+class NumberContext(ContextBase):
+    x: int
+
+
+class OffsetModel(CallableModel):
+    offset: int
+
+    @Flow.call
+    def __call__(self, context: NumberContext) -> GenericResult[int]:
+        return GenericResult(value=context.x + self.offset)
 
 
 class TestFlowContext:
@@ -152,6 +164,30 @@ class TestFlowAPI:
         assert "start_date" not in bound
         assert "end_date" not in bound
 
+    def test_flow_compute_regular_callable_model(self):
+        """Regular CallableModels also expose .flow.compute()."""
+
+        model = OffsetModel(offset=10)
+        result = model.flow.compute(x=5)
+
+        assert result == 15
+
+    def test_flow_unbound_inputs_regular_callable_model(self):
+        """Regular CallableModels expose their context schema as unbound inputs."""
+
+        model = OffsetModel(offset=10)
+        unbound = model.flow.unbound_inputs
+
+        assert unbound == {"x": int}
+
+    def test_flow_bound_inputs_regular_callable_model(self):
+        """Regular CallableModels expose their configured fields as bound inputs."""
+
+        model = OffsetModel(offset=10)
+        bound = model.flow.bound_inputs
+
+        assert bound["offset"] == 10
+
 
 class TestBoundModel:
     """Tests for BoundModel (created via .flow.with_inputs())."""
@@ -216,6 +252,27 @@ class TestBoundModel:
         model = compute()
         bound = model.flow.with_inputs(x=42)
         assert isinstance(bound.flow, FlowAPI)
+
+    def test_bound_model_repr_looks_like_with_inputs_call(self):
+        """BoundModel repr should mirror the API users wrote."""
+
+        @Flow.model(context_args=["x"])
+        def compute(x: int) -> GenericResult[int]:
+            return GenericResult(value=x * 2)
+
+        model = compute()
+        bound = model.flow.with_inputs(x=lambda ctx: ctx.x + 1)
+
+        assert repr(bound) == f"{model!r}.flow.with_inputs(x=<lambda>)"
+
+    def test_with_inputs_regular_callable_model(self):
+        """Regular CallableModels support .flow.with_inputs()."""
+
+        model = OffsetModel(offset=1)
+        shifted = model.flow.with_inputs(x=lambda ctx: ctx.x * 2)
+
+        result = shifted(NumberContext(x=5))
+        assert result.value == 11
 
 
 class TestTypedDictValidation:

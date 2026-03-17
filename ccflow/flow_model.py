@@ -12,7 +12,7 @@ and enables clean pickling for distributed computing (e.g., Ray).
 import inspect
 import logging
 from functools import wraps
-from typing import Annotated, Any, Callable, ClassVar, Dict, List, Optional, Tuple, Type, cast, get_args, get_origin
+from typing import Annotated, Any, Callable, ClassVar, Dict, List, Optional, Tuple, Type, Union, cast, get_args, get_origin
 
 from pydantic import Field, TypeAdapter, model_validator
 from typing_extensions import TypedDict
@@ -87,12 +87,39 @@ def _context_values(context: ContextBase) -> Dict[str, Any]:
     return dict(context)
 
 
+def _transform_repr(transform: Any) -> str:
+    """Render an input transform without noisy object addresses."""
+
+    if callable(transform):
+        name = _callable_name(transform)
+        if name.startswith("<") and name.endswith(">"):
+            return name
+        return f"<{name}>"
+    return repr(transform)
+
+
 def _build_typed_dict_adapter(name: str, schema: Dict[str, Type]) -> TypeAdapter:
     """Build a TypeAdapter for a runtime TypedDict schema."""
 
     if not schema:
         return TypeAdapter(dict)
     return TypeAdapter(TypedDict(name, schema))
+
+
+def _concrete_context_type(context_type: Any) -> Optional[Type[ContextBase]]:
+    """Extract a concrete ContextBase subclass from a context annotation."""
+
+    if isinstance(context_type, type) and issubclass(context_type, ContextBase):
+        return context_type
+
+    if get_origin(context_type) in (Optional, Union):
+        for arg in get_args(context_type):
+            if arg is type(None):
+                continue
+            if isinstance(arg, type) and issubclass(arg, ContextBase):
+                return arg
+
+    return None
 
 
 def _build_config_validators(all_param_types: Dict[str, Type]) -> Tuple[Dict[str, Type], Dict[str, TypeAdapter]]:
@@ -141,8 +168,19 @@ class FlowAPI:
     Accessed via model.flow property.
     """
 
-    def __init__(self, model: "_GeneratedFlowModelBase"):
+    def __init__(self, model: CallableModel):
         self._model = model
+
+    def _build_context(self, kwargs: Dict[str, Any]) -> ContextBase:
+        """Construct a runtime context for either generated or hand-written models."""
+        get_validator = getattr(self._model, "_get_context_validator", None)
+        if get_validator is not None:
+            validator = get_validator()
+            validated = validator.validate_python(kwargs)
+            return FlowContext(**validated)
+
+        validator = TypeAdapter(self._model.context_type)
+        return validator.validate_python(kwargs)
 
     def compute(self, **kwargs) -> Any:
         """Execute the model with the provided context arguments.
@@ -156,14 +194,7 @@ class FlowAPI:
         Returns:
             The model's result, unwrapped from GenericResult if applicable.
         """
-        # Get validator from model (lazily created if needed after unpickling)
-        validator = self._model._get_context_validator()
-
-        # Validate and coerce kwargs via TypeAdapter
-        validated = validator.validate_python(kwargs)
-
-        # Wrap in FlowContext (single class, always)
-        ctx = FlowContext(**validated)
+        ctx = self._build_context(kwargs)
 
         # Call the model
         result = self._model(ctx)
@@ -181,23 +212,41 @@ class FlowAPI:
         """
         all_param_types = getattr(self._model.__class__, "__flow_model_all_param_types__", {})
         bound_fields = getattr(self._model, "_bound_fields", set())
+        model_cls = self._model.__class__
 
         # If explicit context_args was provided, use _context_schema
-        explicit_args = getattr(self._model.__class__, "__flow_model_explicit_context_args__", None)
+        explicit_args = getattr(model_cls, "__flow_model_explicit_context_args__", None)
         if explicit_args is not None:
-            return self._model._context_schema.copy()
+            context_schema = getattr(model_cls, "_context_schema", None)
+            return context_schema.copy() if context_schema is not None else {}
 
-        # Otherwise, unbound = all params - bound
-        return {name: typ for name, typ in all_param_types.items() if name not in bound_fields}
+        # Dynamic @Flow.model: unbound = all params - bound
+        if all_param_types:
+            return {name: typ for name, typ in all_param_types.items() if name not in bound_fields}
+
+        # Generic CallableModel: runtime inputs are the context schema.
+        context_cls = _concrete_context_type(self._model.context_type)
+        if context_cls is None or not hasattr(context_cls, "model_fields"):
+            return {}
+        return {name: info.annotation for name, info in context_cls.model_fields.items()}
 
     @property
     def bound_inputs(self) -> Dict[str, Any]:
         """Return the config values bound at construction time."""
         bound_fields = getattr(self._model, "_bound_fields", set())
-        result = {}
+        result: Dict[str, Any] = {}
         for name in bound_fields:
             if hasattr(self._model, name):
                 result[name] = getattr(self._model, name)
+        if result:
+            return result
+
+        # Generic CallableModel: configured model fields are the bound inputs.
+        model_fields = getattr(self._model.__class__, "model_fields", {})
+        for name in model_fields:
+            if name == "meta":
+                continue
+            result[name] = getattr(self._model, name)
         return result
 
     def with_inputs(self, **transforms) -> "BoundModel":
@@ -235,7 +284,7 @@ class BoundModel:
         of a previous transform).
     """
 
-    def __init__(self, model: "_GeneratedFlowModelBase", input_transforms: Dict[str, Any]):
+    def __init__(self, model: CallableModel, input_transforms: Dict[str, Any]):
         self._model = model
         self._input_transforms = input_transforms
 
@@ -253,6 +302,10 @@ class BoundModel:
         """Call the model with transformed context."""
         return self._model(self._transform_context(context))
 
+    def __repr__(self) -> str:
+        transforms = ", ".join(f"{name}={_transform_repr(transform)}" for name, transform in self._input_transforms.items())
+        return f"{self._model!r}.flow.with_inputs({transforms})"
+
     @property
     def flow(self) -> "FlowAPI":
         """Access the flow API."""
@@ -267,9 +320,7 @@ class _BoundFlowAPI(FlowAPI):
         super().__init__(bound_model._model)
 
     def compute(self, **kwargs) -> Any:
-        validator = self._model._get_context_validator()
-        validated = validator.validate_python(kwargs)
-        ctx = FlowContext(**validated)
+        ctx = self._build_context(kwargs)
         result = self._bound(ctx)  # Call through BoundModel, not _model
         if isinstance(result, GenericResult):
             return result.value
