@@ -6,38 +6,55 @@ This document describes the `@Flow.model` decorator and `DepOf` annotation syste
 
 **Key features:**
 - `@Flow.model` - Decorator that generates `CallableModel` classes from plain functions
+- `FlowContext` - Universal context carrier for unpacked/deferred execution
+- `model.flow.compute(...)` / `model.flow.with_inputs(...)` - Deferred execution helpers
 - `DepOf[ContextType, ResultType]` - Type annotation for dependency fields
+- `Lazy[T]` - Mark a dependency for lazy, on-demand evaluation
+- `FieldExtractor` - Access structured outputs via attribute access on generated models
 - `resolve()` - Function to access resolved dependency values in class-based models
 
 ## Quick Start
 
-### Pattern 1: `@Flow.model` (Recommended for Simple Cases)
+### Pattern 1: `@Flow.model` (Recommended for Declarative Cases)
 
 ```python
 from datetime import date, timedelta
 from typing import Annotated
 
-from ccflow import Flow, DateRangeContext, GenericResult, DepOf
+from ccflow import Flow, DateRangeContext, GenericResult, Dep, DepOf
+
+
+def previous_window(ctx: DateRangeContext) -> DateRangeContext:
+    window = ctx.end_date - ctx.start_date
+    return ctx.model_copy(
+        update={
+            "start_date": ctx.start_date - window - timedelta(days=1),
+            "end_date": ctx.start_date - timedelta(days=1),
+        }
+    )
 
 @Flow.model
-def load_records(context: DateRangeContext, source: str) -> GenericResult[dict]:
-    return GenericResult(value={"count": 100, "date": str(context.start_date)})
+def load_revenue(context: DateRangeContext, region: str) -> GenericResult[float]:
+    return GenericResult(value=125.0)
 
 @Flow.model
-def compute_stats(
+def revenue_growth(
     context: DateRangeContext,
-    records: DepOf[..., GenericResult[dict]],  # Dependency field
-) -> GenericResult[float]:
-    # records is already resolved - just use it directly
-    return GenericResult(value=records.value["count"] * 0.05)
+    current: DepOf[..., GenericResult[float]],
+    previous: Annotated[GenericResult[float], Dep(transform=previous_window)],
+) -> GenericResult[dict]:
+    growth = (current.value - previous.value) / previous.value
+    return GenericResult(value={"as_of": context.end_date, "growth": growth})
 
-# Build pipeline
-loader = load_records(source="main_db")
-stats = compute_stats(records=loader)
+# Build pipeline. The same upstream model is reused twice:
+# - once with the original context
+# - once with a fixed lookback transform
+revenue = load_revenue(region="us")
+growth = revenue_growth(current=revenue, previous=revenue)
 
 # Execute
 ctx = DateRangeContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31))
-result = stats(ctx)
+result = growth(ctx)
 ```
 
 ### Pattern 2: Class-Based (For Complex Cases)
@@ -50,17 +67,17 @@ from datetime import timedelta
 from ccflow import CallableModel, DateRangeContext, Flow, GenericResult, DepOf
 from ccflow.callable import resolve  # Import resolve for class-based models
 
-class AggregateWithWindow(CallableModel):
-    """Aggregate records with configurable lookback window."""
+class RevenueAverageWithWindow(CallableModel):
+    """Aggregate revenue with a configurable lookback window."""
 
-    records: DepOf[..., GenericResult[dict]]
+    revenue: DepOf[..., GenericResult[float]]
     window: int = 7  # Configurable instance field
 
     @Flow.call
     def __call__(self, context: DateRangeContext) -> GenericResult[float]:
         # Use resolve() to get the resolved value
-        records = resolve(self.records)
-        return GenericResult(value=records.value["count"] / self.window)
+        revenue = resolve(self.revenue)
+        return GenericResult(value=revenue.value / self.window)
 
     @Flow.deps
     def __deps__(self, context: DateRangeContext):
@@ -68,22 +85,22 @@ class AggregateWithWindow(CallableModel):
         lookback_ctx = context.model_copy(
             update={"start_date": context.start_date - timedelta(days=self.window)}
         )
-        return [(self.records, [lookback_ctx])]
+        return [(self.revenue, [lookback_ctx])]
 
 # Usage - different window sizes, same source
-loader = load_records(source="main_db")
-agg_7 = AggregateWithWindow(records=loader, window=7)
-agg_30 = AggregateWithWindow(records=loader, window=30)
+loader = load_revenue(region="us")
+avg_7 = RevenueAverageWithWindow(revenue=loader, window=7)
+avg_30 = RevenueAverageWithWindow(revenue=loader, window=30)
 ```
 
 ## When to Use Which Pattern
 
-| Use `@Flow.model` when...      | Use Class-Based when...              |
-|--------------------------------|--------------------------------------|
-| Simple transformations         | Transforms depend on instance fields  |
-| Fixed context transforms       | Need `self.field` in `__deps__`       |
-| Less boilerplate is priority   | Full control over resolution         |
-| No custom `__deps__` logic     | Complex dependency patterns          |
+| Use `@Flow.model` when...      | Use Class-Based when...               |
+|--------------------------------|---------------------------------------|
+| The node still reads like a normal function | The main value is custom graph logic |
+| Transforms are fixed/declarative | Transforms depend on instance fields |
+| Less boilerplate is priority   | You need full control over `__deps__` |
+| Dependency wiring fits in the signature | Dependency behavior deserves its own class |
 
 ## Core Concepts
 
@@ -103,6 +120,17 @@ data: DepOf[DateRangeContext, GenericResult[dict]]
 # Equivalent to:
 data: Annotated[Union[GenericResult[dict], CallableModel], Dep()]
 ```
+
+For `@Flow.model`, plain non-`DepOf` parameters can also be populated with a
+`CallableModel` instance. That lets callers either inject a concrete value or
+splice in an upstream computation for the same parameter. Use `Dep`/`DepOf`
+when you need explicit dependency metadata such as context transforms or
+context-type validation.
+
+That means `DepOf` inside `@Flow.model` is most compelling when the function is
+still doing real work and the dependency relationship is simple. If the node is
+mostly a vessel for custom dependency graph wiring, a hand-written
+`CallableModel` is usually clearer.
 
 ### `Dep(transform=..., context_type=...)`
 
@@ -158,12 +186,12 @@ resolved = resolve(self.data)  # Type: GenericResult[int]
 
 1. User calls `model(context)`
 2. Generated `__call__` invokes `_resolve_deps_and_call()`
-3. For each `DepOf` field containing a `CallableModel`:
+3. For each dependency-bearing field containing a `CallableModel`:
    - Apply transform (if any)
    - Call the dependency
    - Store resolved value in context variable
-4. Generated `__call__` retrieves resolved values via `resolve()`
-5. Original function receives resolved values as arguments
+4. Generated `__call__` reads the resolved values from the dependency store
+5. Original function receives resolved values directly as normal function arguments
 
 ### Class-Based Resolution Flow
 
@@ -171,6 +199,7 @@ resolved = resolve(self.data)  # Type: GenericResult[int]
 2. `_resolve_deps_and_call()` runs
 3. For each `DepOf` field containing a `CallableModel`:
    - Check `__deps__` for custom transforms
+   - If not listed in `__deps__`, fall back to the field's `Dep(...)` transform (or the original context)
    - Call the dependency
    - Store resolved value in context variable
 4. User's `__call__` accesses values via `resolve(self.field)`
@@ -211,14 +240,18 @@ resolved = resolve(self.data)  # Type: GenericResult[int]
 - Keeps top-level namespace clean
 - Users who need it can find it easily
 
-### Decision 4: No Auto-Wrapping Return Values
+### Decision 4: Auto-Wrap Plain Return Values
 
-**What we chose:** Functions must explicitly return `ResultBase` subclass.
+**What we chose:** If the function's declared return type is not a `ResultBase`
+subclass, the generated model wraps the returned value in `GenericResult`.
 
 **Why:**
-- Type annotations remain honest
-- Consistent with existing `CallableModel` contract
-- `GenericResult(value=x)` is minimal overhead
+- Reduces boilerplate for simple scalar / container-returning functions
+- Preserves the `CallableModel` contract that runtime results are `ResultBase`
+- Still allows explicit `ResultBase` subclasses when you want a precise result type
+
+**Trade-off:** The original Python function may be annotated with a plain value
+type while the generated model's runtime `result_type` is `GenericResult`.
 
 ### Decision 5: Generated Classes Are Real CallableModels
 
@@ -290,9 +323,11 @@ Users need to remember:
 - `@Flow.model`: Use dependency values directly as function arguments
 - Class-based: Use `resolve(self.field)` to access values
 
-### Limitation: `__deps__` Still Required for Class-Based
+### Limitation: Custom `__deps__` Is Only Needed for Custom Graph Logic
 
-Even without transforms, class-based models need `__deps__`:
+Class-based models do not need a custom `__deps__` override when the default
+field-level `Dep(...)` behavior is sufficient. Override `__deps__` only when
+you need instance-dependent transforms or a custom dependency graph:
 
 ```python
 class Consumer(CallableModel):
@@ -301,11 +336,33 @@ class Consumer(CallableModel):
     @Flow.call
     def __call__(self, context):
         return GenericResult(value=resolve(self.data).value)
+```
+
+If you do need to use instance fields in the transform, then `__deps__` is the
+right place to do it:
+
+```python
+class WindowedConsumer(CallableModel):
+    data: DepOf[..., GenericResult[int]]
+    window: int = 7
+
+    @Flow.call
+    def __call__(self, context):
+        return GenericResult(value=resolve(self.data).value)
 
     @Flow.deps
     def __deps__(self, context):
-        return [(self.data, [context])]  # Boilerplate, but required
+        shifted = context.model_copy(update={"value": context.value + self.window})
+        return [(self.data, [shifted])]
 ```
+
+### Limitation: `context_args` Type Matching Is Best-Effort
+
+When you use `context_args=[...]`, the framework validates those fields via a
+runtime `TypedDict` schema. It only maps to a concrete built-in context type in
+special cases such as `DateRangeContext`. Otherwise the generated model's
+`context_type` is `FlowContext`, a universal frozen carrier for the validated
+context values.
 
 ## Complete Example: Multi-Stage Pipeline
 
@@ -396,6 +453,10 @@ print(f"60-day summary: {summary_60(ctx).value}")
 def my_function(context: ContextType, ...) -> ResultType:
     ...
 ```
+
+If the function is annotated with a plain value type instead of a `ResultBase`
+subclass, the generated model will wrap the returned value in `GenericResult`
+at runtime.
 
 ### `DepOf[ContextType, ResultType]`
 

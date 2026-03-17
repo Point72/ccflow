@@ -49,46 +49,75 @@ result = loader(ctx)
 
 Use `Dep()` or `DepOf` to mark parameters that accept other `CallableModel`s as dependencies. The framework automatically resolves the dependency graph.
 
-> **Tip:** If your function doesn't use the context directly (only passes it to dependencies), use `_` as the parameter name to signal this: `def my_func(_: DateRangeContext, data: DepOf[..., ResultType])`. This is a Python convention for intentionally unused parameters.
+For `@Flow.model`, regular parameters can also accept a `CallableModel` value at
+construction time. This lets you either inject a literal value or splice in an
+upstream computation for the same parameter. Use `Dep`/`DepOf` when you need
+context transforms or explicit dependency metadata.
+
+> **Rule of thumb:** `@Flow.model` works best when the dependency wiring is declarative and local to the signature. If the main point of the node is custom graph logic or transforms that depend on instance fields, use a class-based `CallableModel` instead.
 
 ```python
 from datetime import date, timedelta
 from typing import Annotated
 from ccflow import Flow, GenericResult, DateRangeContext, Dep, DepOf
 
-@Flow.model
-def load_data(context: DateRangeContext, source: str) -> GenericResult[dict]:
-    return GenericResult(value={"records": [1, 2, 3]})
+def previous_window(ctx: DateRangeContext) -> DateRangeContext:
+    window = ctx.end_date - ctx.start_date
+    return ctx.model_copy(
+        update={
+            "start_date": ctx.start_date - window - timedelta(days=1),
+            "end_date": ctx.start_date - timedelta(days=1),
+        }
+    )
 
 @Flow.model
-def transform_data(
-    _: DateRangeContext,  # Context passed to dependency, not used directly
-    raw_data: Annotated[GenericResult[dict], Dep(
-        # Transform context to fetch one extra day for lookback
-        transform=lambda ctx: ctx.model_copy(update={
-            "start_date": ctx.start_date - timedelta(days=1)
-        })
-    )]
+def load_revenue(context: DateRangeContext, region: str) -> GenericResult[float]:
+    # Pretend this queries a warehouse
+    return GenericResult(value=125.0)
+
+@Flow.model
+def revenue_growth(
+    context: DateRangeContext,
+    current: DepOf[..., GenericResult[float]],
+    previous: Annotated[GenericResult[float], Dep(transform=previous_window)],
 ) -> GenericResult[dict]:
-    # raw_data.value contains the resolved result from load_data
-    return GenericResult(value={"transformed": raw_data.value["records"]})
+    growth = (current.value - previous.value) / previous.value
+    return GenericResult(value={"as_of": context.end_date, "growth": growth})
 
-# Or use DepOf shorthand (no transform needed):
-@Flow.model
-def aggregate_data(
-    _: DateRangeContext,  # Context passed to dependency, not used directly
-    transformed: DepOf[..., GenericResult[dict]]  # Shorthand for Annotated[T, Dep()]
-) -> GenericResult[dict]:
-    return GenericResult(value={"count": len(transformed.value["transformed"])})
+# Build the pipeline. The same loader is reused with two contexts:
+# - current window: original context
+# - previous window: transformed via Dep(transform=...)
+revenue = load_revenue(region="us")
+growth = revenue_growth(current=revenue, previous=revenue)
 
-# Build the pipeline
-data = load_data(source="my_database")
-transformed = transform_data(raw_data=data)
-aggregated = aggregate_data(transformed=transformed)
-
-# Execute - dependencies are automatically resolved
 ctx = DateRangeContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31))
-result = aggregated(ctx)
+result = growth(ctx)
+```
+
+`DepOf` is also useful when you want the same parameter to accept either an
+upstream model or a precomputed value:
+
+```python
+from ccflow import DateRangeContext, DepOf, Flow, GenericResult
+
+@Flow.model
+def load_signal(context: DateRangeContext, source: str) -> GenericResult[float]:
+    return GenericResult(value=0.87)
+
+@Flow.model
+def publish_signal(
+    context: DateRangeContext,
+    signal: DepOf[..., GenericResult[float]],
+    threshold: float = 0.8,
+) -> GenericResult[dict]:
+    return GenericResult(value={
+        "as_of": context.end_date,
+        "signal": signal.value,
+        "go_live": signal.value >= threshold,
+    })
+
+live = publish_signal(signal=load_signal(source="prod"))
+override = publish_signal(signal=GenericResult(value=0.95), threshold=0.9)
 ```
 
 **Hydra/YAML Configuration:**
@@ -126,7 +155,7 @@ from ccflow import Flow, GenericResult, DateRangeContext
 def load_data(start_date: date, end_date: date, source: str) -> GenericResult[str]:
     return GenericResult(value=f"{source}:{start_date} to {end_date}")
 
-# The decorator infers DateRangeContext from the parameter types
+# The decorator matches common built-in context types when possible
 loader = load_data(source="my_database")
 assert loader.context_type == DateRangeContext
 
@@ -135,7 +164,32 @@ ctx = DateRangeContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31))
 result = loader(ctx)  # "my_database:2024-01-01 to 2024-01-31"
 ```
 
-The `context_args` parameter specifies which function parameters should be extracted from the context. The framework automatically determines the context type based on the parameter type annotations.
+The `context_args` parameter specifies which function parameters should be extracted from the context. Those fields are validated through a runtime schema built from the parameter annotations. For well-known shapes such as `start_date` / `end_date`, the generated model uses a concrete built-in context type like `DateRangeContext`; otherwise it uses `FlowContext`, a universal frozen carrier for the validated fields.
+
+**Deferred Execution Helpers:**
+
+Generated models also expose a `.flow` helper namespace:
+
+```python
+from ccflow import Flow, GenericResult
+
+@Flow.model
+def add(x: int, y: int) -> GenericResult[int]:
+    return GenericResult(value=x + y)
+
+model = add(x=10)
+
+# Validate and execute by passing context fields as kwargs
+assert model.flow.compute(y=5) == 15
+
+# Derive a new model by transforming context inputs
+shifted = model.flow.with_inputs(y=lambda ctx: ctx.y * 2)
+assert shifted.flow.compute(y=5) == 20
+```
+
+If a `@Flow.model` function returns a plain value instead of a `ResultBase`
+subclass, the generated model automatically wraps that value in `GenericResult`
+at runtime so it still behaves like a normal `CallableModel`.
 
 ## Model Registry
 
