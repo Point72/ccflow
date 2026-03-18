@@ -36,13 +36,13 @@ def add(x: int, y: int) -> int:
 model = add(x=10)
 
 # Explicit deferred entry point
-assert model.flow.compute(y=5) == 15
+assert model.flow.compute(y=5).value == 15
 
 # Standard CallableModel call path
 assert model(FlowContext(y=5)).value == 15
 
 shifted = model.flow.with_inputs(y=lambda ctx: ctx.y * 2)
-assert shifted.flow.compute(y=5) == 20
+assert shifted.flow.compute(y=5).value == 20
 ```
 
 In this mode:
@@ -73,7 +73,7 @@ from datetime import date
 from ccflow import Flow
 
 
-@Flow.model(context_args=["start_date", "end_date"])
+@Flow.model(context_args=["start_date", "end_date"], context_type=DateRangeContext)
 def load_revenue(start_date: date, end_date: date, region: str) -> float:
     return 125.0
 ```
@@ -85,9 +85,8 @@ Use `context_args` when certain parameters are semantically the execution
 context and you want that split to be explicit and stable across model
 instances.
 
-When the requested shape matches a built-in context like
-`DateRangeContext(start_date, end_date)`, the generated model uses that type.
-Otherwise it falls back to `FlowContext`.
+By default, `context_args` models use `FlowContext`. If you want compatibility
+with an existing context class, pass `context_type=...` explicitly.
 
 ### Upstream Models as Normal Arguments
 
@@ -130,13 +129,13 @@ from datetime import date, timedelta
 from ccflow import DateRangeContext, Flow
 
 
-@Flow.model(context_args=["start_date", "end_date"])
+@Flow.model(context_args=["start_date", "end_date"], context_type=DateRangeContext)
 def load_revenue(start_date: date, end_date: date, region: str) -> float:
     days = (end_date - start_date).days + 1
     return 1000.0 + days * 10.0
 
 
-@Flow.model(context_args=["start_date", "end_date"])
+@Flow.model(context_args=["start_date", "end_date"], context_type=DateRangeContext)
 def revenue_growth(start_date: date, end_date: date, current: float, previous: float) -> dict:
     return {
         "window_end": end_date,
@@ -156,7 +155,7 @@ ctx = DateRangeContext(
     end_date=date(2024, 1, 31),
 )
 
-direct = model(ctx).value
+direct = model(ctx)
 computed = model.flow.compute(
     start_date=date(2024, 1, 1),
     end_date=date(2024, 1, 31),
@@ -182,48 +181,16 @@ def add(x: int, y: int) -> int:
 
 
 model = add(x=10)
-assert model.flow.compute(y=5) == 15
+assert model.flow.compute(y=5).value == 15
 ```
 
 It validates the supplied keyword arguments against the generated context
-schema, creates a `FlowContext`, executes the model, and unwraps
-`GenericResult.value` if needed.
+schema, creates a `FlowContext`, and executes the model.
+
+It returns the same result object you would get from calling `model(context)`.
 
 It is not the only execution path. Because the generated object is still a
 standard `CallableModel`, calling `model(context)` remains fully supported.
-
-## FieldExtractor
-
-Accessing an unknown public attribute on a `@Flow.model` instance returns a
-`FieldExtractor`. It is itself a `CallableModel` that runs the source model,
-then extracts the named field from the result (via `getattr` or dict key
-access).
-
-```python
-from ccflow import ContextBase, Flow, GenericResult
-
-
-class TrainingContext(ContextBase):
-    seed: int
-
-
-@Flow.model
-def prepare(context: TrainingContext) -> GenericResult[dict]:
-    s = context.seed
-    return GenericResult(value={"X_train": [s, s * 2], "y_train": [s * 10]})
-
-
-@Flow.model
-def train(context: TrainingContext, X: list, y: list) -> GenericResult[int]:
-    return GenericResult(value=sum(X) + sum(y))
-
-
-prepared = prepare()
-model = train(X=prepared.X_train, y=prepared.y_train)
-```
-
-Multiple extractors from the same source share the source model instance. If
-caching is enabled the source is evaluated only once.
 
 ## Lazy Inputs
 

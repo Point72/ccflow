@@ -76,23 +76,22 @@ from the context at runtime. The remaining parameters are model configuration.
 from datetime import date
 from ccflow import Flow, GenericResult, DateRangeContext
 
-@Flow.model(context_args=["start_date", "end_date"])
+@Flow.model(context_args=["start_date", "end_date"], context_type=DateRangeContext)
 def load_data(start_date: date, end_date: date, source: str) -> GenericResult[str]:
     return GenericResult(value=f"{source}:{start_date} to {end_date}")
 
 loader = load_data(source="my_database")
 
-# For well-known field sets the decorator matches a built-in context type
+# Opt in explicitly when you want compatibility with an existing context type
 assert loader.context_type == DateRangeContext
 
 ctx = DateRangeContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31))
 result = loader(ctx)
 ```
 
-For well-known shapes such as `start_date` / `end_date` with `date`
-annotations, the generated model uses a concrete built-in context type like
-`DateRangeContext`. Otherwise it falls back to `FlowContext`, a universal
-frozen carrier for the validated fields.
+By default, `context_args` models use `FlowContext`, a universal frozen carrier
+for the validated fields. If you want the generated model to advertise and
+accept an existing `ContextBase` subclass, pass `context_type=...` explicitly.
 
 Use `context_args` when some parameters are semantically "the execution
 context" and you want that split to stay stable and explicit:
@@ -101,8 +100,8 @@ context" and you want that split to stay stable and explicit:
 - the split between config and runtime inputs matters semantically
 - the model is naturally "run over a context" such as date windows,
   partitions, or scenarios
-- you want the generated model to match a built-in context type like
-  `DateRangeContext` when possible
+- you want the generated model to accept a specific existing context type
+  such as `DateRangeContext`
 
 **Mode 3 — Default deferred style (no explicit context):**
 
@@ -121,11 +120,11 @@ model = add(x=10)
 
 # `x` is bound when the model is created.
 # `y` is supplied later at execution time.
-assert model.flow.compute(y=5) == 15
+assert model.flow.compute(y=5).value == 15
 
 # `.flow.with_inputs(...)` rewrites runtime inputs for this call path.
 doubled_y = model.flow.with_inputs(y=lambda ctx: ctx.y * 2)
-assert doubled_y.flow.compute(y=5) == 20
+assert doubled_y.flow.compute(y=5).value == 20
 ```
 
 #### Composing Dependencies
@@ -138,12 +137,12 @@ the current context and passes the resolved value into your function.
 from datetime import date, timedelta
 from ccflow import DateRangeContext, Flow
 
-@Flow.model(context_args=["start_date", "end_date"])
+@Flow.model(context_args=["start_date", "end_date"], context_type=DateRangeContext)
 def load_revenue(start_date: date, end_date: date, region: str) -> float:
     days = (end_date - start_date).days + 1
     return 1000.0 + days * 10.0
 
-@Flow.model(context_args=["start_date", "end_date"])
+@Flow.model(context_args=["start_date", "end_date"], context_type=DateRangeContext)
 def revenue_growth(
     start_date: date,
     end_date: date,
@@ -168,7 +167,7 @@ ctx = DateRangeContext(
 )
 
 # Standard ccflow execution
-direct = growth(ctx).value
+direct = growth(ctx)
 
 # Equivalent explicit deferred entry point
 computed = growth.flow.compute(
@@ -182,8 +181,8 @@ assert direct == computed
 #### Deferred Execution Helpers
 
 **`.flow.compute(**kwargs)`** validates the keyword arguments against the
-generated context schema, wraps them in a `FlowContext`, calls the model, and
-unwraps `GenericResult.value` if present.
+generated context schema, wraps them in a `FlowContext`, and calls the model.
+It returns the same result object you would get from `model(context)`.
 
 **`.flow.with_inputs(**transforms)`** returns a `BoundModel` that applies
 context transforms before delegating to the underlying model. Each transform
@@ -198,48 +197,16 @@ def add(x: int, y: int) -> int:
     return x + y
 
 model = add(x=10)
-assert model.flow.compute(y=5) == 15
+assert model.flow.compute(y=5).value == 15
 
 shifted = model.flow.with_inputs(y=lambda ctx: ctx.y * 2)
-assert shifted.flow.compute(y=5) == 20
+assert shifted.flow.compute(y=5).value == 20
 
 # You can also call with a context object directly
 ctx = FlowContext(y=5)
 assert model(ctx).value == 15
 assert shifted(ctx).value == 20
 ```
-
-#### Field Extraction
-
-Accessing an unknown attribute on a `@Flow.model` instance returns a
-`FieldExtractor` — a `CallableModel` that runs the source model and extracts
-the named field from its result. This makes it easy to wire individual output
-fields into downstream models.
-
-```python
-from ccflow import ContextBase, Flow, GenericResult
-
-class TrainingContext(ContextBase):
-    seed: int
-
-@Flow.model
-def prepare(context: TrainingContext) -> GenericResult[dict]:
-    s = context.seed
-    return GenericResult(value={"X_train": [s, s * 2], "y_train": [s * 10]})
-
-@Flow.model
-def train(context: TrainingContext, X: list, y: list) -> GenericResult[int]:
-    return GenericResult(value=sum(X) + sum(y))
-
-prepared = prepare()
-model = train(X=prepared.X_train, y=prepared.y_train)
-result = model(TrainingContext(seed=5))
-# X_train = [5, 10], y_train = [50] -> 15 + 50 = 65
-assert result.value == 65
-```
-
-Multiple extractors from the same source share the source model instance, so
-with caching enabled the source is only evaluated once.
 
 #### Lazy Dependencies with `Lazy[T]`
 

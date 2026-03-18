@@ -1,7 +1,8 @@
 """This module defines re-usable contexts for the "Callable Model" framework defined in flow.callable.py."""
 
+from collections.abc import Mapping
 from datetime import date, datetime
-from typing import Generic, Hashable, Optional, Sequence, Set, TypeVar
+from typing import Any, Generic, Hashable, Optional, Sequence, Set, TypeVar
 
 from deprecated import deprecated
 from pydantic import ConfigDict, field_validator, model_validator
@@ -105,6 +106,32 @@ class FlowContext(ContextBase):
     """
 
     model_config = ConfigDict(extra="allow", frozen=True)
+
+    def __eq__(self, other: Any) -> bool:
+        if not isinstance(other, FlowContext):
+            return False
+        return self.model_dump(mode="python") == other.model_dump(mode="python")
+
+    def __hash__(self) -> int:
+        return hash(_freeze_for_hash(self.model_dump(mode="python")))
+
+
+def _freeze_for_hash(value: Any) -> Hashable:
+    if isinstance(value, Mapping):
+        return tuple(sorted((key, _freeze_for_hash(item)) for key, item in value.items()))
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_for_hash(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(_freeze_for_hash(item) for item in value)
+    if hasattr(value, "model_dump"):
+        return (type(value), _freeze_for_hash(value.model_dump(mode="python")))
+    try:
+        hash(value)
+    except TypeError as exc:
+        if hasattr(value, "__dict__"):
+            return (type(value), _freeze_for_hash(vars(value)))
+        raise TypeError(f"FlowContext contains an unhashable value of type {type(value).__name__}") from exc
+    return value
 
 
 C = TypeVar("C", bound=Hashable)

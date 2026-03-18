@@ -72,6 +72,20 @@ class TestFlowContext:
         assert dumped["start_date"] == date(2024, 1, 1)
         assert dumped["value"] == 42
 
+    def test_flow_context_value_semantics_include_extra_fields(self):
+        """Equality should reflect the actual extra payload."""
+        assert FlowContext(x=1) == FlowContext(x=1)
+        assert FlowContext(x=1) != FlowContext(x=2)
+        assert FlowContext(x=1) != FlowContext(y=1)
+
+    def test_flow_context_hash_uses_extra_fields(self):
+        """Distinct extra payloads should remain distinct in hashed collections."""
+        first = FlowContext(values=[1, 2], label="a")
+        second = FlowContext(values=[1, 3], label="a")
+        third = FlowContext(values=[1, 2], label="b")
+
+        assert len({first, second, third}) == 3
+
     def test_flow_context_pickle(self):
         """FlowContext pickles cleanly."""
         ctx = FlowContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31))
@@ -102,9 +116,9 @@ class TestFlowAPI:
         model = load_data(source="api")
         result = model.flow.compute(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31))
 
-        assert result["start"] == date(2024, 1, 1)
-        assert result["end"] == date(2024, 1, 31)
-        assert result["source"] == "api"
+        assert result.value["start"] == date(2024, 1, 1)
+        assert result.value["end"] == date(2024, 1, 31)
+        assert result.value["source"] == "api"
 
     def test_flow_compute_type_coercion(self):
         """FlowAPI.compute() coerces types via TypeAdapter."""
@@ -117,8 +131,8 @@ class TestFlowAPI:
         # Pass strings - should be coerced to dates
         result = model.flow.compute(start_date="2024-01-01", end_date="2024-01-31")
 
-        assert result["start"] == date(2024, 1, 1)
-        assert result["end"] == date(2024, 1, 31)
+        assert result.value["start"] == date(2024, 1, 1)
+        assert result.value["end"] == date(2024, 1, 31)
 
     def test_flow_compute_validation_error(self):
         """FlowAPI.compute() raises on missing required args."""
@@ -170,7 +184,7 @@ class TestFlowAPI:
         model = OffsetModel(offset=10)
         result = model.flow.compute(x=5)
 
-        assert result == 15
+        assert result.value == 15
 
     def test_flow_unbound_inputs_regular_callable_model(self):
         """Regular CallableModels expose their context schema as unbound inputs."""
@@ -305,15 +319,14 @@ class TestTypedDictValidation:
         assert validator is not None
         assert model.__class__._cached_context_validator is validator
 
-    def test_matched_context_type(self):
-        """DateRangeContext pattern is matched for compatibility."""
+    def test_explicit_context_type_override(self):
+        """context_type can opt into an existing ContextBase subclass."""
 
-        @Flow.model(context_args=["start_date", "end_date"])
+        @Flow.model(context_args=["start_date", "end_date"], context_type=DateRangeContext)
         def load_data(start_date: date, end_date: date) -> GenericResult[dict]:
             return GenericResult(value={})
 
         model = load_data()
-        # Should match DateRangeContext
         assert model.context_type == DateRangeContext
 
 
@@ -340,7 +353,7 @@ class TestPicklingSupport:
 
         # Should work after unpickling
         result = unpickled.flow.compute(x=1, y=2)
-        assert result == 9  # (1 + 2) * 3
+        assert result.value == 9  # (1 + 2) * 3
 
     def test_model_cloudpickle_simple(self):
         """Simple model cloudpickle test."""
@@ -355,7 +368,7 @@ class TestPicklingSupport:
         unpickled = cloudpickle.loads(pickled)
 
         result = unpickled.flow.compute(value=21)
-        assert result == 42
+        assert result.value == 42
 
     def test_validator_recreated_after_cloudpickle(self):
         """TypeAdapter validator is recreated after cloudpickling."""
@@ -375,7 +388,7 @@ class TestPicklingSupport:
 
         # Validator should still work (may be lazily recreated)
         result = unpickled.flow.compute(x=42)
-        assert result == 42
+        assert result.value == 42
 
     def test_flow_context_pickle_standard(self):
         """FlowContext works with standard pickle."""
@@ -431,8 +444,8 @@ class TestIntegrationWithExistingContextTypes:
         model = load_data(source="api")
         result = model.flow.compute(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31))
 
-        assert result["start"] == date(2024, 1, 1)
-        assert result["end"] == date(2024, 1, 31)
+        assert result.value["start"] == date(2024, 1, 1)
+        assert result.value["end"] == date(2024, 1, 31)
 
 
 class TestLazy:

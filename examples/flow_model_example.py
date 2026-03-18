@@ -17,7 +17,7 @@ from datetime import date, timedelta
 from ccflow import DateRangeContext, Flow
 
 
-@Flow.model(context_args=["start_date", "end_date"])
+@Flow.model(context_args=["start_date", "end_date"], context_type=DateRangeContext)
 def load_revenue(start_date: date, end_date: date, region: str) -> float:
     """Return synthetic revenue for one reporting window."""
     days = (end_date - start_date).days + 1
@@ -27,7 +27,7 @@ def load_revenue(start_date: date, end_date: date, region: str) -> float:
     return round(region_base + days * 8.0 + trend, 2)
 
 
-@Flow.model(context_args=["start_date", "end_date"])
+@Flow.model(context_args=["start_date", "end_date"], context_type=DateRangeContext)
 def revenue_change(
     start_date: date,
     end_date: date,
@@ -81,7 +81,7 @@ def main() -> None:
         end_date=date(2024, 3, 31),
     )
 
-    direct = pipeline(ctx).value
+    direct = pipeline(ctx)
     computed = pipeline.flow.compute(
         start_date=ctx.start_date,
         end_date=ctx.end_date,
@@ -95,7 +95,7 @@ def main() -> None:
     print(f"  direct == computed: {direct == computed}")
 
     print("\nResult:")
-    for key, value in computed.items():
+    for key, value in computed.value.items():
         print(f"  {key}: {value}")
 
 

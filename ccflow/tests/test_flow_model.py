@@ -11,6 +11,7 @@ from ccflow import (
     ContextBase,
     DateRangeContext,
     Flow,
+    FlowContext,
     FlowOptionsOverride,
     GenericResult,
     Lazy,
@@ -160,13 +161,13 @@ class TestFlowModelContextArgs(TestCase):
     def test_context_args_basic(self):
         """Test basic context_args usage."""
 
-        @Flow.model(context_args=["start_date", "end_date"])
+        @Flow.model(context_args=["start_date", "end_date"], context_type=DateRangeContext)
         def date_range_loader(start_date: date, end_date: date, source: str) -> GenericResult[str]:
             return GenericResult(value=f"{source}:{start_date} to {end_date}")
 
         loader = date_range_loader(source="db")
 
-        # Should use DateRangeContext
+        # Explicit context_type keeps compatibility with existing contexts.
         self.assertEqual(loader.context_type, DateRangeContext)
 
         ctx = DateRangeContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31))
@@ -181,6 +182,9 @@ class TestFlowModelContextArgs(TestCase):
             return GenericResult(value=f"{y}:{x * multiplier}")
 
         model = unpacked_model(multiplier=2)
+
+        # Default context_args mode uses FlowContext unless overridden explicitly.
+        self.assertEqual(model.context_type, FlowContext)
 
         # Create context with generated type
         ctx_type = model.context_type
@@ -490,6 +494,40 @@ class TestFlowModelIntegration(TestCase):
         self.assertEqual(dumped["value"], 100)
         self.assertIn("type_", dumped)
 
+    def test_serialization_roundtrip_preserves_bound_inputs(self):
+        """Round-tripping should preserve which inputs were bound at construction."""
+
+        @Flow.model
+        def add(x: int, y: int) -> int:
+            return x + y
+
+        model = add(x=10)
+        dumped = model.model_dump(mode="python")
+        restored = type(model).model_validate(dumped)
+
+        self.assertEqual(dumped["x"], 10)
+        self.assertNotIn("y", dumped)
+        self.assertEqual(restored.flow.bound_inputs, {"x": 10})
+        self.assertEqual(restored.flow.unbound_inputs, {"y": int})
+        self.assertEqual(restored.flow.compute(y=5).value, 15)
+
+    def test_serialization_roundtrip_preserves_defaults_and_deferred_inputs(self):
+        """Default-valued params should serialize normally without binding runtime-only inputs."""
+
+        @Flow.model
+        def load(start_date: str, source: str = "warehouse") -> str:
+            return f"{source}:{start_date}"
+
+        model = load()
+        dumped = model.model_dump(mode="python")
+        restored = type(model).model_validate(dumped)
+
+        self.assertEqual(dumped["source"], "warehouse")
+        self.assertNotIn("start_date", dumped)
+        self.assertEqual(restored.flow.bound_inputs, {"source": "warehouse"})
+        self.assertEqual(restored.flow.unbound_inputs, {"start_date": str})
+        self.assertEqual(restored.flow.compute(start_date="2024-01-01").value, "warehouse:2024-01-01")
+
     def test_pickle_roundtrip(self):
         """Test cloudpickle serialization of generated models."""
 
@@ -568,7 +606,7 @@ class TestFlowModelErrors(TestCase):
 
         Auto-wrapped models have result_type=GenericResult (unparameterized).
         When used as an auto-detected dep, the framework resolves
-        the GenericResult and unwraps .value for the downstream function.
+        the GenericResult to its inner value for the downstream function.
         """
 
         @Flow.model
@@ -622,24 +660,36 @@ class TestFlowModelErrors(TestCase):
         result = model(ctx)
         self.assertEqual(result.value, 30)  # 10 * 3
 
+    def test_dynamic_deferred_mode_missing_runtime_inputs_is_clear(self):
+        """Missing deferred inputs should fail at the framework boundary."""
+
+        @Flow.model
+        def dynamic_model(value: int, multiplier: int) -> int:
+            return value * multiplier
+
+        model = dynamic_model()
+
+        with self.assertRaises(TypeError) as cm:
+            model.flow.compute()
+
+        self.assertIn("Missing runtime input(s) for dynamic_model: multiplier, value", str(cm.exception))
+
     def test_all_defaults_is_valid(self):
-        """Test that all-defaults function is valid (everything can be pre-bound)."""
+        """All-default functions should treat those defaults as bound config."""
         from ccflow import FlowContext
 
         @Flow.model
         def all_defaults(value: int = 1, other: str = "x") -> GenericResult[str]:
             return GenericResult(value=f"{value}-{other}")
 
-        # No args provided -> everything comes from defaults or context
         model = all_defaults()
 
-        # All params are unbound (not provided at construction)
-        self.assertEqual(model.flow.unbound_inputs, {"value": int, "other": str})
+        self.assertEqual(model.flow.bound_inputs, {"value": 1, "other": "x"})
+        self.assertEqual(model.flow.unbound_inputs, {})
 
-        # Call with context - context values override defaults
         ctx = FlowContext(value=5, other="y")
         result = model(ctx)
-        self.assertEqual(result.value, "5-y")
+        self.assertEqual(result.value, "1-x")
 
     def test_invalid_context_arg(self):
         """Test error when context_args refers to non-existent parameter."""
@@ -660,6 +710,30 @@ class TestFlowModelErrors(TestCase):
                 return GenericResult(value=x)
 
         self.assertIn("type annotation", str(cm.exception))
+
+    def test_context_type_requires_context_args_mode(self):
+        """context_type is only valid alongside context_args."""
+        with self.assertRaises(TypeError) as cm:
+
+            @Flow.model(context_type=DateRangeContext)
+            def dynamic_model(value: int) -> GenericResult[int]:
+                return GenericResult(value=value)
+
+        self.assertIn("context_args", str(cm.exception))
+
+    def test_context_type_must_cover_context_args(self):
+        """context_type must expose all named context_args fields."""
+
+        class StartOnlyContext(ContextBase):
+            start_date: date
+
+        with self.assertRaises(TypeError) as cm:
+
+            @Flow.model(context_args=["start_date", "end_date"], context_type=StartOnlyContext)
+            def load_data(start_date: date, end_date: date) -> GenericResult[dict]:
+                return GenericResult(value={})
+
+        self.assertIn("end_date", str(cm.exception))
 
 
 # =============================================================================
@@ -755,6 +829,32 @@ class TestFlowModelValidation(TestCase):
         finally:
             registry.clear()
 
+    def test_context_type_annotation_mismatch_raises(self):
+        """context_type validation should reject incompatible field annotations."""
+
+        class StringIdContext(ContextBase):
+            item_id: str
+
+        with self.assertRaises(TypeError) as cm:
+
+            @Flow.model(context_args=["item_id"], context_type=StringIdContext)
+            def load(item_id: int) -> int:
+                return item_id
+
+        self.assertIn("item_id", str(cm.exception))
+        self.assertIn("int", str(cm.exception))
+        self.assertIn("str", str(cm.exception))
+
+    def test_context_type_compatible_annotations_accepted(self):
+        """context_type validation should accept matching or subclass annotations."""
+
+        # Exact match should work
+        @Flow.model(context_args=["start_date", "end_date"], context_type=DateRangeContext)
+        def load_exact(start_date: date, end_date: date) -> str:
+            return f"{start_date}"
+
+        self.assertIsNotNone(load_exact)
+
 
 # =============================================================================
 # BoundModel Tests
@@ -780,7 +880,7 @@ class TestBoundModel(TestCase):
         result = bound.flow.compute(y=5)
         # y transform: 5 * 2 = 10, x is bound to 10
         # model: 10 + 10 = 20
-        self.assertEqual(result, 20)
+        self.assertEqual(result.value, 20)
 
     def test_bound_model_flow_compute_static_transform(self):
         """Test BoundModel.flow.compute() with static value transform."""
@@ -795,7 +895,19 @@ class TestBoundModel(TestCase):
         result = bound.flow.compute(y=999)  # y should be overridden by transform
         # y is statically bound to 3, x=7
         # 7 * 3 = 21
-        self.assertEqual(result, 21)
+        self.assertEqual(result.value, 21)
+
+    def test_bound_model_cloudpickle_with_lambda_transform(self):
+        """BoundModel with lambda transforms should survive cloudpickle round-trip."""
+
+        @Flow.model
+        def my_model(x: int, y: int) -> int:
+            return x + y
+
+        bound = my_model(x=10).flow.with_inputs(y=lambda ctx: ctx.y * 2)
+        restored = rcploads(rcpdumps(bound, protocol=5))
+
+        self.assertEqual(restored.flow.compute(y=6).value, 22)
 
     def test_bound_model_as_dependency(self):
         """Test that BoundModel can be passed as a dependency to another model."""
@@ -817,7 +929,21 @@ class TestBoundModel(TestCase):
         # x transform: 5 * 2 = 10
         # source: 10 * 10 = 100
         # consumer: 100 + 1 = 101
-        self.assertEqual(result, 101)
+        self.assertEqual(result.value, 101)
+
+    def test_flow_compute_with_upstream_callable_model_dependency(self):
+        """flow.compute() should resolve upstream generated-model dependencies."""
+
+        @Flow.model
+        def source(x: int) -> GenericResult[int]:
+            return GenericResult(value=x * 10)
+
+        @Flow.model
+        def consumer(data: GenericResult[int], offset: int = 1) -> int:
+            return data + offset
+
+        model = consumer(data=source(), offset=3)
+        self.assertEqual(model.flow.compute(x=5).value, 53)
 
     def test_bound_model_chained_with_inputs(self):
         """Test that chaining with_inputs merges transforms correctly."""
@@ -836,7 +962,7 @@ class TestBoundModel(TestCase):
         # y transform: 10 * 3 = 30
         # z from context: 1
         # 10 + 30 + 1 = 41
-        self.assertEqual(result, 41)
+        self.assertEqual(result.value, 41)
 
     def test_bound_model_chained_with_inputs_override(self):
         """Test that chaining with_inputs allows overriding transforms."""
@@ -851,7 +977,7 @@ class TestBoundModel(TestCase):
 
         # Second transform should override the first for 'x'
         result = bound2.flow.compute(x=5)
-        self.assertEqual(result, 50)  # 5 * 10, not 5 * 2
+        self.assertEqual(result.value, 50)  # 5 * 10, not 5 * 2
 
     def test_bound_model_with_default_args(self):
         """with_inputs works when the model has parameters with default values."""
@@ -867,24 +993,24 @@ class TestBoundModel(TestCase):
         lookback = model.flow.with_inputs(start_date=lambda ctx: "shifted_" + ctx.start_date)
 
         result = lookback.flow.compute(start_date="2024-01-01", end_date="2024-06-30")
-        self.assertEqual(result, "prod_db:shifted_2024-01-01-2024-06-30")
+        self.assertEqual(result.value, "prod_db:shifted_2024-01-01-2024-06-30")
 
-    def test_bound_model_with_default_arg_unbound(self):
-        """with_inputs works when defaulted parameter is left unbound (comes from context)."""
+    def test_bound_model_with_default_arg_uses_default(self):
+        """with_inputs should preserve omitted Python defaults as bound config."""
 
         @Flow.model
         def load(start_date: str, source: str = "warehouse") -> str:
             return f"{source}:{start_date}"
 
-        # Don't bind 'source' — it keeps its default in the model,
-        # but in dynamic deferred mode, unbound params come from context
         model = load()
 
-        # Transform start_date; source comes from context (overriding the default)
         bound = model.flow.with_inputs(start_date=lambda ctx: "shifted_" + ctx.start_date)
 
-        result = bound.flow.compute(start_date="2024-01-01", source="s3_bucket")
-        self.assertEqual(result, "s3_bucket:shifted_2024-01-01")
+        self.assertEqual(model.flow.bound_inputs, {"source": "warehouse"})
+        self.assertEqual(model.flow.unbound_inputs, {"start_date": str})
+
+        result = bound.flow.compute(start_date="2024-01-01")
+        self.assertEqual(result.value, "warehouse:shifted_2024-01-01")
 
     def test_bound_model_default_arg_as_dependency(self):
         """BoundModel with default args works correctly as a dependency."""
@@ -905,7 +1031,7 @@ class TestBoundModel(TestCase):
         # x transform: 3 * 10 = 30
         # source: 30 * 5 (multiplier) = 150
         # consumer: 150 + 1 = 151
-        self.assertEqual(result, 151)
+        self.assertEqual(result.value, 151)
 
     def test_bound_model_as_lazy_dependency(self):
         """Test that BoundModel works as a Lazy dependency."""
@@ -927,7 +1053,7 @@ class TestBoundModel(TestCase):
         model = consumer(data=5, slow=bound_src)
         result = model.flow.compute(x=7)
         # data=5 < 100, so slow path: x transform: 7+10=17, source: 17*3=51
-        self.assertEqual(result, 51)
+        self.assertEqual(result.value, 51)
 
     def test_bound_and_unbound_models_share_memory_cache(self):
         """Shifted and unshifted models should share one evaluator cache.
@@ -958,6 +1084,135 @@ class TestBoundModel(TestCase):
         # One execution for the unshifted context and one for the shifted context.
         self.assertEqual(call_counts["source"], 2)
         self.assertEqual(len(evaluator.cache), 2)
+
+    def test_transform_error_propagates(self):
+        """A buggy transform should raise, not silently fall back to FlowContext."""
+
+        @Flow.model
+        def load(context: DateRangeContext, source: str = "db") -> str:
+            return f"{source}:{context.start_date}"
+
+        model = load()
+        # Transform has a typo — ctx.sart_date instead of ctx.start_date
+        bound = model.flow.with_inputs(start_date=lambda ctx: ctx.sart_date)
+
+        ctx = DateRangeContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31))
+        with self.assertRaises(AttributeError):
+            bound(ctx)
+
+    def test_transform_validation_error_propagates(self):
+        """If transforms produce invalid context data, the error should surface."""
+        from pydantic import ValidationError
+
+        @Flow.model
+        def load(context: DateRangeContext, source: str = "db") -> str:
+            return f"{source}:{context.start_date}"
+
+        model = load()
+        # Transform returns a string where a date is expected
+        bound = model.flow.with_inputs(start_date="not-a-date")
+
+        ctx = DateRangeContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31))
+        # Pydantic validation should raise, not silently fall back to FlowContext
+        with self.assertRaises(ValidationError):
+            bound(ctx)
+
+
+class TestFlowModelPipe(TestCase):
+    """Tests for the ``.pipe(..., param=...)`` convenience API."""
+
+    def test_pipe_infers_single_required_parameter(self):
+        """pipe() should infer the only required downstream parameter."""
+
+        @Flow.model
+        def source(x: int) -> GenericResult[int]:
+            return GenericResult(value=x * 10)
+
+        @Flow.model
+        def consumer(data: int, offset: int = 1) -> int:
+            return data + offset
+
+        pipeline = source().pipe(consumer, offset=3)
+        self.assertEqual(pipeline.flow.compute(x=5).value, 53)
+
+    def test_pipe_infers_single_defaulted_parameter(self):
+        """pipe() should fall back to a single defaulted downstream parameter."""
+
+        @Flow.model
+        def source(x: int) -> int:
+            return x * 10
+
+        @Flow.model
+        def consumer(data: int = 0) -> int:
+            return data + 1
+
+        pipeline = source().pipe(consumer)
+        self.assertEqual(pipeline.flow.compute(x=5).value, 51)
+
+    def test_pipe_param_disambiguates_multiple_parameters(self):
+        """param= should identify the downstream argument to bind."""
+
+        @Flow.model
+        def source(x: int) -> int:
+            return x * 10
+
+        @Flow.model
+        def combine(left: int, right: int) -> int:
+            return left + right
+
+        pipeline = source().pipe(combine, param="right", left=7)
+        self.assertEqual(pipeline.flow.compute(x=5).value, 57)
+
+    def test_pipe_rejects_ambiguous_downstream_stage(self):
+        """pipe() should require param= when multiple targets are available."""
+
+        @Flow.model
+        def source(x: int) -> int:
+            return x
+
+        @Flow.model
+        def combine(left: int, right: int) -> int:
+            return left + right
+
+        with self.assertRaisesRegex(
+            TypeError,
+            r"pipe\(\) could not infer a target parameter for combine; unbound candidates are: left, right",
+        ):
+            source().pipe(combine)
+
+    def test_manual_callable_model_can_pipe_into_generated_stage(self):
+        """Hand-written CallableModels should be usable as pipe sources."""
+
+        class ManualModel(CallableModel):
+            offset: int
+
+            @Flow.call
+            def __call__(self, context: SimpleContext) -> GenericResult[int]:
+                return GenericResult(value=context.value + self.offset)
+
+        @Flow.model
+        def consumer(data: int, multiplier: int) -> int:
+            return data * multiplier
+
+        pipeline = ManualModel(offset=5).pipe(consumer, multiplier=2)
+        self.assertEqual(pipeline.flow.compute(value=10).value, 30)
+
+    def test_bound_model_pipe_preserves_downstream_transforms(self):
+        """pipe() should keep downstream with_inputs transforms intact."""
+
+        @Flow.model
+        def source(x: int) -> int:
+            return x * 10
+
+        @Flow.model
+        def consumer(data: int, scale: int) -> int:
+            return data + scale
+
+        shifted_source = source().flow.with_inputs(x=lambda ctx: ctx.scale + 1)
+        scaled_consumer = consumer().flow.with_inputs(scale=lambda ctx: ctx.scale * 3)
+
+        pipeline = shifted_source.pipe(scaled_consumer)
+        self.assertEqual(pipeline.flow.compute(scale=2).value, 76)
 
 
 # =============================================================================
@@ -1007,7 +1262,7 @@ class TestPEP563Annotations(TestCase):
 
         model = plain_model()
         result = model.flow.compute(value=5)
-        self.assertEqual(result, 10)
+        self.assertEqual(result.value, 10)
         self.assertEqual(model.result_type, GenericResult)
 
 
@@ -1159,7 +1414,7 @@ def hydra_consumer_model(
 # --- context_args fixtures for Hydra testing ---
 
 
-@Flow.model(context_args=["start_date", "end_date"])
+@Flow.model(context_args=["start_date", "end_date"], context_type=DateRangeContext)
 def context_args_loader(start_date: date, end_date: date, source: str) -> GenericResult[dict]:
     """Loader using context_args with DateRangeContext."""
     return GenericResult(
@@ -1171,7 +1426,7 @@ def context_args_loader(start_date: date, end_date: date, source: str) -> Generi
     )
 
 
-@Flow.model(context_args=["start_date", "end_date"])
+@Flow.model(context_args=["start_date", "end_date"], context_type=DateRangeContext)
 def context_args_processor(
     start_date: date,
     end_date: date,
@@ -1537,235 +1792,6 @@ class TestLazyTypeAnnotation(TestCase):
 
         result = model(SimpleContext(value=5))
         self.assertEqual(result.value, 51)  # 50 + 1
-
-
-# =============================================================================
-# FieldExtractor Tests (Structured Output Field Access)
-# =============================================================================
-
-
-class TestFieldExtractor(TestCase):
-    """Tests for structured output field access (prepared.X_train pattern)."""
-
-    def test_field_extraction_basic(self):
-        """Accessing unknown attr on @Flow.model instance returns FieldExtractor."""
-        from ccflow.flow_model import FieldExtractor
-
-        @Flow.model
-        def prepare(context: SimpleContext, factor: int = 2) -> GenericResult[dict]:
-            return GenericResult(value={"X_train": context.value * factor, "X_test": context.value})
-
-        model = prepare(factor=3)
-        extractor = model.X_train
-
-        self.assertIsInstance(extractor, FieldExtractor)
-        self.assertIs(extractor.source, model)
-        self.assertEqual(extractor.field_name, "X_train")
-
-    def test_field_extraction_evaluates_correctly(self):
-        """FieldExtractor runs source and extracts the named field."""
-
-        @Flow.model
-        def prepare(context: SimpleContext) -> GenericResult[dict]:
-            return GenericResult(value={"X_train": [1, 2, 3], "y_train": [4, 5, 6]})
-
-        model = prepare()
-        x_train = model.X_train
-
-        result = x_train(SimpleContext(value=0))
-        self.assertEqual(result.value, [1, 2, 3])
-
-    def test_field_extraction_as_dependency(self):
-        """FieldExtractor wired as a dep to a downstream model.
-
-        Note: FieldExtractors are CallableModels, so they're auto-detected as deps
-        and auto-unwrapped (GenericResult.value). The downstream function receives
-        the raw extracted value, not a GenericResult wrapper.
-        """
-
-        @Flow.model
-        def prepare(context: SimpleContext) -> GenericResult[dict]:
-            v = context.value
-            return GenericResult(value={"X_train": [v, v * 2], "y_train": [v * 10]})
-
-        @Flow.model
-        def train(context: SimpleContext, X: list, y: list) -> GenericResult[int]:
-            # X and y are auto-unwrapped to the raw list values
-            return GenericResult(value=sum(X) + sum(y))
-
-        prepared = prepare()
-        model = train(X=prepared.X_train, y=prepared.y_train)
-
-        result = model(SimpleContext(value=5))
-        # X_train = [5, 10], y_train = [50]
-        # sum(X) + sum(y) = 15 + 50 = 65
-        self.assertEqual(result.value, 65)
-
-    def test_field_extraction_multiple_from_same_source(self):
-        """Multiple extractors from same source share the source instance."""
-
-        @Flow.model
-        def prepare(context: SimpleContext) -> GenericResult[dict]:
-            return GenericResult(value={"a": 1, "b": 2, "c": 3})
-
-        model = prepare()
-        ext_a = model.a
-        ext_b = model.b
-        ext_c = model.c
-
-        # All should reference the same source
-        self.assertIs(ext_a.source, model)
-        self.assertIs(ext_b.source, model)
-        self.assertIs(ext_c.source, model)
-
-        # All should evaluate correctly
-        ctx = SimpleContext(value=0)
-        self.assertEqual(ext_a(ctx).value, 1)
-        self.assertEqual(ext_b(ctx).value, 2)
-        self.assertEqual(ext_c(ctx).value, 3)
-
-    def test_field_extraction_nested(self):
-        """Chained extraction (result.a.b) creates nested FieldExtractors."""
-        from ccflow.flow_model import FieldExtractor
-
-        class Nested:
-            def __init__(self):
-                self.inner_val = 42
-
-        @Flow.model
-        def produce(context: SimpleContext) -> GenericResult:
-            return GenericResult(value={"nested": Nested()})
-
-        model = produce()
-        nested_extractor = model.nested
-        inner_extractor = nested_extractor.inner_val
-
-        self.assertIsInstance(nested_extractor, FieldExtractor)
-        self.assertIsInstance(inner_extractor, FieldExtractor)
-
-        result = inner_extractor(SimpleContext(value=0))
-        self.assertEqual(result.value, 42)
-
-    def test_field_extraction_context_type_inherited(self):
-        """FieldExtractor inherits context_type from source."""
-
-        @Flow.model
-        def prepare(context: SimpleContext) -> GenericResult[dict]:
-            return GenericResult(value={"x": 1})
-
-        model = prepare()
-        extractor = model.x
-
-        self.assertEqual(extractor.context_type, SimpleContext)
-
-    def test_field_extraction_nonexistent_field_runtime_error(self):
-        """Non-existent field raises error at evaluation time, not construction.
-
-        For dict results, raises KeyError. For object results, raises AttributeError.
-        """
-
-        @Flow.model
-        def prepare(context: SimpleContext) -> GenericResult[dict]:
-            return GenericResult(value={"x": 1})
-
-        model = prepare()
-        extractor = model.nonexistent  # No error at construction
-
-        # Error at evaluation time (KeyError for dicts, AttributeError for objects)
-        with self.assertRaises((KeyError, AttributeError)):
-            extractor(SimpleContext(value=0))
-
-    def test_field_extraction_pydantic_fields_not_intercepted(self):
-        """Accessing real pydantic fields returns the field value, NOT an extractor."""
-        from ccflow.flow_model import FieldExtractor
-
-        @Flow.model
-        def model_with_fields(context: SimpleContext, multiplier: int = 5) -> GenericResult[int]:
-            return GenericResult(value=context.value * multiplier)
-
-        model = model_with_fields(multiplier=10)
-
-        # 'multiplier' is a real pydantic field — should return the value, not a FieldExtractor
-        self.assertEqual(model.multiplier, 10)
-        self.assertNotIsInstance(model.multiplier, FieldExtractor)
-
-        # 'meta' is inherited from CallableModel — should also not be intercepted
-        self.assertNotIsInstance(model.meta, FieldExtractor)
-
-    def test_field_extraction_with_context_args(self):
-        """FieldExtractor works with context_args mode models."""
-        from ccflow import FlowContext
-
-        @Flow.model(context_args=["x"])
-        def prepare(x: int) -> GenericResult[dict]:
-            return GenericResult(value={"doubled": x * 2, "tripled": x * 3})
-
-        model = prepare()
-        doubled = model.doubled
-
-        result = doubled(FlowContext(x=5))
-        self.assertEqual(result.value, 10)
-
-    def test_field_extraction_has_flow_property(self):
-        """FieldExtractor has .flow property (inherits from CallableModel)."""
-
-        @Flow.model
-        def prepare(context: SimpleContext) -> GenericResult[dict]:
-            return GenericResult(value={"x": 1})
-
-        model = prepare()
-        extractor = model.x
-
-        self.assertTrue(hasattr(extractor, "flow"))
-
-    def test_field_extraction_deps(self):
-        """FieldExtractor.__deps__ returns the source as a dependency."""
-
-        @Flow.model
-        def prepare(context: SimpleContext) -> GenericResult[dict]:
-            return GenericResult(value={"x": 1})
-
-        model = prepare()
-        extractor = model.x
-
-        ctx = SimpleContext(value=0)
-        deps = extractor.__deps__(ctx)
-
-        self.assertEqual(len(deps), 1)
-        self.assertIs(deps[0][0], model)
-        self.assertEqual(deps[0][1], [ctx])
-
-    def test_field_extraction_from_bound_model(self):
-        """Field extraction should still work after .flow.with_inputs()."""
-
-        @Flow.model
-        def prepare(x: int) -> GenericResult[dict]:
-            return GenericResult(value={"doubled": x * 2})
-
-        bound = prepare().flow.with_inputs(x=lambda ctx: ctx.x + 1)
-        extractor = bound.doubled
-
-        result = extractor.flow.compute(x=5)
-        self.assertEqual(result, 12)
-
-    def test_field_extraction_deps_from_bound_model(self):
-        """Bound-model extractors should preserve transformed dependency contexts."""
-        from ccflow import FlowContext
-
-        @Flow.model
-        def prepare(x: int) -> GenericResult[dict]:
-            return GenericResult(value={"doubled": x * 2})
-
-        model = prepare()
-        bound = model.flow.with_inputs(x=lambda ctx: ctx.x + 1)
-        extractor = bound.doubled
-
-        ctx = FlowContext(x=5)
-        deps = extractor.__deps__(ctx)
-
-        self.assertEqual(len(deps), 1)
-        self.assertIs(deps[0][0], model)
-        self.assertEqual(deps[0][1][0].x, 6)
 
 
 if __name__ == "__main__":

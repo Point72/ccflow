@@ -536,6 +536,7 @@ class Flow(PydanticBaseModel):
 
         Args:
             context_args: List of parameter names that come from context (for unpacked mode)
+            context_type: Explicit ContextBase subclass to use with context_args mode
             cacheable: Enable caching of results (default: False)
             volatile: Mark as volatile (default: False)
             log_level: Logging verbosity (default: logging.DEBUG)
@@ -555,7 +556,7 @@ class Flow(PydanticBaseModel):
         Mode 2 - Unpacked context_args:
             Context fields are unpacked into function parameters.
 
-            @Flow.model(context_args=["start_date", "end_date"])
+            @Flow.model(context_args=["start_date", "end_date"], context_type=DateRangeContext)
             def load_prices(start_date: date, end_date: date, source: str) -> GenericResult[pl.DataFrame]:
                 return GenericResult(value=query_db(source, start_date, end_date))
 
@@ -807,6 +808,12 @@ class CallableModel(_CallableModel):
 
         return FlowAPI(self)
 
+    def pipe(self, stage: Any, /, *, param: Optional[str] = None, **bindings: Any) -> Any:
+        """Wire this model into a downstream generated ``@Flow.model`` stage."""
+        from .flow_model import pipe_model
+
+        return pipe_model(self, stage, param=param, **bindings)
+
 
 class WrapperModel(CallableModel, Generic[CallableModelType], abc.ABC):
     """Abstract class that represents a wrapper around an underlying model, with the same context and return types.
@@ -960,6 +967,9 @@ def _apply_auto_context(func: Callable[..., Any], *, parent: Optional[Type[Conte
     sig = signature(func)
     base_class = parent or ContextBase
 
+    if sig.return_annotation is inspect.Signature.empty:
+        raise TypeError(f"Function {_callable_qualname(func)} must have a return type annotation when auto_context=True")
+
     # Validate parent fields are in function signature
     if parent is not None:
         parent_fields = set(parent.model_fields.keys()) - set(ContextBase.model_fields.keys())
@@ -973,6 +983,10 @@ def _apply_auto_context(func: Callable[..., Any], *, parent: Optional[Type[Conte
     for name, param in sig.parameters.items():
         if name == "self":
             continue
+        if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+            raise TypeError(f"Function {_callable_qualname(func)} does not support {param.kind.description} when auto_context=True")
+        if param.annotation is inspect.Parameter.empty:
+            raise TypeError(f"Parameter '{name}' must have a type annotation when auto_context=True")
         default = ... if param.default is inspect.Parameter.empty else param.default
         fields[name] = (param.annotation, default)
 

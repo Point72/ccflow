@@ -1024,4 +1024,36 @@ class TestAutoContext(TestCase):
 
         error_msg = str(cm.exception)
         self.assertIn("auto_context must be False, True, or a ContextBase subclass", error_msg)
-        self.assertIn("invalid", error_msg)
+
+    def test_auto_context_rejects_var_args(self):
+        """auto_context should reject *args early with a clear error."""
+        with self.assertRaises(TypeError) as cm:
+
+            class AutoContextCallable(CallableModel):
+                @Flow.call(auto_context=True)
+                def __call__(self, *args: int) -> GenericResult:
+                    return GenericResult(value=len(args))
+
+        self.assertIn("variadic positional", str(cm.exception))
+
+    def test_auto_context_rejects_var_kwargs(self):
+        """auto_context should reject **kwargs early with a clear error."""
+        with self.assertRaises(TypeError) as cm:
+
+            class AutoContextCallable(CallableModel):
+                @Flow.call(auto_context=True)
+                def __call__(self, **kwargs: int) -> GenericResult:
+                    return GenericResult(value=len(kwargs))
+
+        self.assertIn("variadic keyword", str(cm.exception))
+
+    def test_auto_context_requires_return_annotation(self):
+        """auto_context should reject missing return annotations immediately."""
+        with self.assertRaises(TypeError) as cm:
+
+            class AutoContextCallable(CallableModel):
+                @Flow.call(auto_context=True)
+                def __call__(self, *, value: int):
+                    return GenericResult(value=value)
+
+        self.assertIn("must have a return type annotation", str(cm.exception))
