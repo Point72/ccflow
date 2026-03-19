@@ -1,0 +1,24 @@
+# Hydra config for examples/flow_model_hydra_builder_demo.py
+#
+# Pattern:
+# - configure static pipeline specs in YAML
+# - use model_alias to pass already-registered models into a plain Python builder
+# - keep runtime context as runtime inputs, supplied later at execution time
+
+current_revenue:
+    _target_: examples.flow_model_hydra_builder_demo.load_revenue
+    region: us
+
+week_over_week:
+    _target_: examples.flow_model_hydra_builder_demo.build_comparison
+    current:
+        _target_: ccflow.compose.model_alias
+        model_name: current_revenue
+    comparison: week_over_week
+
+month_over_month:
+    _target_: examples.flow_model_hydra_builder_demo.build_comparison
+    current:
+        _target_: ccflow.compose.model_alias
+        model_name: current_revenue
+    comparison: month_over_month
