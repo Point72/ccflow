@@ -11,14 +11,15 @@ and enables clean pickling for distributed computing (e.g., Ray).
 
 import inspect
 import logging
+import threading
 from functools import wraps
 from typing import Annotated, Any, Callable, ClassVar, Dict, List, Optional, Tuple, Type, Union, cast, get_args, get_origin, get_type_hints
 
-from pydantic import Field, TypeAdapter, model_validator
-from typing_extensions import TypedDict
+from pydantic import Field, PrivateAttr, TypeAdapter, model_serializer, model_validator
+from typing_extensions import NotRequired, TypedDict
 
 from .base import ContextBase, ResultBase
-from .callable import CallableModel, Flow, GraphDepList
+from .callable import CallableModel, Flow, GraphDepList, WrapperModel
 from .context import FlowContext
 from .local_persistence import register_ccflow_import_path
 from .result import GenericResult
@@ -109,7 +110,7 @@ def _transform_repr(transform: Any) -> str:
 
 
 def _is_model_dependency(value: Any) -> bool:
-    return isinstance(value, (CallableModel, BoundModel))
+    return isinstance(value, CallableModel)
 
 
 def _bound_field_names(model: Any) -> set[str]:
@@ -160,6 +161,22 @@ def _registry_candidate_allowed(expected_type: Type, candidate: Any) -> bool:
     return True
 
 
+def _type_accepts_str(annotation) -> bool:
+    """Return True when ``str`` is a valid type for *annotation*.
+
+    Handles ``str``, ``Union[str, ...]``, ``Optional[str]``, and
+    ``Annotated[str, ...]``.
+    """
+    if annotation is str:
+        return True
+    origin = get_origin(annotation)
+    if origin is Annotated:
+        return _type_accepts_str(get_args(annotation)[0])
+    if origin is Union:
+        return any(_type_accepts_str(arg) for arg in get_args(annotation) if arg is not type(None))
+    return False
+
+
 def _build_typed_dict_adapter(name: str, schema: Dict[str, Type], *, total: bool = True) -> TypeAdapter:
     """Build a TypeAdapter for a runtime TypedDict schema."""
 
@@ -199,6 +216,17 @@ def _build_config_validators(all_param_types: Dict[str, Type]) -> Tuple[Dict[str
     return validatable_types, validators
 
 
+def _coerce_context_value(name: str, value: Any, validators: Dict[str, TypeAdapter], validatable_types: Dict[str, Type]) -> Any:
+    """Validate/coerce a single context-sourced value. Returns coerced value or raises TypeError."""
+    if name not in validators:
+        return value
+    try:
+        return validators[name].validate_python(value)
+    except Exception:
+        expected = validatable_types.get(name, "unknown")
+        raise TypeError(f"Context field '{name}': expected {expected}, got {type(value).__name__} ({value!r})")
+
+
 def _validate_config_kwargs(kwargs: Dict[str, Any], validatable_types: Dict[str, Type], validators: Dict[str, TypeAdapter]) -> None:
     """Validate plain config inputs while still allowing dependency objects."""
 
@@ -214,8 +242,10 @@ def _validate_config_kwargs(kwargs: Dict[str, Any], validatable_types: Dict[str,
         if value is None or _is_model_dependency(value):
             continue
         if isinstance(value, str) and value in _MR.root():
-            candidate = _resolve_registry_candidate(value)
             expected_type = validatable_types[field_name]
+            if _type_accepts_str(expected_type):
+                continue
+            candidate = _resolve_registry_candidate(value)
             if candidate is not None and _registry_candidate_allowed(expected_type, candidate):
                 continue
         try:
@@ -227,7 +257,7 @@ def _validate_config_kwargs(kwargs: Dict[str, Any], validatable_types: Dict[str,
 
 def _generated_model_instance(stage: Any) -> Optional["_GeneratedFlowModelBase"]:
     if isinstance(stage, BoundModel):
-        model = stage._model
+        model = stage.model
     else:
         model = stage
     if isinstance(model, _GeneratedFlowModelBase):
@@ -324,7 +354,7 @@ def pipe_model(source: Any, stage: Any, /, *, param: Optional[str] = None, **bin
     """Wire ``source`` into a downstream generated ``@Flow.model`` stage."""
 
     if not _is_model_dependency(source):
-        raise TypeError(f"pipe() source must be a CallableModel or BoundModel, got {type(source).__name__}.")
+        raise TypeError(f"pipe() source must be a CallableModel, got {type(source).__name__}.")
 
     target_param, generated_model_cls = _resolve_pipe_param(source, stage, param, bindings)
     build_kwargs = dict(bindings)
@@ -364,6 +394,8 @@ class FlowAPI:
         if get_validator is not None:
             validator = get_validator()
             validated = validator.validate_python(kwargs)
+            if isinstance(validated, ContextBase):
+                return validated
             return FlowContext(**validated)
 
         validator = TypeAdapter(self._model.context_type)
@@ -393,22 +425,27 @@ class FlowAPI:
         all_param_types = getattr(self._model.__class__, "__flow_model_all_param_types__", {})
         model_cls = self._model.__class__
 
-        # If explicit context_args was provided, use _context_schema
+        # If explicit context_args was provided, use _context_schema minus
+        # fields that have function defaults (they aren't truly required).
         explicit_args = getattr(model_cls, "__flow_model_explicit_context_args__", None)
         if explicit_args is not None:
             context_schema = getattr(model_cls, "_context_schema", None)
-            return context_schema.copy() if context_schema is not None else {}
+            if context_schema is None:
+                return {}
+            ctx_arg_defaults = getattr(model_cls, "__flow_model_context_arg_defaults__", {})
+            return {name: typ for name, typ in context_schema.items() if name not in ctx_arg_defaults}
 
         # Dynamic @Flow.model: unbound = params with no explicit value and no declared default
         if all_param_types:
             runtime_inputs = _runtime_input_names(self._model)
             return {name: typ for name, typ in all_param_types.items() if name in runtime_inputs}
 
-        # Generic CallableModel: runtime inputs are the context schema.
+        # Generic CallableModel / Mode 1: runtime inputs are the required
+        # context fields (fields with defaults are not required).
         context_cls = _concrete_context_type(self._model.context_type)
         if context_cls is None or not hasattr(context_cls, "model_fields"):
             return {}
-        return {name: info.annotation for name, info in context_cls.model_fields.items()}
+        return {name: info.annotation for name, info in context_cls.model_fields.items() if info.is_required()}
 
     @property
     def bound_inputs(self) -> Dict[str, Any]:
@@ -445,7 +482,25 @@ class FlowAPI:
         return BoundModel(model=self._model, input_transforms=transforms)
 
 
-class BoundModel:
+_bound_model_restore = threading.local()
+
+
+def _fingerprint_transforms(transforms: Dict[str, Any]) -> Dict[str, str]:
+    """Create a stable, hashable fingerprint of input transforms for cache key differentiation.
+
+    Callable transforms are identified by their id() (unique per object), which is
+    stable within a process lifetime. Static values are repr'd directly.
+    """
+    result = {}
+    for name, transform in sorted(transforms.items()):
+        if callable(transform):
+            result[name] = f"callable:{id(transform)}"
+        else:
+            result[name] = repr(transform)
+    return result
+
+
+class BoundModel(WrapperModel):
     """A model with context transforms applied.
 
     Created by model.flow.with_inputs(). Applies transforms to context
@@ -466,9 +521,44 @@ class BoundModel:
         of a previous transform).
     """
 
-    def __init__(self, model: CallableModel, input_transforms: Dict[str, Any]):
-        self._model = model
-        self._input_transforms = input_transforms
+    _input_transforms: Dict[str, Any] = PrivateAttr(default_factory=dict)
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def _restore_serialized_transforms(cls, values, handler):
+        """Strip serialization-injected keys, restore static transforms, guarantee cleanup.
+
+        Uses thread-local storage to pass static transforms to __init__ because
+        pydantic rejects unknown keys in the input dict.  The wrap validator's
+        try/finally ensures the thread-local is always cleaned up, even if
+        validation fails before __init__ runs.
+        """
+        if isinstance(values, dict):
+            values = dict(values)  # Don't mutate the caller's dict
+            values.pop("_input_transforms_token", None)
+            static = values.pop("_static_transforms", None)
+        else:
+            static = None
+
+        if static is not None:
+            _bound_model_restore.pending = static
+        try:
+            return handler(values)
+        except Exception:
+            _bound_model_restore.pending = None
+            raise
+
+    def __init__(self, *, model: CallableModel, input_transforms: Optional[Dict[str, Any]] = None, **kwargs):
+        super().__init__(model=model, **kwargs)
+        restore = getattr(_bound_model_restore, "pending", None)
+        if restore is not None:
+            _bound_model_restore.pending = None
+        if input_transforms is not None:
+            self._input_transforms = input_transforms
+        elif restore is not None:
+            self._input_transforms = restore
+        else:
+            self._input_transforms = {}
 
     def _transform_context(self, context: ContextBase) -> ContextBase:
         """Return this model's preferred context type with input transforms applied."""
@@ -478,14 +568,35 @@ class BoundModel:
                 ctx_dict[name] = transform(context)
             else:
                 ctx_dict[name] = transform
-        context_type = _concrete_context_type(self._model.context_type)
+        context_type = _concrete_context_type(self.model.context_type)
         if context_type is not None and context_type is not FlowContext:
             return context_type.model_validate(ctx_dict)
         return FlowContext(**ctx_dict)
 
-    def __call__(self, context: ContextBase) -> Any:
+    @Flow.call
+    def __call__(self, context: ContextBase) -> ResultBase:
         """Call the model with transformed context."""
-        return self._model(self._transform_context(context))
+        return self.model(self._transform_context(context))
+
+    @Flow.deps
+    def __deps__(self, context: ContextBase) -> GraphDepList:
+        """Declare the wrapped model as an upstream dependency with transformed context."""
+        return [(self.model, [self._transform_context(context)])]
+
+    @model_serializer(mode="wrap")
+    def _serialize_with_transforms(self, handler):
+        """Include transforms in serialization for cache keys and faithful roundtrips.
+
+        Static (non-callable) transforms are serialized in _static_transforms for
+        faithful restoration. A fingerprint token covers all transforms (including
+        callables) for cache key differentiation.
+        """
+        data = handler(self)
+        static = {k: v for k, v in self._input_transforms.items() if not callable(v)}
+        if static:
+            data["_static_transforms"] = static
+        data["_input_transforms_token"] = _fingerprint_transforms(self._input_transforms)
+        return data
 
     def pipe(self, stage: Any, /, *, param: Optional[str] = None, **bindings: Any) -> Any:
         """Wire this bound model into a downstream generated ``@Flow.model`` stage."""
@@ -493,16 +604,12 @@ class BoundModel:
 
     def __repr__(self) -> str:
         transforms = ", ".join(f"{name}={_transform_repr(transform)}" for name, transform in self._input_transforms.items())
-        return f"{self._model!r}.flow.with_inputs({transforms})"
+        return f"{self.model!r}.flow.with_inputs({transforms})"
 
     @property
     def flow(self) -> "FlowAPI":
         """Access the flow API."""
         return _BoundFlowAPI(self)
-
-    @property
-    def context_type(self) -> Type[ContextBase]:
-        return self._model.context_type
 
 
 class _BoundFlowAPI(FlowAPI):
@@ -510,11 +617,11 @@ class _BoundFlowAPI(FlowAPI):
 
     def __init__(self, bound_model: BoundModel):
         self._bound = bound_model
-        super().__init__(bound_model._model)
+        super().__init__(bound_model.model)
 
     def compute(self, **kwargs) -> Any:
         ctx = self._build_context(kwargs)
-        return self._bound(ctx)  # Call through BoundModel, not _model
+        return self._bound(ctx)  # Call through BoundModel, not inner model
 
     def with_inputs(self, **transforms) -> "BoundModel":
         """Chain transforms: merge new transforms with existing ones.
@@ -522,7 +629,7 @@ class _BoundFlowAPI(FlowAPI):
         New transforms override existing ones for the same key.
         """
         merged = {**self._bound._input_transforms, **transforms}
-        return BoundModel(model=self._bound._model, input_transforms=merged)
+        return BoundModel(model=self._bound.model, input_transforms=merged)
 
 
 class _GeneratedFlowModelBase(CallableModel):
@@ -535,7 +642,10 @@ class _GeneratedFlowModelBase(CallableModel):
     __flow_model_explicit_context_args__: ClassVar[Optional[List[str]]] = None
     __flow_model_all_param_types__: ClassVar[Dict[str, Type]] = {}
     __flow_model_default_param_names__: ClassVar[set[str]] = set()
+    __flow_model_context_arg_defaults__: ClassVar[Dict[str, Any]] = {}
     __flow_model_auto_wrap__: ClassVar[bool] = False
+    __flow_model_validatable_types__: ClassVar[Dict[str, Type]] = {}
+    __flow_model_config_validators__: ClassVar[Dict[str, TypeAdapter]] = {}
     _context_schema: ClassVar[Dict[str, Type]] = {}
     _context_td: ClassVar[Any | None] = None
     _cached_context_validator: ClassVar[TypeAdapter | None] = None
@@ -553,7 +663,7 @@ class _GeneratedFlowModelBase(CallableModel):
             value = resolved[field_name]
             if not isinstance(value, str):
                 continue
-            if expected_type is str:
+            if _type_accepts_str(expected_type):
                 continue
             candidate = _resolve_registry_candidate(value)
             if candidate is None:
@@ -561,6 +671,30 @@ class _GeneratedFlowModelBase(CallableModel):
             if _registry_candidate_allowed(expected_type, candidate):
                 resolved[field_name] = candidate
         return resolved
+
+    @model_validator(mode="after")
+    def _validate_field_types(self):
+        """Validate field values against their declared types.
+
+        This catches type mismatches in the model_validate/deserialization path,
+        where fields are typed as Any and pydantic won't reject wrong types.
+        """
+        cls = self.__class__
+        config_validators = getattr(cls, "__flow_model_config_validators__", {})
+        validatable_types = getattr(cls, "__flow_model_validatable_types__", {})
+        if not config_validators:
+            return self
+
+        for field_name, validator in config_validators.items():
+            value = getattr(self, field_name, _DEFERRED_INPUT)
+            if _has_deferred_input(value) or value is None or _is_model_dependency(value):
+                continue
+            try:
+                validator.validate_python(value)
+            except Exception:
+                expected_type = validatable_types[field_name]
+                raise TypeError(f"Field '{field_name}': expected {expected_type}, got {type(value).__name__} ({value!r})")
+        return self
 
     @property
     def context_type(self) -> Type[ContextBase]:
@@ -582,7 +716,13 @@ class _GeneratedFlowModelBase(CallableModel):
 
         if explicit_args is not None or not getattr(cls, "__flow_model_use_context_args__", True):
             if cls._cached_context_validator is None:
-                if cls._context_td is not None:
+                use_ctx_args = getattr(cls, "__flow_model_use_context_args__", True)
+                ctx_type = cls.__flow_model_context_type__
+                if not use_ctx_args and isinstance(ctx_type, type) and issubclass(ctx_type, ContextBase) and ctx_type is not FlowContext:
+                    # Mode 1 with concrete context type — use TypeAdapter(context_type)
+                    # directly so defaults on the context type are respected.
+                    cls._cached_context_validator = TypeAdapter(ctx_type)
+                elif cls._context_td is not None:
                     cls._cached_context_validator = TypeAdapter(cls._context_td)
                 elif cls._context_schema:
                     cls._cached_context_validator = _build_typed_dict_adapter(f"{cls.__name__}Inputs", cls._context_schema)
@@ -701,6 +841,7 @@ def _build_context_schema(
     """
     # Build schema dict from parameter annotations
     schema = {}
+    td_schema = {}
     for name in context_args:
         if name not in sig.parameters:
             raise ValueError(f"context_arg '{name}' not found in function parameters")
@@ -709,14 +850,25 @@ def _build_context_schema(
         if annotation is inspect.Parameter.empty:
             raise ValueError(f"context_arg '{name}' must have a type annotation")
         schema[name] = annotation
+        # Use NotRequired in the TypedDict for params that have a default in the
+        # function signature, so compute() doesn't require them.
+        if param.default is not inspect.Parameter.empty:
+            td_schema[name] = NotRequired[annotation]
+        else:
+            td_schema[name] = annotation
 
     # Create TypedDict for validation (not registered anywhere!)
-    context_td = TypedDict(f"{_callable_name(func)}Inputs", schema)
+    context_td = TypedDict(f"{_callable_name(func)}Inputs", td_schema)
 
     return schema, context_td
 
 
-def _validate_context_type_override(context_type: Any, context_args: List[str], func_schema: Dict[str, Type]) -> Type[ContextBase]:
+def _validate_context_type_override(
+    context_type: Any,
+    context_args: List[str],
+    func_schema: Dict[str, Type],
+    func_defaults: set[str] = frozenset(),
+) -> Type[ContextBase]:
     """Validate an explicit ``context_type`` override for ``context_args`` mode."""
 
     if not isinstance(context_type, type) or not issubclass(context_type, ContextBase):
@@ -751,6 +903,14 @@ def _validate_context_type_override(context_type: Any, context_args: List[str], 
                     f"context_arg '{name}': function annotates {func_ann.__name__} "
                     f"but context_type {context_type.__name__} declares {ctx_ann.__name__}"
                 )
+
+    # Reject if the function has a default for a context_arg but the
+    # context_type declares that field as required — this is contradictory.
+    for name in context_args:
+        if name in func_defaults:
+            ctx_field = context_fields.get(name)
+            if ctx_field is not None and ctx_field.is_required():
+                raise TypeError(f"context_arg '{name}': function has a default but context_type {context_type.__name__} requires this field")
 
     return context_type
 
@@ -855,8 +1015,11 @@ def flow_model(
             # Mode 2: Explicit context_args - specified params come from context
             context_param_name = "context"
             context_schema_early, context_td_early = _build_context_schema(context_args, fn, sig, _resolved_hints)
+            _func_defaults_set = {name for name in context_args if sig.parameters[name].default is not inspect.Parameter.empty}
             explicit_context_type = (
-                _validate_context_type_override(context_type, context_args, context_schema_early) if context_type is not None else None
+                _validate_context_type_override(context_type, context_args, context_schema_early, _func_defaults_set)
+                if context_type is not None
+                else None
             )
             resolved_context_type = explicit_context_type if explicit_context_type is not None else FlowContext
             # Exclude context_args from model fields
@@ -914,6 +1077,17 @@ def flow_model(
         ctx_args_for_closure = context_args if context_args is not None else []
         is_dynamic_mode = use_context_args and explicit_context_args is None
 
+        # Compute context_arg defaults and validators for Mode 2 (context_args)
+        context_arg_defaults: Dict[str, Any] = {}
+        _ctx_validatable_types: Dict[str, Type] = {}
+        _ctx_validators: Dict[str, TypeAdapter] = {}
+        if context_args is not None:
+            for name in context_args:
+                p = sig.parameters[name]
+                if p.default is not inspect.Parameter.empty:
+                    context_arg_defaults[name] = p.default
+            _ctx_validatable_types, _ctx_validators = _build_config_validators(context_schema_early)
+
         # Create the __call__ method
         def make_call_impl():
             def __call__(self, context):
@@ -929,7 +1103,7 @@ def flow_model(
 
                 def _resolve_field(name, value):
                     """Resolve a single field value, handling lazy wrapping."""
-                    is_dep = isinstance(value, (CallableModel, BoundModel))
+                    is_dep = isinstance(value, CallableModel)
                     if name in lazy_fields:
                         # Lazy field: wrap in a thunk regardless of type
                         if is_dep:
@@ -952,7 +1126,14 @@ def flow_model(
                 elif not is_dynamic_mode:
                     # Mode 2: Explicit context_args - get those from context, rest from self
                     for name in ctx_args_for_closure:
-                        fn_kwargs[name] = getattr(context, name)
+                        value = getattr(context, name, _UNSET)
+                        if value is _UNSET:
+                            if name in context_arg_defaults:
+                                fn_kwargs[name] = context_arg_defaults[name]
+                            else:
+                                raise TypeError(f"Missing context field '{name}'")
+                        else:
+                            fn_kwargs[name] = _coerce_context_value(name, value, _ctx_validators, _ctx_validatable_types)
                     # Add model fields
                     for name in all_param_names:
                         value = getattr(self, name)
@@ -976,7 +1157,10 @@ def flow_model(
                             if value is _UNSET:
                                 missing_fields.append(name)
                                 continue
-                        fn_kwargs[name] = value
+                            # Validate/coerce context-sourced value, skip CallableModel deps
+                            if not _is_model_dependency(value):
+                                value = _coerce_context_value(name, value, _config_validators, _validatable_types)
+                        fn_kwargs[name] = _resolve_field(name, value)
 
                     if missing_fields:
                         missing = ", ".join(sorted(missing_fields))
@@ -1021,13 +1205,13 @@ def flow_model(
         def make_deps_impl():
             def __deps__(self, context) -> GraphDepList:
                 deps = []
-                # Check ALL fields for CallableModels/BoundModels (auto-detection)
+                # Check ALL fields for CallableModel dependencies (auto-detection)
                 for name in model_fields:
                     if name in lazy_fields:
                         continue  # Lazy deps are NOT pre-evaluated
                     value = getattr(self, name)
                     if isinstance(value, BoundModel):
-                        deps.append((value._model, [value._transform_context(context)]))
+                        deps.append((value.model, [value._transform_context(context)]))
                     elif isinstance(value, CallableModel):
                         deps.append((value, [context]))
                 return deps
@@ -1078,7 +1262,10 @@ def flow_model(
         GeneratedModel.__flow_model_explicit_context_args__ = explicit_context_args
         GeneratedModel.__flow_model_all_param_types__ = all_param_types  # All param name -> type
         GeneratedModel.__flow_model_default_param_names__ = default_param_names
+        GeneratedModel.__flow_model_context_arg_defaults__ = context_arg_defaults
         GeneratedModel.__flow_model_auto_wrap__ = auto_wrap_result
+        GeneratedModel.__flow_model_validatable_types__ = _validatable_types
+        GeneratedModel.__flow_model_config_validators__ = _config_validators
 
         # Build context_schema
         context_schema: Dict[str, Type] = {}

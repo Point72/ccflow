@@ -845,6 +845,49 @@ class TestFlowModelValidation(TestCase):
         self.assertIn("int", str(cm.exception))
         self.assertIn("str", str(cm.exception))
 
+    def test_model_validate_rejects_bad_scalar_type(self):
+        """model_validate should reject wrong scalar types, not silently accept them."""
+
+        @Flow.model
+        def source(context: SimpleContext, x: int) -> GenericResult[int]:
+            return GenericResult(value=x)
+
+        cls = type(source(x=1))
+        with self.assertRaises(TypeError) as cm:
+            cls.model_validate({"x": "abc"})
+
+        self.assertIn("x", str(cm.exception))
+
+    def test_model_validate_accepts_correct_type(self):
+        """model_validate should accept correct types."""
+
+        @Flow.model
+        def source(context: SimpleContext, x: int) -> GenericResult[int]:
+            return GenericResult(value=x)
+
+        cls = type(source(x=1))
+        restored = cls.model_validate({"x": 42})
+        self.assertEqual(restored(SimpleContext(value=0)).value, 42)
+
+    def test_model_validate_rejects_bad_registry_alias(self):
+        """Typoed registry aliases should not silently pass through model_validate."""
+
+        registry = ModelRegistry.root()
+        registry.clear()
+        try:
+
+            @Flow.model
+            def consumer(context: SimpleContext, n: int = 10) -> GenericResult[int]:
+                return GenericResult(value=n)
+
+            cls = type(consumer(n=1))
+            # "not_in_registry" is not a valid int and not a valid registry key
+            with self.assertRaises(TypeError) as cm:
+                cls.model_validate({"n": "not_in_registry"})
+            self.assertIn("n", str(cm.exception))
+        finally:
+            registry.clear()
+
     def test_context_type_compatible_annotations_accepted(self):
         """context_type validation should accept matching or subclass annotations."""
 
@@ -863,6 +906,16 @@ class TestFlowModelValidation(TestCase):
 
 class TestBoundModel(TestCase):
     """Tests for BoundModel and BoundModel.flow."""
+
+    def test_bound_model_is_callable_model(self):
+        """BoundModel should be a proper CallableModel subclass."""
+
+        @Flow.model
+        def source(x: int) -> int:
+            return x * 10
+
+        bound = source().flow.with_inputs(x=lambda ctx: ctx.x * 2)
+        self.assertIsInstance(bound, CallableModel)
 
     def test_bound_model_flow_compute(self):
         """Test that bound.flow.compute() honors transforms."""
@@ -896,6 +949,66 @@ class TestBoundModel(TestCase):
         # y is statically bound to 3, x=7
         # 7 * 3 = 21
         self.assertEqual(result.value, 21)
+
+    def test_bound_model_dump_validate_roundtrip_static(self):
+        """Static transforms survive model_dump → model_validate roundtrip."""
+
+        @Flow.model
+        def source(context: SimpleContext) -> GenericResult[int]:
+            return GenericResult(value=context.value * 10)
+
+        bound = source().flow.with_inputs(value=42)
+        dump = bound.model_dump(mode="python")
+        restored = type(bound).model_validate(dump)
+
+        ctx = SimpleContext(value=1)
+        self.assertEqual(bound(ctx).value, 420)
+        self.assertEqual(restored(ctx).value, 420)
+
+    def test_bound_model_validate_same_payload_twice(self):
+        """Validating the same serialized BoundModel payload twice should work both times."""
+        from ccflow.flow_model import BoundModel
+
+        @Flow.model
+        def source(context: SimpleContext) -> GenericResult[int]:
+            return GenericResult(value=context.value * 10)
+
+        bound = source().flow.with_inputs(value=42)
+        dump = bound.model_dump(mode="python")
+
+        r1 = BoundModel.model_validate(dump)
+        r2 = BoundModel.model_validate(dump)
+
+        ctx = SimpleContext(value=1)
+        self.assertEqual(r1(ctx).value, 420)
+        self.assertEqual(r2(ctx).value, 420)
+
+    def test_bound_model_failed_validate_does_not_poison_next_construction(self):
+        """A failed model_validate must not leak static transforms to subsequent constructions."""
+        from ccflow.flow_model import BoundModel
+
+        @Flow.model
+        def source(context: SimpleContext) -> GenericResult[int]:
+            return GenericResult(value=context.value * 10)
+
+        base = source()
+
+        # Attempt a model_validate that will fail (invalid model field)
+        try:
+            BoundModel.model_validate(
+                {
+                    "model": "not-a-real-model",
+                    "_static_transforms": {"value": 42},
+                    "_input_transforms_token": {"value": "42"},
+                }
+            )
+        except Exception:
+            pass  # Expected to fail
+
+        # Now construct a fresh BoundModel normally — must NOT inherit stale transforms
+        clean = BoundModel(model=base, input_transforms={})
+        ctx = SimpleContext(value=1)
+        self.assertEqual(clean(ctx).value, 10)  # 1 * 10, no transform applied
 
     def test_bound_model_cloudpickle_with_lambda_transform(self):
         """BoundModel with lambda transforms should survive cloudpickle round-trip."""
@@ -1055,6 +1168,33 @@ class TestBoundModel(TestCase):
         # data=5 < 100, so slow path: x transform: 7+10=17, source: 17*3=51
         self.assertEqual(result.value, 51)
 
+    def test_differently_transformed_bound_models_have_distinct_cache_keys(self):
+        """Two BoundModels with different transforms must not collide under caching."""
+
+        call_counts = {"source": 0}
+
+        @Flow.model
+        def source(context: SimpleContext) -> GenericResult[int]:
+            call_counts["source"] += 1
+            return GenericResult(value=context.value * 10)
+
+        base = source()
+        b1 = base.flow.with_inputs(value=lambda ctx: ctx.value + 1)
+        b2 = base.flow.with_inputs(value=lambda ctx: ctx.value + 2)
+        evaluator = MemoryCacheEvaluator()
+        ctx = SimpleContext(value=5)
+
+        with FlowOptionsOverride(options={"evaluator": evaluator, "cacheable": True}):
+            r1 = b1(ctx)
+            r2 = b2(ctx)
+
+        # b1 transforms value to 6, source: 6*10=60
+        # b2 transforms value to 7, source: 7*10=70
+        self.assertEqual(r1.value, 60)
+        self.assertEqual(r2.value, 70)
+        # Source called twice (once per distinct transformed context)
+        self.assertEqual(call_counts["source"], 2)
+
     def test_bound_and_unbound_models_share_memory_cache(self):
         """Shifted and unshifted models should share one evaluator cache.
 
@@ -1083,7 +1223,9 @@ class TestBoundModel(TestCase):
 
         # One execution for the unshifted context and one for the shifted context.
         self.assertEqual(call_counts["source"], 2)
-        self.assertEqual(len(evaluator.cache), 2)
+        # Cache has 3 entries: base(ctx), BoundModel(ctx), and base(shifted_ctx).
+        # BoundModel is a proper CallableModel now, so it gets its own cache entry.
+        self.assertEqual(len(evaluator.cache), 3)
 
     def test_transform_error_propagates(self):
         """A buggy transform should raise, not silently fall back to FlowContext."""
@@ -1792,6 +1934,251 @@ class TestLazyTypeAnnotation(TestCase):
 
         result = model(SimpleContext(value=5))
         self.assertEqual(result.value, 51)  # 50 + 1
+
+
+# =============================================================================
+# Bug Fix Regression Tests
+# =============================================================================
+
+
+class TestFlowModelBugFixes(TestCase):
+    """Regression tests for four bugs identified during code review."""
+
+    # ----- Issue 1: .flow.compute() drops context defaults -----
+
+    def test_compute_respects_explicit_context_defaults(self):
+        """Mode 1: compute(x=1) should use ExtendedContext's default y='default'."""
+
+        @Flow.model
+        def model_fn(context: ExtendedContext, factor: int = 1) -> str:
+            return f"{context.x}-{context.y}-{factor}"
+
+        model = model_fn()
+        result = model.flow.compute(x=1)
+        self.assertEqual(result.value, "1-default-1")
+
+    def test_compute_respects_context_args_defaults(self):
+        """Mode 2: compute(x=1) should use function default y=42."""
+
+        @Flow.model(context_args=["x", "y"])
+        def model_fn(x: int, y: int = 42) -> int:
+            return x + y
+
+        model = model_fn()
+        result = model.flow.compute(x=1)
+        self.assertEqual(result.value, 43)
+
+    def test_unbound_inputs_excludes_context_args_with_defaults(self):
+        """Mode 2: unbound_inputs should not include context_args that have function defaults."""
+
+        @Flow.model(context_args=["x", "y"])
+        def model_fn(x: int, y: int = 42) -> int:
+            return x + y
+
+        model = model_fn()
+        self.assertEqual(model.flow.unbound_inputs, {"x": int})
+
+    def test_unbound_inputs_excludes_context_type_defaults(self):
+        """Mode 1: unbound_inputs should not include context fields that have defaults."""
+
+        @Flow.model
+        def model_fn(context: ExtendedContext) -> str:
+            return f"{context.x}-{context.y}"
+
+        model = model_fn()
+        # ExtendedContext has x: int (required) and y: str = "default"
+        self.assertEqual(model.flow.unbound_inputs, {"x": int})
+
+    def test_context_type_rejects_required_field_with_function_default(self):
+        """Decoration should fail when function has default but context_type requires the field."""
+
+        class StrictContext(ContextBase):
+            x: int  # required
+
+        with self.assertRaises(TypeError) as cm:
+
+            @Flow.model(context_args=["x"], context_type=StrictContext)
+            def model_fn(x: int = 5) -> int:
+                return x
+
+        self.assertIn("x", str(cm.exception))
+        self.assertIn("requires", str(cm.exception))
+
+    def test_context_type_accepts_optional_field_with_function_default(self):
+        """Both context_type and function have defaults — should work."""
+
+        class OptionalContext(ContextBase):
+            x: int = 10
+
+        @Flow.model(context_args=["x"], context_type=OptionalContext)
+        def model_fn(x: int = 5) -> int:
+            return x
+
+        model = model_fn()
+        result = model(OptionalContext())
+        self.assertEqual(result.value, 10)  # context default wins
+
+    # ----- Issue 2: Lazy[...] broken in dynamic deferred mode -----
+
+    def test_lazy_from_runtime_context_in_dynamic_mode(self):
+        """Lazy[int] provided via FlowContext should be wrapped in a thunk."""
+
+        @Flow.model
+        def model_fn(x: int, y: Lazy[int]) -> int:
+            return x + y()
+
+        model = model_fn(x=10)
+        result = model(FlowContext(y=32))
+        self.assertEqual(result.value, 42)
+
+    def test_callable_model_from_runtime_context_in_dynamic_mode(self):
+        """CallableModel provided in FlowContext should be resolved."""
+
+        @Flow.model
+        def source(value: int) -> int:
+            return value * 10
+
+        @Flow.model
+        def consumer(x: int, data: int) -> int:
+            return x + data
+
+        model = consumer(x=1)
+        src = source()
+        result = model(FlowContext(data=src, value=5))
+        # source resolves with value=5 → 50, consumer: 1 + 50 = 51
+        self.assertEqual(result.value, 51)
+
+    # ----- Issue 3: FlowContext-backed models skip schema validation -----
+
+    def test_direct_call_validates_flowcontext_dynamic_mode(self):
+        """Dynamic mode: FlowContext(y='hello') for int param should raise TypeError."""
+
+        @Flow.model
+        def model_fn(x: int, y: int) -> int:
+            return x + y
+
+        model = model_fn()
+        with self.assertRaises(TypeError) as cm:
+            model(FlowContext(x=1, y="hello"))
+
+        self.assertIn("y", str(cm.exception))
+
+    def test_direct_call_validates_flowcontext_context_args_mode(self):
+        """context_args mode: FlowContext(x='hello') for int param should raise TypeError."""
+
+        @Flow.model(context_args=["x"])
+        def model_fn(x: int) -> int:
+            return x
+
+        model = model_fn()
+        with self.assertRaises(TypeError) as cm:
+            model(FlowContext(x="hello"))
+
+        self.assertIn("x", str(cm.exception))
+
+    def test_with_inputs_validates_transformed_fields_dynamic(self):
+        """Dynamic mode: with_inputs(y='hello') for int param should raise TypeError."""
+
+        @Flow.model
+        def model_fn(x: int, y: int) -> int:
+            return x + y
+
+        model = model_fn(x=1)
+        bound = model.flow.with_inputs(y="hello")
+
+        with self.assertRaises(TypeError) as cm:
+            bound(FlowContext())
+
+        self.assertIn("y", str(cm.exception))
+
+    def test_with_inputs_validates_transformed_fields_context_args(self):
+        """context_args mode: with_inputs(x='hello') for int param should raise TypeError."""
+
+        @Flow.model(context_args=["x"])
+        def model_fn(x: int) -> int:
+            return x
+
+        model = model_fn()
+        bound = model.flow.with_inputs(x="hello")
+
+        with self.assertRaises(TypeError) as cm:
+            bound(FlowContext())
+
+        self.assertIn("x", str(cm.exception))
+
+    # ----- Issue 4: Registry-name resolution too aggressive for union strings -----
+
+    def test_registry_resolution_skips_union_str_annotation(self):
+        """Union[str, int] field with a registry key string should keep the string."""
+        from typing import Union
+
+        registry = ModelRegistry.root()
+        registry.clear()
+        try:
+
+            @Flow.model
+            def dummy(context: SimpleContext) -> GenericResult[int]:
+                return GenericResult(value=1)
+
+            registry.add("my_key", dummy())
+
+            @Flow.model
+            def consumer(context: SimpleContext, tag: Union[str, int] = "none") -> str:
+                return f"tag={tag}"
+
+            model = consumer(tag="my_key")
+            result = model(SimpleContext(value=0))
+            self.assertEqual(result.value, "tag=my_key")
+        finally:
+            registry.clear()
+
+    def test_registry_resolution_skips_optional_str_annotation(self):
+        """Optional[str] field with a registry key string should keep the string."""
+        from typing import Optional
+
+        registry = ModelRegistry.root()
+        registry.clear()
+        try:
+
+            @Flow.model
+            def dummy(context: SimpleContext) -> GenericResult[int]:
+                return GenericResult(value=1)
+
+            registry.add("my_key", dummy())
+
+            @Flow.model
+            def consumer(context: SimpleContext, label: Optional[str] = None) -> str:
+                return f"label={label}"
+
+            model = consumer(label="my_key")
+            result = model(SimpleContext(value=0))
+            self.assertEqual(result.value, "label=my_key")
+        finally:
+            registry.clear()
+
+    def test_registry_resolution_skips_union_annotated_str(self):
+        """Union[Annotated[str, ...], int] field with a registry key should keep the string."""
+        from typing import Annotated, Union
+
+        registry = ModelRegistry.root()
+        registry.clear()
+        try:
+
+            @Flow.model
+            def dummy(context: SimpleContext) -> GenericResult[int]:
+                return GenericResult(value=1)
+
+            registry.add("my_key", dummy())
+
+            @Flow.model
+            def consumer(context: SimpleContext, tag: Union[Annotated[str, "label"], int] = "none") -> str:
+                return f"tag={tag}"
+
+            model = consumer(tag="my_key")
+            result = model(SimpleContext(value=0))
+            self.assertEqual(result.value, "tag=my_key")
+        finally:
+            registry.clear()
 
 
 if __name__ == "__main__":
