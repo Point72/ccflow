@@ -103,7 +103,7 @@ context" and you want that split to stay stable and explicit:
 - you want the generated model to accept a specific existing context type
   such as `DateRangeContext`
 
-**Mode 3 — Default deferred style (no explicit context):**
+**Mode 3 — Dynamic deferred style (no explicit context):**
 
 When there is no `context` parameter and no `context_args`, all parameters are
 potential configuration or runtime inputs. Parameters provided at construction

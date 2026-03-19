@@ -222,9 +222,9 @@ def _coerce_context_value(name: str, value: Any, validators: Dict[str, TypeAdapt
         return value
     try:
         return validators[name].validate_python(value)
-    except Exception:
+    except Exception as exc:
         expected = validatable_types.get(name, "unknown")
-        raise TypeError(f"Context field '{name}': expected {expected}, got {type(value).__name__} ({value!r})")
+        raise TypeError(f"Context field '{name}': expected {expected}, got {type(value).__name__} ({value!r})") from exc
 
 
 def _validate_config_kwargs(kwargs: Dict[str, Any], validatable_types: Dict[str, Type], validators: Dict[str, TypeAdapter]) -> None:
@@ -767,6 +767,13 @@ class Lazy:
        ``with_inputs()`` for deferred execution::
 
            lookback = Lazy(model)(start_date=lambda ctx: ctx.start_date - timedelta(days=7))
+
+    **Which to use:**
+
+    - Use ``Lazy[T]`` in a ``@Flow.model`` signature when you want conditional/
+      on-demand evaluation of an expensive upstream dependency.
+    - Use ``Lazy(model)(...)`` when you need to rewire context fields before
+      passing them to an existing model (e.g., shifting a date window).
     """
 
     def __class_getitem__(cls, item):
@@ -993,7 +1000,21 @@ def flow_model(
         else:
             internal_return_type = return_type
 
-        # Determine context mode
+        # ── Context mode selection ──
+        # The decorator supports three mutually exclusive context modes:
+        #
+        # Mode 1 (explicit context): Function has a 'context' (or '_') parameter
+        #   annotated with a ContextBase subclass. Behaves like a traditional
+        #   CallableModel.__call__. Other params become model fields.
+        #
+        # Mode 2 (context_args): Decorator specifies context_args=[...] listing
+        #   which params come from the context at runtime. Remaining params become
+        #   model fields. Uses FlowContext unless context_type= overrides it.
+        #
+        # Mode 3 (dynamic deferred): No 'context' param and no context_args.
+        #   Every param is a potential model field. Params bound at construction
+        #   are config; unbound params become runtime inputs from FlowContext.
+        #
         context_schema_early: Dict[str, Type] = {}
         context_td_early = None
         if "context" in params or "_" in params:

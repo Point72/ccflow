@@ -86,6 +86,28 @@ class TestFlowContext:
 
         assert len({first, second, third}) == 3
 
+    def test_flow_context_hash_raises_for_unhashable_values(self):
+        """FlowContext with truly unhashable values (no __dict__) should raise TypeError."""
+
+        class Unhashable:
+            __hash__ = None  # type: ignore[assignment]
+
+            def __init__(self):
+                pass
+
+            # Deliberately no __dict__ suppression — but __hash__ is None,
+            # so the fallback path in _freeze_for_hash should use __dict__.
+            # To trigger the actual TypeError path, we need an object with
+            # no __dict__ and no __hash__.
+
+        class UnhashableSlots:
+            __slots__ = ()
+            __hash__ = None  # type: ignore[assignment]
+
+        ctx = FlowContext(val=UnhashableSlots())
+        with pytest.raises(TypeError, match="unhashable value"):
+            hash(ctx)
+
     def test_flow_context_pickle(self):
         """FlowContext pickles cleanly."""
         ctx = FlowContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31))
