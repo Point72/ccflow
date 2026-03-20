@@ -1057,3 +1057,100 @@ class TestAutoContext(TestCase):
                     return GenericResult(value=value)
 
         self.assertIn("must have a return type annotation", str(cm.exception))
+
+    def test_auto_context_rejects_missing_annotation(self):
+        """auto_context should reject params without type annotations."""
+        with self.assertRaises(TypeError) as cm:
+
+            class AutoContextCallable(CallableModel):
+                @Flow.call(auto_context=True)
+                def __call__(self, *, value) -> GenericResult:
+                    return GenericResult(value=value)
+
+        self.assertIn("must have a type annotation", str(cm.exception))
+
+
+class TestDeclaredTypeMatches(TestCase):
+    """Tests for _declared_type_matches helper in callable.py."""
+
+    def test_typevar_always_matches(self):
+        from ccflow.callable import _declared_type_matches
+
+        T = TypeVar("T")
+        self.assertTrue(_declared_type_matches(int, T))
+
+    def test_union_expected_no_type_args(self):
+        """Union with no concrete type args should return False."""
+        from ccflow.callable import _declared_type_matches
+
+        # Union[None] after filtering out NoneType has no concrete args
+        self.assertFalse(_declared_type_matches(int, Union[None]))
+
+    def test_union_expected_with_actual_type(self):
+        """Concrete type matching Union expected."""
+        from ccflow.callable import _declared_type_matches
+
+        self.assertTrue(_declared_type_matches(int, Union[int, str]))
+        self.assertFalse(_declared_type_matches(float, Union[int, str]))
+
+    def test_union_both_sides(self):
+        """Both actual and expected are Unions."""
+        from ccflow.callable import _declared_type_matches
+
+        self.assertTrue(_declared_type_matches(Union[int, str], Union[int, str]))
+        self.assertTrue(_declared_type_matches(Union[str, int], Union[int, str]))  # order independent
+        self.assertFalse(_declared_type_matches(Union[int, float], Union[int, str]))
+
+    def test_non_type_actual(self):
+        """Non-type actual should return False."""
+        from ccflow.callable import _declared_type_matches
+
+        self.assertFalse(_declared_type_matches("not_a_type", int))
+
+    def test_non_type_expected(self):
+        """Non-type expected should return False."""
+        from ccflow.callable import _declared_type_matches
+
+        self.assertFalse(_declared_type_matches(int, "not_a_type"))
+
+
+class TestCallableModelGenericValidation(TestCase):
+    """Tests for CallableModelGeneric type validation paths."""
+
+    def test_context_type_mismatch_raises(self):
+        """Generic type validation should reject context type mismatch."""
+
+        class ContextA(ContextBase):
+            a: int
+
+        class ContextB(ContextBase):
+            b: int
+
+        class ModelA(CallableModel):
+            @Flow.call
+            def __call__(self, context: ContextA) -> GenericResult[int]:
+                return GenericResult(value=context.a)
+
+        with self.assertRaises(ValidationError):
+            # Expect ContextB but model has ContextA
+            CallableModelGenericType[ContextB, GenericResult[int]].model_validate(ModelA())
+
+    def test_result_type_mismatch_raises(self):
+        """Generic type validation should reject result type mismatch."""
+
+        class MyContext(ContextBase):
+            x: int
+
+        class ResultA(ResultBase):
+            a: int
+
+        class ResultB(ResultBase):
+            b: int
+
+        class ModelA(CallableModel):
+            @Flow.call
+            def __call__(self, context: MyContext) -> ResultA:
+                return ResultA(a=context.x)
+
+        with self.assertRaises(ValidationError):
+            CallableModelGenericType[MyContext, ResultB].model_validate(ModelA())

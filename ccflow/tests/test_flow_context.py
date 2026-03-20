@@ -108,6 +108,46 @@ class TestFlowContext:
         with pytest.raises(TypeError, match="unhashable value"):
             hash(ctx)
 
+    def test_flow_context_eq_non_flow_context(self):
+        """FlowContext.__eq__ returns False for non-FlowContext objects."""
+        ctx = FlowContext(x=1)
+        assert ctx != 42
+        assert ctx != "hello"
+        assert ctx != None  # noqa: E711
+        assert ctx != NumberContext(x=1)
+
+    def test_flow_context_hash_with_set_value(self):
+        """FlowContext with set values should hash correctly via frozenset."""
+        ctx = FlowContext(tags=frozenset({"a", "b"}))
+        # Should not raise
+        h = hash(ctx)
+        assert isinstance(h, int)
+
+    def test_flow_context_hash_with_model_dump_object(self):
+        """_freeze_for_hash should handle objects with model_dump attribute."""
+        from ccflow.context import _freeze_for_hash
+
+        # Directly test _freeze_for_hash with an object that has model_dump
+        # (FlowContext.__hash__ goes through model_dump first which serializes
+        # nested models, so we test the helper directly)
+        inner = NumberContext(x=42)
+        result = _freeze_for_hash(inner)
+        assert isinstance(result, tuple)
+        assert result[0] is NumberContext
+
+    def test_flow_context_hash_unhashable_with_dict_fallback(self):
+        """Objects with __dict__ but no __hash__ should use __dict__ fallback."""
+
+        class UnhashableWithDict:
+            __hash__ = None  # type: ignore[assignment]
+
+            def __init__(self, val):
+                self.val = val
+
+        ctx = FlowContext(obj=UnhashableWithDict(42))
+        h = hash(ctx)
+        assert isinstance(h, int)
+
     def test_flow_context_pickle(self):
         """FlowContext pickles cleanly."""
         ctx = FlowContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31))

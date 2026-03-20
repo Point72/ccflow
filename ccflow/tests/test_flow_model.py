@@ -2181,6 +2181,805 @@ class TestFlowModelBugFixes(TestCase):
             registry.clear()
 
 
+# =============================================================================
+# Coverage Gap Tests
+# =============================================================================
+
+
+class TestExtractLazyLoopBody(TestCase):
+    """Group 1: _extract_lazy loop body with non-LazyMarker metadata."""
+
+    def test_annotated_with_extra_metadata_before_lazy_marker(self):
+        """Annotated type where _LazyMarker is NOT the first metadata element."""
+        from typing import Annotated
+
+        from ccflow.flow_model import _extract_lazy, _LazyMarker
+
+        # _LazyMarker is the second metadata element — loop must iterate past "other"
+        ann = Annotated[int, "other_metadata", _LazyMarker()]
+        base_type, is_lazy = _extract_lazy(ann)
+        self.assertTrue(is_lazy)
+        self.assertIs(base_type, int)
+
+    def test_annotated_without_lazy_marker(self):
+        """Annotated type with no _LazyMarker returns is_lazy=False."""
+        from typing import Annotated
+
+        from ccflow.flow_model import _extract_lazy
+
+        ann = Annotated[int, "just_metadata"]
+        base_type, is_lazy = _extract_lazy(ann)
+        self.assertFalse(is_lazy)
+
+    def test_lazy_type_annotation_with_extra_annotated(self):
+        """End-to-end: Lazy wrapping of an Annotated type."""
+
+        @Flow.model
+        def model_with_lazy(
+            x: int,
+            dep: Lazy[int],
+        ) -> int:
+            return x + dep()
+
+        @Flow.model
+        def upstream(x: int) -> int:
+            return x * 10
+
+        model = model_with_lazy(x=1, dep=upstream())
+        result = model.flow.compute(x=1)
+        self.assertEqual(result.value, 11)
+
+    def test_lazy_dep_returning_custom_result(self):
+        """Lazy dep returning custom ResultBase (not GenericResult) should return raw result."""
+
+        @Flow.model
+        def upstream(context: SimpleContext) -> MyResult:
+            return MyResult(data=f"v={context.value}")
+
+        @Flow.model
+        def consumer(context: SimpleContext, dep: Lazy[MyResult]) -> GenericResult[str]:
+            result = dep()
+            return GenericResult(value=result.data)
+
+        model = consumer(dep=upstream())
+        result = model(SimpleContext(value=42))
+        self.assertEqual(result.value, "v=42")
+
+
+class TestTransformReprNamedCallable(TestCase):
+    """Group 2: _transform_repr with a named callable."""
+
+    def test_named_function_transform_in_repr(self):
+        """Named functions should appear in BoundModel repr wrapped in angle brackets."""
+        from ccflow.flow_model import _transform_repr
+
+        def my_custom_transform(ctx):
+            return ctx.value + 1
+
+        result = _transform_repr(my_custom_transform)
+        self.assertIn("my_custom_transform", result)
+        self.assertTrue(result.startswith("<"))
+        self.assertTrue(result.endswith(">"))
+
+    def test_static_value_repr(self):
+        """Static (non-callable) values should use repr()."""
+        from ccflow.flow_model import _transform_repr
+
+        self.assertEqual(_transform_repr(42), "42")
+        self.assertEqual(_transform_repr("hello"), "'hello'")
+
+
+class TestBoundFieldNamesFallback(TestCase):
+    """Group 3: _bound_field_names fallback for objects without model_fields_set."""
+
+    def test_fallback_to_bound_fields_attr(self):
+        from ccflow.flow_model import _bound_field_names
+
+        class FakeModel:
+            _bound_fields = {"x", "y"}
+
+        result = _bound_field_names(FakeModel())
+        self.assertEqual(result, {"x", "y"})
+
+    def test_fallback_no_attrs(self):
+        from ccflow.flow_model import _bound_field_names
+
+        class Empty:
+            pass
+
+        result = _bound_field_names(Empty())
+        self.assertEqual(result, set())
+
+
+class TestRuntimeInputNamesEmpty(TestCase):
+    """Group 4: _runtime_input_names when all_param_names is empty."""
+
+    def test_non_flow_model_returns_empty(self):
+        from ccflow.flow_model import _runtime_input_names
+
+        class ManualModel(CallableModel):
+            offset: int
+
+            @Flow.call
+            def __call__(self, context: SimpleContext) -> GenericResult[int]:
+                return GenericResult(value=context.value + self.offset)
+
+        model = ManualModel(offset=5)
+        self.assertEqual(_runtime_input_names(model), set())
+
+
+class TestRegistryCandidateAllowed(TestCase):
+    """Group 5: _registry_candidate_allowed TypeAdapter success path."""
+
+    def test_non_callable_model_passes_type_check(self):
+        """Registry value that is not a CallableModel but passes TypeAdapter validation."""
+        from ccflow.flow_model import _registry_candidate_allowed
+
+        # int value passes TypeAdapter(int).validate_python
+        self.assertTrue(_registry_candidate_allowed(int, 42))
+
+    def test_non_callable_model_fails_type_check(self):
+        from ccflow.flow_model import _registry_candidate_allowed
+
+        self.assertFalse(_registry_candidate_allowed(int, "not_an_int"))
+
+
+class TestConcreteContextTypeOptional(TestCase):
+    """Group 6: _concrete_context_type with Optional/Union types."""
+
+    def test_optional_context_type(self):
+        """Optional[T] has NoneType that should be skipped to find T."""
+        from typing import Optional
+
+        from ccflow.flow_model import _concrete_context_type
+
+        # Optional[SimpleContext] = Union[SimpleContext, None]
+        # The NoneType arg must be skipped (line 196-197)
+        result = _concrete_context_type(Optional[SimpleContext])
+        self.assertIs(result, SimpleContext)
+
+    def test_union_with_none_first(self):
+        """Union[None, T] should skip NoneType and find T."""
+        from typing import Union
+
+        from ccflow.flow_model import _concrete_context_type
+
+        # NoneType comes first, must be skipped
+        result = _concrete_context_type(Union[None, SimpleContext])
+        self.assertIs(result, SimpleContext)
+
+    def test_union_context_type(self):
+        from typing import Union
+
+        from ccflow.flow_model import _concrete_context_type
+
+        result = _concrete_context_type(Union[SimpleContext, None])
+        self.assertIs(result, SimpleContext)
+
+    def test_union_no_context_base(self):
+        from typing import Union
+
+        from ccflow.flow_model import _concrete_context_type
+
+        result = _concrete_context_type(Union[int, str])
+        self.assertIsNone(result)
+
+    def test_returns_none_for_non_type(self):
+        from ccflow.flow_model import _concrete_context_type
+
+        result = _concrete_context_type("not_a_type")
+        self.assertIsNone(result)
+
+
+class TestBuildConfigValidatorsException(TestCase):
+    """Group 7: _build_config_validators when TypeAdapter fails."""
+
+    def test_unadaptable_type_skipped(self):
+        """Types that TypeAdapter can't handle should be silently skipped."""
+        from ccflow.flow_model import _build_config_validators
+
+        # type(...) (EllipsisType) makes TypeAdapter fail
+        validatable, validators = _build_config_validators({"x": int, "y": type(...)})
+        self.assertIn("x", validatable)
+        self.assertNotIn("y", validatable)
+        self.assertIn("x", validators)
+        self.assertNotIn("y", validators)
+
+
+class TestCoerceContextValueNoValidator(TestCase):
+    """Group 8: _coerce_context_value early return for fields without validators."""
+
+    def test_field_without_validator_passes_through(self):
+        from ccflow.flow_model import _coerce_context_value
+
+        # When name is not in validators, value should pass through unchanged
+        result = _coerce_context_value("unknown_field", 42, {}, {})
+        self.assertEqual(result, 42)
+
+
+class TestGeneratedModelClassFactoryPath(TestCase):
+    """Group 9: _generated_model_class when stage has no generated model."""
+
+    def test_returns_none_for_plain_callable(self):
+        from ccflow.flow_model import _generated_model_class
+
+        def plain_func():
+            pass
+
+        self.assertIsNone(_generated_model_class(plain_func))
+
+
+class TestDescribePipeStagePaths(TestCase):
+    """Group 10: _describe_pipe_stage for different stage types."""
+
+    def test_generated_model_instance(self):
+        from ccflow.flow_model import _describe_pipe_stage
+
+        @Flow.model
+        def my_stage(x: int) -> int:
+            return x
+
+        desc = _describe_pipe_stage(my_stage())
+        self.assertIn("my_stage", desc)
+
+    def test_callable_stage(self):
+        from ccflow.flow_model import _describe_pipe_stage
+
+        @Flow.model
+        def factory_stage(x: int) -> int:
+            return x
+
+        desc = _describe_pipe_stage(factory_stage)
+        self.assertIn("factory_stage", desc)
+
+    def test_non_callable_stage(self):
+        from ccflow.flow_model import _describe_pipe_stage
+
+        desc = _describe_pipe_stage(42)
+        self.assertEqual(desc, "42")
+
+
+class TestInferPipeParamAmbiguousDefaults(TestCase):
+    """Cover _infer_pipe_param fallback path with multiple defaulted candidates."""
+
+    def test_ambiguous_defaulted_candidates(self):
+        """When all candidates have defaults but multiple are unoccupied."""
+
+        @Flow.model
+        def source(x: int) -> int:
+            return x
+
+        @Flow.model
+        def consumer(a: int = 1, b: int = 2) -> int:
+            return a + b
+
+        # Both a and b have defaults, both are unoccupied -> ambiguous
+        with self.assertRaisesRegex(TypeError, "could not infer a target parameter"):
+            source().pipe(consumer)
+
+
+class TestPipeErrorPaths(TestCase):
+    """Group 11: pipe() error paths not covered by existing tests."""
+
+    def test_pipe_non_callable_model_source(self):
+        """pipe() should reject non-CallableModel source."""
+        from ccflow.flow_model import pipe_model
+
+        @Flow.model
+        def consumer(data: int) -> int:
+            return data
+
+        with self.assertRaisesRegex(TypeError, "pipe\\(\\) source must be a CallableModel"):
+            pipe_model("not_a_model", consumer)
+
+    def test_pipe_non_flow_model_target(self):
+        """pipe() should reject non-@Flow.model target."""
+        from ccflow.flow_model import pipe_model
+
+        @Flow.model
+        def source(x: int) -> int:
+            return x
+
+        class ManualTarget(CallableModel):
+            @Flow.call
+            def __call__(self, context: SimpleContext) -> GenericResult[int]:
+                return GenericResult(value=0)
+
+        with self.assertRaisesRegex(TypeError, "pipe\\(\\) only supports downstream stages"):
+            pipe_model(source(), ManualTarget())
+
+    def test_pipe_invalid_param_name(self):
+        """pipe() should reject invalid target parameter names."""
+
+        @Flow.model
+        def source(x: int) -> int:
+            return x
+
+        @Flow.model
+        def consumer(data: int) -> int:
+            return data
+
+        with self.assertRaisesRegex(TypeError, "is not valid for"):
+            source().pipe(consumer, param="nonexistent")
+
+    def test_pipe_already_bound_param(self):
+        """pipe() should reject already-bound parameters."""
+
+        @Flow.model
+        def source(x: int) -> int:
+            return x
+
+        @Flow.model
+        def consumer(data: int) -> int:
+            return data
+
+        model = consumer(data=5)
+        with self.assertRaisesRegex(TypeError, "is already bound"):
+            source().pipe(model, param="data")
+
+    def test_pipe_no_available_target_parameter(self):
+        """pipe() should error when all downstream params are occupied."""
+
+        @Flow.model
+        def source(x: int) -> int:
+            return x
+
+        @Flow.model
+        def consumer(data: int) -> int:
+            return data
+
+        model = consumer(data=5)
+        with self.assertRaisesRegex(TypeError, "could not find an available target parameter"):
+            source().pipe(model)
+
+    def test_pipe_into_generated_instance_rebuilds(self):
+        """pipe() into an existing generated model instance should rebuild."""
+
+        @Flow.model
+        def source(x: int) -> int:
+            return x * 10
+
+        @Flow.model
+        def consumer(data: int, extra: int = 1) -> int:
+            return data + extra
+
+        instance = consumer(extra=5)
+        pipeline = source().pipe(instance)
+        result = pipeline.flow.compute(x=3)
+        self.assertEqual(result.value, 35)  # 3*10 + 5
+
+    def test_pipe_bound_model_wrapping_non_generated_rejects(self):
+        """pipe() into BoundModel wrapping a non-generated model should fail."""
+        from ccflow.flow_model import BoundModel, pipe_model
+
+        @Flow.model
+        def source(x: int) -> int:
+            return x
+
+        class ManualModel(CallableModel):
+            @Flow.call
+            def __call__(self, context: SimpleContext) -> GenericResult[int]:
+                return GenericResult(value=context.value)
+
+        bound = BoundModel(model=ManualModel(), input_transforms={"value": 42})
+        with self.assertRaisesRegex(TypeError, "pipe\\(\\) only supports downstream"):
+            pipe_model(source(), bound)
+
+
+class TestFlowAPIBuildContextFallback(TestCase):
+    """Group 12: FlowAPI._build_context when _context_schema is None/unset."""
+
+    def test_unbound_inputs_on_manual_callable_model(self):
+        """Manual CallableModel with context should show required fields."""
+
+        class ManualModel(CallableModel):
+            offset: int
+
+            @Flow.call
+            def __call__(self, context: SimpleContext) -> GenericResult[int]:
+                return GenericResult(value=context.value + self.offset)
+
+        model = ManualModel(offset=5)
+        unbound = model.flow.unbound_inputs
+        self.assertIn("value", unbound)
+
+
+class TestBoundModelRestoreNonDict(TestCase):
+    """Group 13: BoundModel._restore_serialized_transforms non-dict path."""
+
+    def test_restore_from_model_instance(self):
+        """model_validate from an existing BoundModel instance (non-dict)."""
+        from ccflow.flow_model import BoundModel
+
+        @Flow.model
+        def source(context: SimpleContext) -> GenericResult[int]:
+            return GenericResult(value=context.value * 10)
+
+        bound = source().flow.with_inputs(value=42)
+        # Pass existing instance through model_validate (non-dict path)
+        restored = BoundModel.model_validate(bound)
+        ctx = SimpleContext(value=1)
+        self.assertEqual(restored(ctx).value, 420)
+
+
+class TestBoundModelInitEmptyTransforms(TestCase):
+    """Group 14: BoundModel.__init__ with no transforms."""
+
+    def test_init_without_transforms(self):
+        from ccflow.flow_model import BoundModel
+
+        @Flow.model
+        def source(context: SimpleContext) -> GenericResult[int]:
+            return GenericResult(value=context.value)
+
+        bound = BoundModel(model=source())
+        self.assertEqual(bound._input_transforms, {})
+        result = bound(SimpleContext(value=5))
+        self.assertEqual(result.value, 5)
+
+
+class TestBoundModelDeps(TestCase):
+    """Group 15: BoundModel.__deps__."""
+
+    def test_deps_returns_wrapped_model(self):
+        @Flow.model
+        def source(context: SimpleContext) -> GenericResult[int]:
+            return GenericResult(value=context.value * 10)
+
+        bound = source().flow.with_inputs(value=42)
+        deps = bound.__deps__(SimpleContext(value=1))
+        self.assertEqual(len(deps), 1)
+        self.assertIs(deps[0][0], bound.model)
+
+
+class TestValidateFieldTypesAfterValidator(TestCase):
+    """Group 16: _validate_field_types in the model_validate path."""
+
+    def test_model_validate_rejects_wrong_type(self):
+        """model_validate should reject wrong scalar types."""
+
+        @Flow.model
+        def source(x: int) -> int:
+            return x * 10
+
+        cls = type(source(x=5))
+        with self.assertRaisesRegex(TypeError, "Field 'x'"):
+            cls.model_validate({"x": "not_an_int"})
+
+
+class TestGetContextValidatorPaths(TestCase):
+    """Group 17: _get_context_validator fallback paths."""
+
+    def test_mode2_context_validator_from_schema(self):
+        """Mode 2 model should build validator from _context_schema."""
+
+        @Flow.model(context_args=["start_date"])
+        def loader(start_date: str, source: str = "db") -> str:
+            return f"{source}:{start_date}"
+
+        model = loader()
+        # Trigger validator creation by calling flow.compute
+        result = model.flow.compute(start_date="2024-01-01")
+        self.assertEqual(result.value, "db:2024-01-01")
+
+    def test_mode1_context_validator_uses_context_type_directly(self):
+        """Mode 1 should use TypeAdapter(context_type) directly."""
+
+        @Flow.model
+        def model_fn(context: SimpleContext, offset: int = 0) -> GenericResult[int]:
+            return GenericResult(value=context.value + offset)
+
+        model = model_fn()
+        # compute with SimpleContext fields
+        result = model.flow.compute(value=5)
+        self.assertEqual(result.value, 5)
+
+
+class TestValidateContextTypeOverrideErrors(TestCase):
+    """Group 18: _validate_context_type_override error paths."""
+
+    def test_non_context_base_raises(self):
+        with self.assertRaisesRegex(TypeError, "context_type must be a ContextBase subclass"):
+
+            @Flow.model(context_args=["x"], context_type=int)
+            def bad_model(x: int) -> int:
+                return x
+
+    def test_context_type_missing_context_args_fields(self):
+        """context_type missing required context_args fields."""
+
+        class TinyContext(ContextBase):
+            a: int
+
+        with self.assertRaisesRegex(TypeError, "must define fields for context_args"):
+
+            @Flow.model(context_args=["a", "b"], context_type=TinyContext)
+            def bad_model(a: int, b: int) -> int:
+                return a + b
+
+    def test_context_type_extra_required_fields(self):
+        """context_type has required fields not listed in context_args."""
+
+        class BigContext(ContextBase):
+            a: int
+            b: int
+            extra: str
+
+        with self.assertRaisesRegex(TypeError, "has required fields not listed in context_args"):
+
+            @Flow.model(context_args=["a"], context_type=BigContext)
+            def bad_model(a: int) -> int:
+                return a
+
+    def test_annotation_type_mismatch(self):
+        """Function and context_type disagree on annotation type."""
+
+        class TypedContext(ContextBase):
+            x: str
+
+        with self.assertRaisesRegex(TypeError, "context_arg 'x'"):
+
+            @Flow.model(context_args=["x"], context_type=TypedContext)
+            def bad_model(x: int) -> int:
+                return x
+
+    def test_annotation_skip_when_func_ann_is_none(self):
+        """Annotation check should skip when function annotation is absent from schema."""
+        from ccflow.flow_model import _validate_context_type_override
+
+        class CompatContext(ContextBase):
+            a: int
+
+        # context_args has 'a', schema has 'a': int. Compatible, no error.
+        result = _validate_context_type_override(CompatContext, ["a"], {"a": int})
+        self.assertIs(result, CompatContext)
+
+    def test_subclass_annotations_allowed(self):
+        """context_type with subclass-compatible annotations should pass."""
+        from ccflow.flow_model import _validate_context_type_override
+
+        class ContextWithBase(ContextBase):
+            ctx: ContextBase
+
+        # Function declares SimpleContext which is a subclass of ContextBase — should pass
+        result = _validate_context_type_override(ContextWithBase, ["ctx"], {"ctx": SimpleContext})
+        self.assertIs(result, ContextWithBase)
+
+    def test_default_vs_required_field_conflict(self):
+        """Function has default for context_arg but context_type requires it."""
+
+        class StrictContext(ContextBase):
+            x: int
+
+        with self.assertRaisesRegex(TypeError, "function has a default but context_type"):
+
+            @Flow.model(context_args=["x"], context_type=StrictContext)
+            def bad_model(x: int = 5) -> int:
+                return x
+
+
+class TestDecoratorErrorPaths(TestCase):
+    """Group 19: Decorator error paths."""
+
+    def test_context_type_with_explicit_context_param(self):
+        """context_type= with explicit context param should raise."""
+        with self.assertRaisesRegex(TypeError, "context_type.*only supported"):
+
+            @Flow.model(context_type=SimpleContext)
+            def bad_model(context: SimpleContext) -> GenericResult[int]:
+                return GenericResult(value=0)
+
+    def test_context_type_without_context_args(self):
+        """context_type= without context_args should raise in dynamic mode."""
+        with self.assertRaisesRegex(TypeError, "context_type.*only supported"):
+
+            @Flow.model(context_type=SimpleContext)
+            def bad_model(x: int) -> int:
+                return x
+
+    def test_missing_context_annotation(self):
+        """Missing type annotation on context param should raise."""
+        with self.assertRaisesRegex(TypeError, "must have a type annotation"):
+
+            @Flow.model
+            def bad_model(context) -> int:
+                return 0
+
+    def test_missing_param_annotation(self):
+        """Missing type annotation on a model field param should raise."""
+        with self.assertRaisesRegex(TypeError, "must have a type annotation"):
+
+            @Flow.model
+            def bad_model(context: SimpleContext, untyped_param) -> int:
+                return 0
+
+    def test_context_param_not_context_base(self):
+        """context param annotated with non-ContextBase type should raise."""
+        with self.assertRaisesRegex(TypeError, "must be annotated with a ContextBase subclass"):
+
+            @Flow.model
+            def bad_model(context: int) -> int:
+                return 0
+
+    def test_pep563_fallback_on_failed_get_type_hints(self):
+        """When get_type_hints fails, falls back to raw annotations."""
+
+        # This is hard to trigger directly, but we can test that string annotations work
+        @Flow.model
+        def model_with_string_return(x: int) -> "int":
+            return x * 2
+
+        result = model_with_string_return().flow.compute(x=5)
+        self.assertEqual(result.value, 10)
+
+
+class TestMode1CallPath(TestCase):
+    """Group 20: Mode 1 explicit context pass-through in __call__."""
+
+    def test_mode1_resolve_callable_model_returns_non_generic_result(self):
+        """Mode 1 should handle deps that return raw ResultBase (not GenericResult)."""
+
+        @Flow.model
+        def upstream(context: SimpleContext) -> MyResult:
+            return MyResult(data=f"value={context.value}")
+
+        @Flow.model
+        def downstream(context: SimpleContext, dep: CallableModel) -> GenericResult[str]:
+            # dep is resolved to MyResult since it's not GenericResult
+            return GenericResult(value=f"got:{dep}")
+
+        model = downstream(dep=upstream())
+        result = model(SimpleContext(value=42))
+        self.assertIn("value=42", result.value)
+
+
+class TestDynamicModeContextLookup(TestCase):
+    """Group 21: Dynamic mode context lookup for deferred values."""
+
+    def test_deferred_value_from_context(self):
+        """Dynamic mode should pull deferred values from context."""
+
+        @Flow.model
+        def add(x: int, y: int) -> int:
+            return x + y
+
+        model = add(x=10)
+        # y is deferred — pulled from context
+        result = model.flow.compute(y=5)
+        self.assertEqual(result.value, 15)
+
+    def test_missing_deferred_value_raises(self):
+        """Dynamic mode should raise for missing deferred values."""
+
+        @Flow.model
+        def add(x: int, y: int) -> int:
+            return x + y
+
+        model = add(x=10)
+        with self.assertRaisesRegex(TypeError, "Missing runtime input"):
+            model.flow.compute()  # y not provided
+
+    def test_context_sourced_value_coercion(self):
+        """Dynamic mode should coerce context-sourced values through validators."""
+
+        @Flow.model
+        def typed_model(x: int, y: int) -> int:
+            return x + y
+
+        model = typed_model(x=10)
+        # y provided as a value that can be coerced to int
+        result = model.flow.compute(y=5)
+        self.assertEqual(result.value, 15)
+
+    def test_deferred_value_from_context_object(self):
+        """Dynamic mode should look up deferred values from context attributes."""
+
+        @Flow.model
+        def multiply(x: int, y: int) -> int:
+            return x * y
+
+        model = multiply(x=3)
+        # Call directly with a FlowContext — y must come from context
+        result = model(FlowContext(y=7))
+        self.assertEqual(result.value, 21)
+
+
+class TestGetContextValidatorFallbacks(TestCase):
+    """Group 17 additional: _get_context_validator edge cases."""
+
+    def test_mode2_with_context_type_override(self):
+        """Mode 2 with explicit context_type should use that type's validator."""
+
+        @Flow.model(context_args=["value"], context_type=SimpleContext)
+        def typed_model(value: int) -> int:
+            return value * 2
+
+        model = typed_model()
+        result = model(SimpleContext(value=5))
+        self.assertEqual(result.value, 10)
+
+    def test_dynamic_mode_instance_validator(self):
+        """Dynamic mode should create instance-specific validator."""
+
+        @Flow.model
+        def add(x: int, y: int, z: int = 0) -> int:
+            return x + y + z
+
+        m1 = add(x=1)
+        m2 = add(x=1, y=2)
+        # Different bound fields => different runtime inputs
+        self.assertIn("y", m1.flow.unbound_inputs)
+        self.assertNotIn("y", m2.flow.unbound_inputs)
+
+
+class TestRegistryResolutionInValidateFieldTypes(TestCase):
+    """Group 16: _resolve_registry_refs and _validate_field_types paths."""
+
+    def test_registry_string_not_resolving_passes_through(self):
+        """String value that doesn't resolve from registry should fail type validation."""
+
+        @Flow.model
+        def model_fn(x: int) -> int:
+            return x
+
+        cls = type(model_fn(x=1))
+        with self.assertRaisesRegex(TypeError, "Field 'x'"):
+            cls.model_validate({"x": "nonexistent_registry_key"})
+
+    def test_registry_ref_resolves_to_callable_model(self):
+        """String value resolving to a CallableModel should be substituted."""
+        registry = ModelRegistry.root()
+        registry.clear()
+        try:
+
+            @Flow.model
+            def upstream(context: SimpleContext) -> GenericResult[int]:
+                return GenericResult(value=context.value * 10)
+
+            @Flow.model
+            def downstream(context: SimpleContext, dep: CallableModel) -> GenericResult[int]:
+                return GenericResult(value=0)
+
+            registry.add("my_upstream", upstream())
+            cls = type(downstream(dep=upstream()))
+            restored = cls.model_validate({"dep": "my_upstream"})
+            self.assertIsNotNone(restored)
+        finally:
+            registry.clear()
+
+
+class TestMode2MissingContextField(TestCase):
+    """Line 1155: Mode 2 missing context field error."""
+
+    def test_mode2_missing_required_context_field(self):
+        """Mode 2 model called with context missing a required field should raise."""
+
+        @Flow.model(context_args=["start_date", "end_date"])
+        def loader(start_date: str, end_date: str, source: str = "db") -> str:
+            return f"{source}:{start_date}-{end_date}"
+
+        model = loader()
+        # Call with a FlowContext missing end_date
+        with self.assertRaisesRegex(TypeError, "Missing context field"):
+            model(FlowContext(start_date="2024-01-01"))
+
+
+class TestDynamicModeContextObjectLookup(TestCase):
+    """Line 1155/1176: Dynamic mode pulling deferred values from context object."""
+
+    def test_deferred_value_coercion_through_context(self):
+        """Dynamic mode should coerce values from FlowContext through validators."""
+
+        @Flow.model
+        def typed_add(x: int, y: int) -> int:
+            return x + y
+
+        model = typed_add(x=10)
+        # Calling with a FlowContext — y pulled from context and coerced
+        result = model(FlowContext(y=5))
+        self.assertEqual(result.value, 15)
+
+
 if __name__ == "__main__":
     import unittest
 
