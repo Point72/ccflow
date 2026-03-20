@@ -146,16 +146,14 @@ target
 outputs/
 multirun/
 
-<<<<<<< before updating
+# AI
+ROADMAP.md
+AGENTS.md
+.github/hooks/sdlc.json
+
 # Examples
 raw.html
 extracted.csv
 etl.db
 lobsters.html
 lobsters.csv
-=======
-# AI
-ROADMAP.md
-AGENTS.md
-.github/hooks/sdlc.json
->>>>>>> after updating
