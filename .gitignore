@@ -146,6 +146,11 @@ target
 outputs/
 multirun/
 
+# AI
+ROADMAP.md
+AGENTS.md
+.github/hooks/sdlc.json
+
 # Examples
 raw.html
 extracted.csv
