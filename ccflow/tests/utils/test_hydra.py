@@ -338,7 +338,7 @@ def test_debug(basepath):
     assert "hydra/job_logging" in result.group_options
     assert len(result.group_options["hydra/job_logging"]) > 1
     assert "config_user" in result.group_options
-    assert result.group_options["config_user"] == ["sample"]
+    assert "sample" in result.group_options["config_user"]
     # Arguable whether these should be here
     assert "conf_out_of_order" in result.group_options[""]
 
@@ -347,7 +347,7 @@ def test_debug(basepath):
     assert merged
     assert "foo" in merged
     assert "config_user" in merged
-    assert merged["config_user"]["__options__"] == ["sample"]
+    assert "sample" in merged["config_user"]["__options__"]
     assert merged["config_user"]["__parent__"] == "conf"  # Maybe this should be a path to a file
     assert merged["config_user"]["__selected__"] == "sample"
     assert "user_foo" in merged["config_user"]

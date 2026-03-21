@@ -1,6 +1,7 @@
 import argparse
 import inspect
 import os
+import sys
 from dataclasses import dataclass
 from logging import getLogger
 from pathlib import Path
@@ -8,7 +9,10 @@ from pprint import pprint
 from textwrap import dedent
 from typing import Any, Callable, Dict, List, Optional
 
-from hydra._internal.defaults_list import DefaultsList
+try:
+    from lerna._internal.defaults_list import DefaultsList
+except ImportError:
+    from hydra._internal.defaults_list import DefaultsList
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
 try:
@@ -115,7 +119,10 @@ def _find_group_options(config_loader, path, config_name, overrides, results):
     Note that it will pick up config files that are not intended to be used as config group options,
     but that exist to provide common config options to other files in the group (i.e. to default)
     """
-    from hydra.core.object_type import ObjectType
+    try:
+        from lerna.core.object_type import ObjectType
+    except ImportError:
+        from hydra.core.object_type import ObjectType
 
     groups = config_loader.get_group_options(path, ObjectType.GROUP, config_name, overrides)
     options = config_loader.get_group_options(path, ObjectType.CONFIG, config_name, overrides)
@@ -184,9 +191,10 @@ def load_config(
         debug: (Experimental) Whether to enable debug mode. This will return more information about the configs on ConfigLoadResult.
     """
     # Heavy import, only import if used
-    import os
-
-    from hydra import compose, initialize_config_dir
+    try:
+        from lerna import compose, initialize_config_dir
+    except ImportError:
+        from hydra import compose, initialize_config_dir
 
     if return_hydra_config and debug:
         raise ValueError("Cannot return hydra config and debug=True at the same time. Please set return_hydra_config=False.")
@@ -209,22 +217,47 @@ def load_config(
         result = ConfigLoadResult(root_config_dir=root_config_dir, root_config_name=root_config_name, cfg=cfg)
         if debug:
             import yaml
-            from hydra.core.global_hydra import GlobalHydra
-            from hydra.types import RunMode
+
+            try:
+                from lerna.core.global_hydra import GlobalHydra
+                from lerna.types import RunMode
+            except ImportError:
+                from hydra.core.global_hydra import GlobalHydra
+                from hydra.types import RunMode
 
             # To track the source file for each config value, we need to monkey patch the yaml loader
             original_yaml_load = yaml.load
+            # Lerna may use a Rust YAML parser that bypasses yaml.load entirely.
+            # Temporarily disable it so our monkey patch can intercept all YAML loading.
+            _rust_patches = {}
+            try:
+                for _mod_name in (
+                    "lerna._internal.core_plugins.file_config_source",
+                    "lerna._internal.core_plugins.importlib_resources_config_source",
+                ):
+                    _mod = sys.modules.get(_mod_name)
+                    if _mod and getattr(_mod, "_RUST_AVAILABLE", False):
+                        _rust_patches[_mod] = True
+                        _mod._RUST_AVAILABLE = False
+            except Exception:
+                pass
+
             try:
 
                 def yaml_load(*args, **kwargs):
                     res = original_yaml_load(*args, **kwargs)
-                    return _dict_add_source(res, args[0].name)
+                    # hydra passes file objects (with .name) to yaml.load;
+                    # lerna passes strings. Use "unknown" as fallback source.
+                    source = getattr(args[0], "name", "unknown") if args else "unknown"
+                    return _dict_add_source(res, source)
 
                 yaml.load = yaml_load
                 # We can't load the hydra config after monkey patching yaml loading, so skip that step
                 result.cfg_sources = compose(config_name=root_config_name, overrides=overrides, return_hydra_config=False)
             finally:
                 yaml.load = original_yaml_load
+                for _mod, _val in _rust_patches.items():
+                    _mod._RUST_AVAILABLE = _val
 
             config_loader = GlobalHydra.instance().config_loader()
             # Load defaults list using the standard hydra function
