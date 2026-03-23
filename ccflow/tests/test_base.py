@@ -173,6 +173,32 @@ class TestBaseModel(TestCase):
             ),
         )
 
+    def test_panel(self):
+        from ccflow import ModelRegistry
+        from ccflow.ui.model import ModelViewer
+        from ccflow.ui.registry import ModelRegistryViewer
+
+        m = ModelA(x="foo")
+        panel_obj = m.__panel__()
+        self.assertIsInstance(panel_obj, ModelViewer)
+
+        registry = ModelRegistry(name="test", models={"a": m})
+        registry_panel_obj = registry.__panel__()
+        self.assertIsInstance(registry_panel_obj, ModelRegistryViewer)
+
+    def test_get_panel(self):
+        import panel as pn
+
+        from ccflow import ModelRegistry
+
+        m = ModelA(x="foo")
+        panel_pane = m.get_panel()
+        self.assertIsInstance(panel_pane, pn.viewable.Viewable)
+
+        registry = ModelRegistry(name="test", models={"a": m})
+        registry_pane = registry.get_panel()
+        self.assertIsInstance(registry_pane, pn.viewable.Viewable)
+
 
 class TestLocalRegistration(TestCase):
     def test_local_class_registered_for_base_model(self):

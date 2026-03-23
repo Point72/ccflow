@@ -11,6 +11,9 @@ __pycache__/
 *.exp
 *.lib
 
+# Rust
+target
+
 # Distribution / packaging
 .Python
 build/
@@ -55,25 +58,11 @@ junit.xml
 .hypothesis/
 .pytest_cache/
 
-# Translations
-*.mo
-*.pot
-
-# Django stuff:
+# Django
 *.log
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
-
-# Flask stuff:
-instance/
-.webassets-cache
-
-# Scrapy stuff:
-.scrapy
-
-# PyBuilder
-target/
 
 # IPython
 profile_default/
@@ -85,15 +74,12 @@ ipython_config.py
 # pipenv
 Pipfile.lock
 
-# PEP 582; used by e.g. github.com/David-OConnor/pyflow
-__pypackages__/
-
-# Celery stuff
+# Celery
 celerybeat-schedule
 celerybeat.pid
 
-# SageMath parsed files
-*.sage.py
+# Airspeed Velocity
+.asv
 
 # Environments
 .env
@@ -141,14 +127,12 @@ js/node_modules
 js/test-results
 js/playwright-report
 js/*.tgz
-ccflow/extension
 
 # Jupyter
 .ipynb_checkpoints
 .autoversion
 Untitled*.ipynb
-!ccflow/extension/ccflow.json
-!ccflow/extension/install.json
+ccflow/extension
 ccflow/nbextension
 ccflow/labextension
 
@@ -158,8 +142,16 @@ ccflow/labextension
 # Rust
 target
 
+# Hydra
+outputs/
+multirun/
+
+# AI
+ROADMAP.md
+AGENTS.md
+.github/hooks/sdlc.json
+
 # Examples
-outputs
 raw.html
 extracted.csv
 etl.db

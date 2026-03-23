@@ -1,5 +1,5 @@
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, ClassVar, List, Optional
 
 import pandas as pd
@@ -36,7 +36,7 @@ class MyDateCallable(CallableModel):
 
     @Flow.call(volatile=True, validate_result=False)
     def current_time(self, context: DateContext):
-        out = datetime.utcnow()
+        out = datetime.now(timezone.utc)
         log.info("Current datetime: %s", out)
         return out
 

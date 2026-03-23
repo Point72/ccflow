@@ -150,7 +150,7 @@ class _SerializeAsAnyMeta(ModelMetaclass):
 
 
 class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta):
-    """BaseModel is a base class for all pydantic models within the cubist flow framework.
+    """BaseModel is a base class for all pydantic models within the ccflow framework.
 
     This gives us a way to add functionality to the framework, including
         - Type of object is part of serialization/deserialization
@@ -240,6 +240,34 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
         kwargs.update(json_kwargs or {})
         # Can't use self.model_dump_json or self.model_dump because they don't expose the fallback argument
         return JSON(self.__pydantic_serializer__.to_python(self, **kwargs), **(widget_kwargs or {}))
+
+    def __panel__(self):
+        """Return a Panel viewable for this model.
+
+        Requires ccflow UI dependencies (panel, panel_material_ui).
+        """
+        try:
+            from ccflow.ui.model import ModelViewer
+        except ImportError:
+            raise ImportError(
+                "panel and other optional dependencies must be installed to use ModelViewer. Pip install ccflow[full] to install all optional dependencies."
+            ) from None
+
+        return ModelViewer(model=self)
+
+    def get_panel(self):
+        """Get a Panel pane for this model.
+
+        Requires panel to be installed.
+        """
+        try:
+            import panel as pn
+        except ImportError:
+            raise ImportError(
+                "panel and other optional dependencies must be installed to use get_panel(). Pip install ccflow[full] to install all optional dependencies."
+            ) from None
+
+        return pn.panel(self)
 
     @model_validator(mode="wrap")
     def _base_model_validator(cls, v, handler, info):
@@ -399,6 +427,15 @@ class ModelRegistry(BaseModel, collections.abc.Mapping):
     def models(self) -> MappingProxyType:
         """Return an immutable pointer to the models dictionary."""
         return MappingProxyType(self._models)
+
+    def __panel__(self):
+        """Return a Panel viewable for this registry.
+
+        Requires ccflow UI dependencies (panel, panel_material_ui).
+        """
+        from ccflow.ui.registry import ModelRegistryViewer
+
+        return ModelRegistryViewer(self)
 
     @classmethod
     def root(cls) -> Self:
