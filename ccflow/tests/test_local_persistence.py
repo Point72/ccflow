@@ -37,9 +37,7 @@ class ModuleLevelCallable(CallableModel):
         return GenericResult(value="ok")
 
 
-# =============================================================================
 # Tests for register_ccflow_import_path function
-# =============================================================================
 
 
 def test_base_module_available_after_import():
@@ -117,9 +115,7 @@ def test_sync_to_module_registers_class_not_yet_on_module():
     assert getattr(module, unique_name, None) is cls, "Class should be on module after sync"
 
 
-# =============================================================================
 # Tests for _register_on_module (internal function)
-# =============================================================================
 
 
 def test_register_on_module_uses_specified_module():
@@ -168,9 +164,7 @@ def test_register_on_module_import_path_format():
     delattr(target_module, parts[1])
 
 
-# =============================================================================
 # Tests for local class registration via BaseModel
-# =============================================================================
 
 
 class TestLocalPersistencePreservesCloudpickle:
@@ -365,9 +359,7 @@ class TestCloudpickleSameProcess:
         assert restored_type_path == original_type_path
 
 
-# =============================================================================
 # Cross-process cloudpickle tests
-# =============================================================================
 
 
 @pytest.fixture
@@ -555,9 +547,7 @@ print("SUCCESS")
         assert "SUCCESS" in load_result.stdout
 
 
-# =============================================================================
 # Module-level classes should not be affected
-# =============================================================================
 
 
 class TestModuleLevelClassesUnaffected:
@@ -588,9 +578,7 @@ class TestModuleLevelClassesUnaffected:
         assert type(restored) is ModuleLevelModel
 
 
-# =============================================================================
 # Ray task tests
-# =============================================================================
 
 
 class TestRayTaskWithLocalClasses:
@@ -690,9 +678,7 @@ class TestRayTaskWithLocalClasses:
         assert result.startswith("hello|ccflow.local_persistence._Local_")
 
 
-# =============================================================================
 # UUID uniqueness tests
-# =============================================================================
 
 
 class TestUUIDUniqueness:
@@ -747,9 +733,7 @@ class TestUUIDUniqueness:
         assert all(c in "0123456789abcdef" for c in uuid_part)
 
 
-# =============================================================================
 # Nested class and inheritance tests
-# =============================================================================
 
 
 class OuterClass:
@@ -858,9 +842,7 @@ class TestInheritanceDoesNotPropagateImportPath:
         assert "__ccflow_import_path__" not in ModuleLevelModel.__dict__
 
 
-# =============================================================================
 # Generic types tests
-# =============================================================================
 
 
 class TestGenericTypes:
@@ -915,9 +897,7 @@ class TestGenericTypes:
         assert GenericModel.__ccflow_import_path__.startswith(local_persistence.LOCAL_ARTIFACTS_MODULE_NAME)
 
 
-# =============================================================================
 # Import string tests
-# =============================================================================
 
 
 class TestImportString:
@@ -955,9 +935,7 @@ class TestImportString:
         assert result is os.path.join
 
 
-# =============================================================================
 # Registration strategy tests
-# =============================================================================
 
 
 class TestRegistrationStrategy:
@@ -993,9 +971,7 @@ class TestRegistrationStrategy:
             assert "<locals>" in LocalModel.__qualname__
 
 
-# =============================================================================
 # Tests for create_ccflow_model wrapper
-# =============================================================================
 
 
 class TestCreateCcflowModelWrapper:
