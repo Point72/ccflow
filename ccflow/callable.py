@@ -535,8 +535,8 @@ class Flow(PydanticBaseModel):
         features (caching, evaluation, registry, serialization) work unchanged.
 
         Args:
-            context_args: List of parameter names that come from context (for unpacked mode)
-            context_type: Explicit ContextBase subclass to use with context_args mode
+            context_type: Optional ContextBase subclass used only to validate/coerce
+                `FromContext[...]` inputs against an existing nominal context shape
             cacheable: Enable caching of results (default: False)
             volatile: Mark as volatile (default: False)
             log_level: Logging verbosity (default: logging.DEBUG)
@@ -544,27 +544,36 @@ class Flow(PydanticBaseModel):
             verbose: Verbose logging output (default: True)
             evaluator: Custom evaluator (default: None)
 
-        Two Context Modes:
+        Primary authoring model:
+            Mark runtime/contextual inputs explicitly with `FromContext[...]`.
+            Ordinary unmarked parameters are regular bound inputs and are never
+            read implicitly from the runtime context.
 
-        Mode 1 - Explicit context parameter:
-            Function has a 'context' parameter annotated with a ContextBase subclass.
+            @Flow.model
+            def load_prices(
+                source: str,
+                start_date: FromContext[date],
+                end_date: FromContext[date],
+            ) -> GenericResult[pl.DataFrame]:
+                return GenericResult(value=query_db(source, start_date, end_date))
+
+        Advanced interop path:
+            Functions may still declare an explicit context parameter annotated
+            with a ContextBase subclass.
 
             @Flow.model
             def load_prices(context: DateRangeContext, source: str) -> GenericResult[pl.DataFrame]:
                 return GenericResult(value=query_db(source, context.start_date, context.end_date))
 
-        Mode 2 - Unpacked context_args:
-            Context fields are unpacked into function parameters.
-
-            @Flow.model(context_args=["start_date", "end_date"], context_type=DateRangeContext)
-            def load_prices(start_date: date, end_date: date, source: str) -> GenericResult[pl.DataFrame]:
-                return GenericResult(value=query_db(source, start_date, end_date))
-
         Dependencies:
-            Any non-context parameter can be bound either to a literal value or
+            Any ordinary parameter can be bound either to a literal value or
             to another CallableModel. When a CallableModel is supplied, the
             generated model treats it as an upstream dependency and resolves it
             with the current context before calling the underlying function.
+
+            `FromContext[...]` parameters are different: they may be satisfied by
+            runtime context, construction-time contextual defaults, or function
+            defaults, but not by CallableModel values.
 
         Usage:
             # Create model instances

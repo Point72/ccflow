@@ -19,33 +19,16 @@ Run with:
 from calendar import monthrange
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Literal, Protocol, cast
+from typing import Literal
 
-from ccflow import BoundModel, CallableModel, DateRangeContext, Flow, FlowAPI, GenericResult, ModelRegistry
-from typing_extensions import TypedDict
+from ccflow import BoundModel, CallableModel, DateRangeContext, Flow, FromContext, ModelRegistry
 
 CONFIG_PATH = Path(__file__).with_name("config") / "flow_model_hydra_builder_demo.yaml"
 ComparisonName = Literal["week_over_week", "month_over_month"]
 
 
-class RevenueChangeResult(TypedDict):
-    comparison: ComparisonName
-    current_window: str
-    previous_window: str
-    current: float
-    previous: float
-    delta: float
-    growth_pct: float
-
-
-class RevenueChangeModel(Protocol):
-    flow: FlowAPI
-
-    def __call__(self, context: DateRangeContext) -> GenericResult[RevenueChangeResult]: ...
-
-
-@Flow.model(context_args=["start_date", "end_date"], context_type=DateRangeContext)
-def load_revenue(start_date: date, end_date: date, region: str) -> float:
+@Flow.model(context_type=DateRangeContext)
+def load_revenue(region: str, start_date: FromContext[date], end_date: FromContext[date]) -> float:
     """Return synthetic revenue for a date window."""
     days = (end_date - start_date).days + 1
     region_base = {"us": 1000.0, "eu": 850.0, "apac": 920.0}.get(region, 900.0)
@@ -54,14 +37,14 @@ def load_revenue(start_date: date, end_date: date, region: str) -> float:
     return round(region_base + days * 8.0 + trend, 2)
 
 
-@Flow.model(context_args=["start_date", "end_date"], context_type=DateRangeContext)
+@Flow.model(context_type=DateRangeContext)
 def revenue_change(
-    start_date: date,
-    end_date: date,
     current: float,
     previous: float,
     comparison: ComparisonName,
-) -> RevenueChangeResult:
+    start_date: FromContext[date],
+    end_date: FromContext[date],
+) -> dict:
     """Compare the current window against a shifted previous window."""
     growth = (current - previous) / previous
     previous_start, previous_end = comparison_window(start_date, end_date, comparison)
@@ -104,7 +87,7 @@ def comparison_input(model: CallableModel, comparison: ComparisonName) -> BoundM
     )
 
 
-def build_comparison(current: CallableModel, *, comparison: ComparisonName) -> RevenueChangeModel:
+def build_comparison(current: CallableModel, *, comparison: ComparisonName):
     """Hydra-friendly builder that returns a configured comparison model."""
     previous = comparison_input(current, comparison)
     return revenue_change(
@@ -120,8 +103,8 @@ def main() -> None:
     try:
         registry.load_config_from_path(str(CONFIG_PATH), overwrite=True)
 
-        week_over_week = cast(RevenueChangeModel, registry["week_over_week"])
-        month_over_month = cast(RevenueChangeModel, registry["month_over_month"])
+        week_over_week = registry["week_over_week"]
+        month_over_month = registry["month_over_month"]
 
         ctx = DateRangeContext(
             start_date=date(2024, 3, 1),
@@ -136,13 +119,10 @@ def main() -> None:
         print("  week_over_week:", week_over_week)
         print("  month_over_month:", month_over_month)
 
-        week_over_week_result = cast(
-            RevenueChangeResult,
-            week_over_week.flow.compute(
-                start_date=ctx.start_date,
-                end_date=ctx.end_date,
-            ).value,
-        )
+        week_over_week_result = week_over_week.flow.compute(
+            start_date=ctx.start_date,
+            end_date=ctx.end_date,
+        ).value
         month_over_month_result = month_over_month(ctx).value
 
         print("\nWeek-over-week:")

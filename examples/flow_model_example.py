@@ -14,11 +14,11 @@ Run with:
 
 from datetime import date, timedelta
 
-from ccflow import DateRangeContext, Flow
+from ccflow import DateRangeContext, Flow, FromContext
 
 
-@Flow.model(context_args=["start_date", "end_date"], context_type=DateRangeContext)
-def load_revenue(start_date: date, end_date: date, region: str) -> float:
+@Flow.model(context_type=DateRangeContext)
+def load_revenue(region: str, start_date: FromContext[date], end_date: FromContext[date]) -> float:
     """Return synthetic revenue for one reporting window."""
     days = (end_date - start_date).days + 1
     region_base = {"us": 1000.0, "eu": 850.0}.get(region, 900.0)
@@ -27,14 +27,14 @@ def load_revenue(start_date: date, end_date: date, region: str) -> float:
     return round(region_base + days * 8.0 + trend, 2)
 
 
-@Flow.model(context_args=["start_date", "end_date"], context_type=DateRangeContext)
+@Flow.model(context_type=DateRangeContext)
 def revenue_change(
-    start_date: date,
-    end_date: date,
     current: float,
     previous: float,
     label: str,
     days_back: int,
+    start_date: FromContext[date],
+    end_date: FromContext[date],
 ) -> dict:
     """Compare the current window against a shifted previous window."""
     previous_start = start_date - timedelta(days=days_back)

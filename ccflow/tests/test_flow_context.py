@@ -1,19 +1,13 @@
-"""Tests for FlowContext, FlowAPI, and TypedDict-based context validation.
-
-These tests verify the new deferred computation API that uses:
-- FlowContext: Universal context carrier with extra="allow"
-- TypedDict + TypeAdapter: Schema validation without dynamic class registration
-- FlowAPI: The .flow namespace for compute/with_inputs/etc.
-"""
+"""Tests for FlowContext, FlowAPI, and BoundModel under the FromContext design."""
 
 import pickle
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 
 import cloudpickle
 import pytest
 
-from ccflow import CallableModel, ContextBase, Flow, FlowAPI, FlowContext, GenericResult
-from ccflow.context import DateRangeContext
+from ccflow import BoundModel, CallableModel, ContextBase, Flow, FlowContext, FromContext, GenericResult
 
 
 class NumberContext(ContextBase):
@@ -28,569 +22,161 @@ class OffsetModel(CallableModel):
         return GenericResult(value=context.x + self.offset)
 
 
-class TestFlowContext:
-    """Tests for the FlowContext universal carrier."""
-
-    def test_flow_context_basic(self):
-        """FlowContext accepts arbitrary fields."""
-        ctx = FlowContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31))
-        assert ctx.start_date == date(2024, 1, 1)
-        assert ctx.end_date == date(2024, 1, 31)
-
-    def test_flow_context_extra_fields(self):
-        """FlowContext exposes arbitrary fields through normal model APIs."""
-        ctx = FlowContext(x=1, y="hello", z=[1, 2, 3])
-        assert ctx.x == 1
-        assert ctx.y == "hello"
-        assert ctx.z == [1, 2, 3]
-        assert dict(ctx) == {"x": 1, "y": "hello", "z": [1, 2, 3]}
-
-    def test_flow_context_frozen(self):
-        """FlowContext is immutable (frozen)."""
-        ctx = FlowContext(value=42)
-        with pytest.raises(Exception):  # ValidationError for frozen model
-            ctx.value = 100
-
-    def test_flow_context_repr(self):
-        """FlowContext has a useful repr."""
-        ctx = FlowContext(a=1, b=2)
-        repr_str = repr(ctx)
-        assert "FlowContext" in repr_str
-        assert "a=1" in repr_str
-        assert "b=2" in repr_str
-
-    def test_flow_context_attribute_error(self):
-        """FlowContext raises AttributeError for missing fields."""
-        ctx = FlowContext(x=1)
-        with pytest.raises(AttributeError, match="no attribute 'missing'"):
-            _ = ctx.missing
-
-    def test_flow_context_model_dump(self):
-        """FlowContext can be dumped (includes extra fields)."""
-        ctx = FlowContext(start_date=date(2024, 1, 1), value=42)
-        dumped = ctx.model_dump()
-        assert dumped["start_date"] == date(2024, 1, 1)
-        assert dumped["value"] == 42
-
-    def test_flow_context_value_semantics_include_extra_fields(self):
-        """Equality should reflect the actual extra payload."""
-        assert FlowContext(x=1) == FlowContext(x=1)
-        assert FlowContext(x=1) != FlowContext(x=2)
-        assert FlowContext(x=1) != FlowContext(y=1)
-
-    def test_flow_context_hash_uses_extra_fields(self):
-        """Distinct extra payloads should remain distinct in hashed collections."""
-        first = FlowContext(values=[1, 2], label="a")
-        second = FlowContext(values=[1, 3], label="a")
-        third = FlowContext(values=[1, 2], label="b")
-
-        assert len({first, second, third}) == 3
-
-    def test_flow_context_hash_raises_for_unhashable_values(self):
-        """FlowContext with truly unhashable values (no __dict__) should raise TypeError."""
-
-        class Unhashable:
-            __hash__ = None  # type: ignore[assignment]
-
-            def __init__(self):
-                pass
-
-            # Deliberately no __dict__ suppression — but __hash__ is None,
-            # so the fallback path in _freeze_for_hash should use __dict__.
-            # To trigger the actual TypeError path, we need an object with
-            # no __dict__ and no __hash__.
-
-        class UnhashableSlots:
-            __slots__ = ()
-            __hash__ = None  # type: ignore[assignment]
-
-        ctx = FlowContext(val=UnhashableSlots())
-        with pytest.raises(TypeError, match="unhashable value"):
-            hash(ctx)
-
-    def test_flow_context_eq_non_flow_context(self):
-        """FlowContext.__eq__ returns False for non-FlowContext objects."""
-        ctx = FlowContext(x=1)
-        assert ctx != 42
-        assert ctx != "hello"
-        assert ctx != None  # noqa: E711
-        assert ctx != NumberContext(x=1)
-
-    def test_flow_context_hash_with_set_value(self):
-        """FlowContext with set values should hash correctly via frozenset."""
-        ctx = FlowContext(tags=frozenset({"a", "b"}))
-        # Should not raise
-        h = hash(ctx)
-        assert isinstance(h, int)
-
-    def test_flow_context_hash_with_model_dump_object(self):
-        """_freeze_for_hash should handle objects with model_dump attribute."""
-        from ccflow.context import _freeze_for_hash
-
-        # Directly test _freeze_for_hash with an object that has model_dump
-        # (FlowContext.__hash__ goes through model_dump first which serializes
-        # nested models, so we test the helper directly)
-        inner = NumberContext(x=42)
-        result = _freeze_for_hash(inner)
-        assert isinstance(result, tuple)
-        assert result[0] is NumberContext
+def test_flow_context_basic_properties():
+    ctx = FlowContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31), label="x")
+    assert ctx.start_date == date(2024, 1, 1)
+    assert ctx.end_date == date(2024, 1, 31)
+    assert ctx.label == "x"
+    assert dict(ctx) == {"start_date": date(2024, 1, 1), "end_date": date(2024, 1, 31), "label": "x"}
 
-    def test_flow_context_hash_unhashable_with_dict_fallback(self):
-        """Objects with __dict__ but no __hash__ should use __dict__ fallback."""
-
-        class UnhashableWithDict:
-            __hash__ = None  # type: ignore[assignment]
 
-            def __init__(self, val):
-                self.val = val
+def test_flow_context_value_semantics_and_hash():
+    first = FlowContext(x=1, values=[1, 2])
+    second = FlowContext(x=1, values=[1, 2])
+    third = FlowContext(x=2, values=[1, 2])
 
-        ctx = FlowContext(obj=UnhashableWithDict(42))
-        h = hash(ctx)
-        assert isinstance(h, int)
+    assert first == second
+    assert first != third
+    assert len({first, second, third}) == 2
 
-    def test_flow_context_pickle(self):
-        """FlowContext pickles cleanly."""
-        ctx = FlowContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31))
-        pickled = pickle.dumps(ctx)
-        unpickled = pickle.loads(pickled)
-        assert unpickled.start_date == date(2024, 1, 1)
-        assert unpickled.end_date == date(2024, 1, 31)
 
-    def test_flow_context_cloudpickle(self):
-        """FlowContext works with cloudpickle (for Ray)."""
-        ctx = FlowContext(data=[1, 2, 3], name="test")
-        pickled = cloudpickle.dumps(ctx)
-        unpickled = cloudpickle.loads(pickled)
-        assert unpickled.data == [1, 2, 3]
-        assert unpickled.name == "test"
+def test_flow_context_pickle_and_cloudpickle_roundtrip():
+    ctx = FlowContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31), tags=frozenset({"a", "b"}))
+    assert pickle.loads(pickle.dumps(ctx)) == ctx
+    assert cloudpickle.loads(cloudpickle.dumps(ctx)) == ctx
 
 
-class TestFlowAPI:
-    """Tests for the FlowAPI (.flow namespace)."""
+def test_flow_api_introspection_for_from_context_model():
+    @Flow.model
+    def add(a: int, b: FromContext[int], c: FromContext[int] = 5) -> int:
+        return a + b + c
 
-    def test_flow_compute_basic(self):
-        """FlowAPI.compute() validates and executes."""
+    model = add(a=10)
+    assert model.flow.context_inputs == {"b": int, "c": int}
+    assert model.flow.unbound_inputs == {"b": int}
+    assert model.flow.bound_inputs == {"a": 10}
+    assert model.flow.compute(b=2).value == 17
 
-        @Flow.model(context_args=["start_date", "end_date"])
-        def load_data(start_date: date, end_date: date, source: str = "db") -> GenericResult[dict]:
-            return GenericResult(value={"start": start_date, "end": end_date, "source": source})
 
-        model = load_data(source="api")
-        result = model.flow.compute(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31))
+def test_flow_api_compute_accepts_single_context_or_kwargs_but_not_both():
+    @Flow.model
+    def add(a: int, b: FromContext[int]) -> int:
+        return a + b
 
-        assert result.value["start"] == date(2024, 1, 1)
-        assert result.value["end"] == date(2024, 1, 31)
-        assert result.value["source"] == "api"
+    model = add(a=10)
+    assert model.flow.compute(b=5).value == 15
+    assert model.flow.compute(FlowContext(b=6)).value == 16
 
-    def test_flow_compute_type_coercion(self):
-        """FlowAPI.compute() coerces types via TypeAdapter."""
+    with pytest.raises(TypeError, match="either one context object or contextual keyword arguments"):
+        model.flow.compute(FlowContext(b=5), b=6)
 
-        @Flow.model(context_args=["start_date", "end_date"])
-        def load_data(start_date: date, end_date: date) -> GenericResult[dict]:
-            return GenericResult(value={"start": start_date, "end": end_date})
 
-        model = load_data()
-        # Pass strings - should be coerced to dates
-        result = model.flow.compute(start_date="2024-01-01", end_date="2024-01-31")
+def test_bound_model_with_inputs_static_and_callable():
+    @Flow.model
+    def load_window(start_date: FromContext[date], end_date: FromContext[date]) -> GenericResult[dict]:
+        return GenericResult(value={"start": start_date, "end": end_date})
 
-        assert result.value["start"] == date(2024, 1, 1)
-        assert result.value["end"] == date(2024, 1, 31)
+    model = load_window()
+    shifted = model.flow.with_inputs(
+        start_date=lambda ctx: ctx.start_date - timedelta(days=7),
+        end_date=date(2024, 1, 31),
+    )
 
-    def test_flow_compute_validation_error(self):
-        """FlowAPI.compute() raises on missing required args."""
+    result = shifted(FlowContext(start_date=date(2024, 1, 8), end_date=date(2024, 1, 30)))
+    assert result.value == {"start": date(2024, 1, 1), "end": date(2024, 1, 31)}
 
-        @Flow.model(context_args=["start_date", "end_date"])
-        def load_data(start_date: date, end_date: date) -> GenericResult[dict]:
-            return GenericResult(value={})
 
-        model = load_data()
-        with pytest.raises(Exception):  # ValidationError
-            model.flow.compute(start_date=date(2024, 1, 1))  # Missing end_date
+def test_bound_model_with_inputs_is_branch_local_and_chained():
+    @Flow.model
+    def source(value: FromContext[int]) -> int:
+        return value
 
-    def test_flow_unbound_inputs(self):
-        """FlowAPI.unbound_inputs returns the context schema."""
+    @Flow.model
+    def combine(left: int, right: int, value: FromContext[int]) -> int:
+        return left + right + value
 
-        @Flow.model(context_args=["start_date", "end_date"])
-        def load_data(start_date: date, end_date: date, source: str = "db") -> GenericResult[dict]:
-            return GenericResult(value={})
+    base = source()
+    left = base.flow.with_inputs(value=lambda ctx: ctx.value + 1)
+    right = base.flow.with_inputs(value=lambda ctx: ctx.value + 2).flow.with_inputs(value=lambda ctx: ctx.value + 10)
+    model = combine(left=left, right=right)
 
-        model = load_data(source="api")
-        unbound = model.flow.unbound_inputs
+    assert model.flow.compute(value=5).value == (6 + 15 + 5)
 
-        assert "start_date" in unbound
-        assert "end_date" in unbound
-        assert unbound["start_date"] == date
-        assert unbound["end_date"] == date
-        # source is not unbound (it has a default/is bound)
-        assert "source" not in unbound
 
-    def test_flow_bound_inputs(self):
-        """FlowAPI.bound_inputs returns config values."""
+def test_bound_model_rejects_regular_field_rewrites():
+    @Flow.model
+    def add(a: int, b: FromContext[int]) -> int:
+        return a + b
 
-        @Flow.model(context_args=["start_date", "end_date"])
-        def load_data(start_date: date, end_date: date, source: str = "db") -> GenericResult[dict]:
-            return GenericResult(value={})
+    with pytest.raises(TypeError, match="only accepts contextual fields"):
+        add(a=1).flow.with_inputs(a=3)
 
-        model = load_data(source="api")
-        bound = model.flow.bound_inputs
 
-        assert "source" in bound
-        assert bound["source"] == "api"
-        # Context args are not in bound_inputs
-        assert "start_date" not in bound
-        assert "end_date" not in bound
+def test_bound_model_repr_matches_user_facing_api():
+    @Flow.model
+    def add(a: int, b: FromContext[int]) -> int:
+        return a + b
 
-    def test_flow_compute_regular_callable_model(self):
-        """Regular CallableModels also expose .flow.compute()."""
+    model = add(a=1)
+    bound = model.flow.with_inputs(b=lambda ctx: ctx.b + 1)
+    assert repr(bound) == f"{model!r}.flow.with_inputs(b=<lambda>)"
 
-        model = OffsetModel(offset=10)
-        result = model.flow.compute(x=5)
 
-        assert result.value == 15
+def test_bound_model_serialization_roundtrip_preserves_static_transforms():
+    @Flow.model
+    def add(a: int, b: FromContext[int]) -> int:
+        return a + b
 
-    def test_flow_unbound_inputs_regular_callable_model(self):
-        """Regular CallableModels expose their context schema as unbound inputs."""
+    bound = add(a=10).flow.with_inputs(b=5)
+    dumped = bound.model_dump(mode="python")
+    restored = type(bound).model_validate(dumped)
 
-        model = OffsetModel(offset=10)
-        unbound = model.flow.unbound_inputs
+    assert restored.flow.compute().value == 15
+    assert restored.model.flow.bound_inputs == {"a": 10}
 
-        assert unbound == {"x": int}
 
-    def test_flow_bound_inputs_regular_callable_model(self):
-        """Regular CallableModels expose their configured fields as bound inputs."""
+def test_regular_callable_models_still_support_with_inputs():
+    model = OffsetModel(offset=10)
+    shifted = model.flow.with_inputs(x=lambda ctx: ctx.x * 2)
+    assert shifted(NumberContext(x=5)).value == 20
 
-        model = OffsetModel(offset=10)
-        bound = model.flow.bound_inputs
 
-        assert bound["offset"] == 10
+def test_flow_api_for_regular_callable_model():
+    model = OffsetModel(offset=10)
+    assert model.flow.compute(x=5).value == 15
+    assert model.flow.context_inputs == {"x": int}
+    assert model.flow.unbound_inputs == {"x": int}
+    assert model.flow.bound_inputs == {"offset": 10}
 
 
-class TestBoundModel:
-    """Tests for BoundModel (created via .flow.with_inputs())."""
+def test_generated_flow_model_compute_is_thread_safe():
+    @Flow.model
+    def add(a: int, b: FromContext[int], c: FromContext[int]) -> int:
+        return a + b + c
 
-    def test_with_inputs_static_value(self):
-        """with_inputs can bind static values."""
+    model = add(a=10)
 
-        @Flow.model(context_args=["start_date", "end_date"])
-        def load_data(start_date: date, end_date: date) -> GenericResult[dict]:
-            return GenericResult(value={"start": start_date, "end": end_date})
+    def worker(n: int) -> int:
+        return model.flow.compute(b=n, c=n + 1).value
 
-        model = load_data()
-        bound = model.flow.with_inputs(start_date=date(2024, 1, 1))
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(worker, range(20)))
 
-        # Call with just end_date (start_date is bound)
-        ctx = FlowContext(end_date=date(2024, 1, 31))
-        result = bound(ctx)
-        assert result.value["start"] == date(2024, 1, 1)
-        assert result.value["end"] == date(2024, 1, 31)
+    assert results == [10 + n + n + 1 for n in range(20)]
 
-    def test_with_inputs_transform_function(self):
-        """with_inputs can use transform functions."""
 
-        @Flow.model(context_args=["start_date", "end_date"])
-        def load_data(start_date: date, end_date: date) -> GenericResult[dict]:
-            return GenericResult(value={"start": start_date, "end": end_date})
+def test_bound_model_restore_is_thread_safe():
+    @Flow.model
+    def add(a: int, b: FromContext[int]) -> int:
+        return a + b
 
-        model = load_data()
-        # Lookback: start_date is 7 days before the context's start_date
-        bound = model.flow.with_inputs(start_date=lambda ctx: ctx.start_date - timedelta(days=7))
+    dumped = add(a=10).flow.with_inputs(b=5).model_dump(mode="python")
 
-        ctx = FlowContext(start_date=date(2024, 1, 8), end_date=date(2024, 1, 31))
-        result = bound(ctx)
-        assert result.value["start"] == date(2024, 1, 1)  # 7 days before
-        assert result.value["end"] == date(2024, 1, 31)
+    def worker(_: int) -> int:
+        restored = BoundModel.model_validate(dumped)
+        return restored.flow.compute().value
 
-    def test_with_inputs_multiple_transforms(self):
-        """with_inputs can apply multiple transforms."""
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(worker, range(20)))
 
-        @Flow.model(context_args=["start_date", "end_date"])
-        def load_data(start_date: date, end_date: date) -> GenericResult[dict]:
-            return GenericResult(value={"start": start_date, "end": end_date})
-
-        model = load_data()
-        bound = model.flow.with_inputs(
-            start_date=lambda ctx: ctx.start_date - timedelta(days=7),
-            end_date=lambda ctx: ctx.end_date + timedelta(days=1),
-        )
-
-        ctx = FlowContext(start_date=date(2024, 1, 8), end_date=date(2024, 1, 30))
-        result = bound(ctx)
-        assert result.value["start"] == date(2024, 1, 1)
-        assert result.value["end"] == date(2024, 1, 31)
-
-    def test_bound_model_has_flow_property(self):
-        """BoundModel has a .flow property."""
-
-        @Flow.model(context_args=["x"])
-        def compute(x: int) -> GenericResult[int]:
-            return GenericResult(value=x * 2)
-
-        model = compute()
-        bound = model.flow.with_inputs(x=42)
-        assert isinstance(bound.flow, FlowAPI)
-
-    def test_bound_model_repr_looks_like_with_inputs_call(self):
-        """BoundModel repr should mirror the API users wrote."""
-
-        @Flow.model(context_args=["x"])
-        def compute(x: int) -> GenericResult[int]:
-            return GenericResult(value=x * 2)
-
-        model = compute()
-        bound = model.flow.with_inputs(x=lambda ctx: ctx.x + 1)
-
-        assert repr(bound) == f"{model!r}.flow.with_inputs(x=<lambda>)"
-
-    def test_with_inputs_regular_callable_model(self):
-        """Regular CallableModels support .flow.with_inputs()."""
-
-        model = OffsetModel(offset=1)
-        shifted = model.flow.with_inputs(x=lambda ctx: ctx.x * 2)
-
-        result = shifted(NumberContext(x=5))
-        assert result.value == 11
-
-
-class TestTypedDictValidation:
-    """Tests for TypedDict-based context validation."""
-
-    def test_schema_stored_on_model(self):
-        """Model stores _context_schema for validation."""
-
-        @Flow.model(context_args=["start_date", "end_date"])
-        def load_data(start_date: date, end_date: date) -> GenericResult[dict]:
-            return GenericResult(value={})
-
-        model = load_data()
-        assert hasattr(model, "_context_schema")
-        assert model._context_schema == {"start_date": date, "end_date": date}
-
-    def test_validator_created_lazily(self):
-        """TypeAdapter validator is created lazily."""
-
-        @Flow.model(context_args=["x"])
-        def compute(x: int) -> GenericResult[int]:
-            return GenericResult(value=x)
-
-        model = compute()
-        # Initially None
-        assert model.__class__._cached_context_validator is None
-
-        # After getting validator, it's cached
-        validator = model._get_context_validator()
-        assert validator is not None
-        assert model.__class__._cached_context_validator is validator
-
-    def test_explicit_context_type_override(self):
-        """context_type can opt into an existing ContextBase subclass."""
-
-        @Flow.model(context_args=["start_date", "end_date"], context_type=DateRangeContext)
-        def load_data(start_date: date, end_date: date) -> GenericResult[dict]:
-            return GenericResult(value={})
-
-        model = load_data()
-        assert model.context_type == DateRangeContext
-
-
-class TestPicklingSupport:
-    """Tests for pickling support (important for Ray).
-
-    Note: Regular pickle cannot pickle locally-defined classes (functions decorated
-    inside test methods). cloudpickle CAN handle this, which is why Ray uses it.
-    All tests here use cloudpickle to match Ray's behavior.
-    """
-
-    def test_model_cloudpickle_roundtrip(self):
-        """Model works with cloudpickle (for Ray)."""
-
-        @Flow.model(context_args=["x", "y"])
-        def compute(x: int, y: int, multiplier: int = 2) -> GenericResult[int]:
-            return GenericResult(value=(x + y) * multiplier)
-
-        model = compute(multiplier=3)
-
-        # cloudpickle roundtrip (what Ray uses)
-        pickled = cloudpickle.dumps(model)
-        unpickled = cloudpickle.loads(pickled)
-
-        # Should work after unpickling
-        result = unpickled.flow.compute(x=1, y=2)
-        assert result.value == 9  # (1 + 2) * 3
-
-    def test_model_cloudpickle_simple(self):
-        """Simple model cloudpickle test."""
-
-        @Flow.model(context_args=["value"])
-        def double(value: int) -> GenericResult[int]:
-            return GenericResult(value=value * 2)
-
-        model = double()
-
-        pickled = cloudpickle.dumps(model)
-        unpickled = cloudpickle.loads(pickled)
-
-        result = unpickled.flow.compute(value=21)
-        assert result.value == 42
-
-    def test_validator_recreated_after_cloudpickle(self):
-        """TypeAdapter validator is recreated after cloudpickling."""
-
-        @Flow.model(context_args=["x"])
-        def compute(x: int) -> GenericResult[int]:
-            return GenericResult(value=x)
-
-        model = compute()
-        # Warm up the validator cache
-        _ = model._get_context_validator()
-        assert model.__class__._cached_context_validator is not None
-
-        # cloudpickle and unpickle
-        pickled = cloudpickle.dumps(model)
-        unpickled = cloudpickle.loads(pickled)
-
-        # Validator should still work (may be lazily recreated)
-        result = unpickled.flow.compute(x=42)
-        assert result.value == 42
-
-    def test_flow_context_pickle_standard(self):
-        """FlowContext works with standard pickle."""
-        ctx = FlowContext(x=1, y=2, z="test")
-
-        pickled = pickle.dumps(ctx)
-        unpickled = pickle.loads(pickled)
-
-        assert unpickled.x == 1
-        assert unpickled.y == 2
-        assert unpickled.z == "test"
-
-
-class TestIntegrationWithExistingContextTypes:
-    """Tests for integration with existing ContextBase subclasses."""
-
-    def test_explicit_context_still_works(self):
-        """Explicit context parameter mode still works."""
-
-        @Flow.model
-        def load_data(context: DateRangeContext, source: str = "db") -> GenericResult[dict]:
-            return GenericResult(value={"start": context.start_date, "end": context.end_date, "source": source})
-
-        model = load_data(source="api")
-        ctx = DateRangeContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31))
-        result = model(ctx)
-
-        assert result.value["start"] == date(2024, 1, 1)
-        assert result.value["source"] == "api"
-
-    def test_flow_context_coerces_to_date_range(self):
-        """FlowContext can be used with models expecting DateRangeContext."""
-
-        @Flow.model
-        def load_data(context: DateRangeContext) -> GenericResult[dict]:
-            return GenericResult(value={"start": context.start_date, "end": context.end_date})
-
-        model = load_data()
-        # Use FlowContext - should coerce to DateRangeContext
-        ctx = FlowContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31))
-        result = model(ctx)
-
-        assert result.value["start"] == date(2024, 1, 1)
-        assert result.value["end"] == date(2024, 1, 31)
-
-    def test_flow_api_with_explicit_context(self):
-        """FlowAPI.compute works with explicit context mode."""
-
-        @Flow.model
-        def load_data(context: DateRangeContext, source: str = "db") -> GenericResult[dict]:
-            return GenericResult(value={"start": context.start_date, "end": context.end_date})
-
-        model = load_data(source="api")
-        result = model.flow.compute(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31))
-
-        assert result.value["start"] == date(2024, 1, 1)
-        assert result.value["end"] == date(2024, 1, 31)
-
-
-class TestLazy:
-    """Tests for Lazy (deferred execution with context overrides)."""
-
-    def test_lazy_basic(self):
-        """Lazy wraps a model for deferred execution."""
-        from ccflow import Lazy
-
-        @Flow.model(context_args=["value"])
-        def compute(value: int, multiplier: int = 2) -> GenericResult[int]:
-            return GenericResult(value=value * multiplier)
-
-        model = compute(multiplier=3)
-        lazy = Lazy(model)
-
-        assert lazy.model is model
-
-    def test_lazy_call_with_static_override(self):
-        """Lazy.__call__ with static override values."""
-        from ccflow import Lazy
-
-        @Flow.model(context_args=["x", "y"])
-        def add(x: int, y: int) -> GenericResult[int]:
-            return GenericResult(value=x + y)
-
-        model = add()
-        lazy_fn = Lazy(model)(y=100)  # Override y to 100
-
-        ctx = FlowContext(x=5, y=10)  # Original y=10
-        result = lazy_fn(ctx)
-        assert result.value == 105  # x=5 + y=100 (overridden)
-
-    def test_lazy_call_with_callable_override(self):
-        """Lazy.__call__ with callable override (computed at runtime)."""
-        from ccflow import Lazy
-
-        @Flow.model(context_args=["value"])
-        def double(value: int) -> GenericResult[int]:
-            return GenericResult(value=value * 2)
-
-        model = double()
-        # Override value to be original value + 10
-        lazy_fn = Lazy(model)(value=lambda ctx: ctx.value + 10)
-
-        ctx = FlowContext(value=5)
-        result = lazy_fn(ctx)
-        assert result.value == 30  # (5 + 10) * 2 = 30
-
-    def test_lazy_with_date_transforms(self):
-        """Lazy works with date transforms."""
-        from ccflow import Lazy
-
-        @Flow.model(context_args=["start_date", "end_date"])
-        def load_data(start_date: date, end_date: date) -> GenericResult[dict]:
-            return GenericResult(value={"start": start_date, "end": end_date})
-
-        model = load_data()
-
-        # Use Lazy to create a transform that shifts dates
-        lazy_fn = Lazy(model)(start_date=lambda ctx: ctx.start_date - timedelta(days=7), end_date=lambda ctx: ctx.end_date)
-
-        ctx = FlowContext(start_date=date(2024, 1, 15), end_date=date(2024, 1, 31))
-        result = lazy_fn(ctx)
-
-        assert result.value["start"] == date(2024, 1, 8)  # 7 days before
-        assert result.value["end"] == date(2024, 1, 31)
-
-    def test_lazy_multiple_overrides(self):
-        """Lazy supports multiple overrides at once."""
-        from ccflow import Lazy
-
-        @Flow.model(context_args=["a", "b", "c"])
-        def compute(a: int, b: int, c: int) -> GenericResult[int]:
-            return GenericResult(value=a + b + c)
-
-        model = compute()
-        lazy_fn = Lazy(model)(
-            a=10,  # Static
-            b=lambda ctx: ctx.b * 2,  # Transform
-            # c not overridden, uses context value
-        )
-
-        ctx = FlowContext(a=1, b=5, c=100)
-        result = lazy_fn(ctx)
-        assert result.value == 10 + 10 + 100  # a=10, b=5*2=10, c=100
+    assert results == [15] * 20

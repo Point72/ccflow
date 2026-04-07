@@ -4,143 +4,167 @@
 
 `@Flow.model` turns a plain Python function into a real `CallableModel`.
 
-The core goals are:
+The design is intentionally narrow:
 
-- keep the authoring model close to an ordinary function,
-- preserve the existing evaluator / registry / serialization machinery,
-- make deferred execution explicit with `.flow.compute(...)` and `.flow.with_inputs(...)`,
-- allow callers to pass either literal values or upstream models for ordinary parameters.
+- ordinary unmarked parameters are regular bound inputs,
+- `FromContext[T]` marks the only runtime/contextual inputs,
+- `.flow.compute(...)` supplies contextual inputs,
+- `.flow.with_inputs(...)` rewires contextual inputs on one dependency edge,
+- upstream `CallableModel`s can still be passed as ordinary arguments.
 
-`@Flow.model` is syntactic sugar over the existing ccflow framework. The
-generated object is still a standard `CallableModel`, so you can execute it the
-same way as any other model by calling it with a context object. The
-`.flow.compute(...)` helper is an explicit, ergonomic way to mark the deferred
-execution boundary when supplying runtime inputs as keyword arguments.
+The goal is that a reader can look at one function signature and immediately
+answer:
 
-## Core Patterns
+1. which values come from runtime context,
+2. which values must be bound as regular configuration or dependencies,
+3. how to rewrite contextual inputs for one branch of the graph.
 
-### Default Deferred Style
-
-This is the most ergonomic mode. Bind some parameters up front, then provide
-the remaining runtime inputs later.
+## Primary Story
 
 ```python
-from ccflow import Flow, FlowContext
+from ccflow import Flow, FromContext
 
 
 @Flow.model
-def add(x: int, y: int) -> int:
-    return x + y
+def foo(a: int, b: FromContext[int]) -> int:
+    return a + b
 
 
-model = add(x=10)
+# Build an instance with a=11 bound, then supply b=12 at runtime:
+result = foo(a=11).flow.compute(b=12)
+assert result.value == 23  # .value unwraps the GenericResult wrapper
 
-# Explicit deferred entry point
-assert model.flow.compute(y=5).value == 15
-
-# Standard CallableModel call path
-assert model(FlowContext(y=5)).value == 15
-
-shifted = model.flow.with_inputs(y=lambda ctx: ctx.y * 2)
-assert shifted.flow.compute(y=5).value == 20
+# Or pre-fill both — b=12 becomes a contextual default:
+result = foo(a=11, b=12).flow.compute()
+assert result.value == 23
 ```
 
-In this mode:
+> **Note:** When the function returns a plain value (like `int` above) instead
+> of a `ResultBase` subclass, `@Flow.model` automatically wraps it in
+> `GenericResult`. Access the inner value with `.value`.
 
-- bound parameters are model configuration,
-- unbound parameters become runtime inputs for that model instance.
+This is the core contract:
 
-### Explicit Context Parameter
+- `a` is a regular parameter — it must be bound at construction time,
+- `b` is contextual because it is marked with `FromContext[int]` — it can come
+  from runtime context, a construction-time default, or a function default,
+- `.flow.compute(...)` only accepts contextual inputs.
+
+This means the following is **invalid**:
 
 ```python
-from ccflow import DateRangeContext, Flow
+foo().flow.compute(a=11, b=12)
+# TypeError: compute() only accepts contextual inputs.
+# Bind regular parameter(s) separately: a
+```
+
+`a` is not contextual, so it must be bound at construction time (`foo(a=11)`)
+or wired with `.pipe(...)`.
+
+## Regular Parameters vs Contextual Parameters
+
+### Regular Parameters
+
+Regular parameters are the unmarked ones.
+
+They can be satisfied by:
+
+- a literal value,
+- a default value from the function signature,
+- an upstream `CallableModel`.
+
+When an upstream model is supplied, `@Flow.model` evaluates it with the current
+context and passes the resolved value into the function. This is how you wire
+stages together — just pass one model as an argument to another:
+
+```python
+from ccflow import Flow, FlowContext, FromContext
 
 
 @Flow.model
-def load_revenue(context: DateRangeContext, region: str) -> float:
-    return 125.0
-```
-
-This is the most direct mode. The function receives a normal context object and
-returns either a `ResultBase` subclass or a plain value. Plain values are
-wrapped into `GenericResult` automatically by the generated model.
-
-### `context_args`
-
-```python
-from datetime import date
-
-from ccflow import Flow
-
-
-@Flow.model(context_args=["start_date", "end_date"], context_type=DateRangeContext)
-def load_revenue(start_date: date, end_date: date, region: str) -> float:
-    return 125.0
-```
-
-This keeps the function signature focused on the inputs it actually uses while
-still producing a `CallableModel` that accepts a context at runtime.
-
-Use `context_args` when certain parameters are semantically the execution
-context and you want that split to be explicit and stable across model
-instances.
-
-By default, `context_args` models use `FlowContext`. If you want compatibility
-with an existing context class, pass `context_type=...` explicitly.
-
-### Upstream Models as Normal Arguments
-
-Any non-context parameter can be given either:
-
-- a literal value, or
-- another `CallableModel` / `BoundModel`.
-
-If a model is passed, it is evaluated with the current context and its result is
-unwrapped before the function is called.
-
-```python
-from ccflow import DateRangeContext, Flow
+def load_value(value: FromContext[int], offset: int) -> int:
+    return value + offset
 
 
 @Flow.model
-def load_revenue(context: DateRangeContext, region: str) -> float:
-    return 125.0
+def add(a: int, b: FromContext[int]) -> int:
+    return a + b
+
+
+# Wire load_value into add's 'a' parameter:
+model = add(a=load_value(offset=5))
+
+# At runtime, load_value runs first (value=7 + offset=5 = 12),
+# then add runs (a=12 + b=12 = 24):
+assert model.flow.compute(value=7, b=12).value == 24
+```
+
+### Contextual Parameters
+
+Contextual parameters are the ones marked with `FromContext[...]`.
+
+They can be satisfied by:
+
+- runtime context,
+- construction-time contextual defaults,
+- function defaults.
+
+They cannot be satisfied by `CallableModel` values.
+
+Contextual precedence is:
+
+1. branch-local `.flow.with_inputs(...)` rewrites,
+2. incoming runtime context,
+3. construction-time contextual defaults,
+4. function defaults.
+
+## `.flow.compute(...)`
+
+`.flow.compute(...)` is the ergonomic entry point for contextual execution.
+
+For generated `@Flow.model` stages it accepts either:
+
+- contextual keyword arguments, or
+- one context object.
+
+It does not accept both at the same time.
+
+```python
+from ccflow import Flow, FlowContext, FromContext
 
 
 @Flow.model
-def double_revenue(_: DateRangeContext, revenue: float) -> float:
-    return revenue * 2
+def add(a: int, b: FromContext[int]) -> int:
+    return a + b
 
 
-revenue = load_revenue(region="us")
-model = double_revenue(revenue=revenue)
-result = model.flow.compute(start_date="2024-01-01", end_date="2024-01-31")
+model = add(a=10)
+assert model.flow.compute(b=5).value == 15
+assert model.flow.compute(FlowContext(b=6)).value == 16
 ```
 
-This is the main composition story for the core API.
+`compute()` returns the same result object you would get from `model(context)`.
 
-### `.flow.with_inputs(...)`
+## `.flow.with_inputs(...)`
 
-`with_inputs` is how a caller rewires context locally for one upstream model.
+`.flow.with_inputs(...)` rewrites contextual inputs locally for one wrapped
+dependency.
 
 ```python
 from datetime import date, timedelta
 
-from ccflow import DateRangeContext, Flow
+from ccflow import DateRangeContext, Flow, FromContext
 
 
-@Flow.model(context_args=["start_date", "end_date"], context_type=DateRangeContext)
-def load_revenue(start_date: date, end_date: date, region: str) -> float:
+@Flow.model
+def load_revenue(region: str, start_date: FromContext[date], end_date: FromContext[date]) -> float:
     days = (end_date - start_date).days + 1
     return 1000.0 + days * 10.0
 
 
-@Flow.model(context_args=["start_date", "end_date"], context_type=DateRangeContext)
-def revenue_growth(start_date: date, end_date: date, current: float, previous: float) -> dict:
-    return {
-        "window_end": end_date,
-        "growth_pct": round((current - previous) / previous * 100, 2),
-    }
+@Flow.model
+def revenue_growth(current: float, previous: float, start_date: FromContext[date], end_date: FromContext[date]) -> dict:
+    return {"window_end": end_date, "growth_pct": round((current - previous) / previous * 100, 2)}
 
 
 current = load_revenue(region="us")
@@ -149,122 +173,177 @@ previous = current.flow.with_inputs(
     end_date=lambda ctx: ctx.end_date - timedelta(days=30),
 )
 
-model = revenue_growth(current=current, previous=previous)
-ctx = DateRangeContext(
-    start_date=date(2024, 1, 1),
-    end_date=date(2024, 1, 31),
-)
-
-direct = model(ctx)
-computed = model.flow.compute(
-    start_date=date(2024, 1, 1),
-    end_date=date(2024, 1, 31),
-)
-
-assert direct == computed
+growth = revenue_growth(current=current, previous=previous)
+result = growth(DateRangeContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31)))
 ```
 
-The transform is local to the bound upstream model. The parent model continues
-to receive the original context.
+In this example, `current` and `previous` share the same `load_revenue` model
+but see different date windows at runtime. The `with_inputs()` call on
+`previous` shifts the dates back 30 days without affecting `current`.
 
-### `.flow.compute(...)`
+Key rules:
 
-`compute` is the ergonomic entry point for deferred execution:
+- `with_inputs()` only targets contextual fields,
+- transforms are branch-local — they only affect the wrapped dependency, not
+  the entire pipeline,
+- chained `with_inputs()` calls merge, with the newest transform winning for a
+  repeated field.
+
+## `.pipe(...)`
+
+`.pipe(...)` is a convenience API for wiring one upstream model into a
+downstream regular parameter. It is equivalent to passing the model directly:
 
 ```python
-from ccflow import Flow
+source = load_value(offset=5)
+
+# These two are equivalent:
+model_a = add(a=source)
+model_b = source.pipe(add(), param="a")
+```
+
+`pipe()` is most useful when the downstream stage is already partially
+configured and you want to wire in one more dependency, or when you are
+building pipelines programmatically and the parameter name is determined at
+runtime. It only targets regular parameters — use `.flow.with_inputs(...)` to
+rewrite contextual inputs.
+
+## Explicit Context Interop
+
+`@Flow.model` still supports an explicit context parameter for cases where the
+function needs the whole context object:
+
+```python
+from ccflow import DateRangeContext, Flow
 
 
 @Flow.model
-def add(x: int, y: int) -> int:
-    return x + y
-
-
-model = add(x=10)
-assert model.flow.compute(y=5).value == 15
+def load_revenue(context: DateRangeContext, region: str) -> float:
+    days = (context.end_date - context.start_date).days + 1
+    return days * 50.0
 ```
 
-It validates the supplied keyword arguments against the generated context
-schema, creates a `FlowContext`, and executes the model.
+This path is useful when interoperating with existing code that already uses
+typed `ContextBase` subclasses, or when the function genuinely needs access to
+the full context rather than individual fields.
 
-It returns the same result object you would get from calling `model(context)`.
-
-It is not the only execution path. Because the generated object is still a
-standard `CallableModel`, calling `model(context)` remains fully supported.
-
-## Lazy Inputs
-
-`Lazy[T]` marks a parameter as on-demand. Instead of eagerly resolving an
-upstream model, the generated model passes a zero-argument thunk. The thunk
-caches its first result. Lazy dependencies are excluded from the `__deps__`
-graph, so they are not pre-evaluated by the evaluator infrastructure.
+You can also keep the `FromContext[...]` style while asking ccflow to validate
+those contextual fields against an existing nominal context shape:
 
 ```python
-from ccflow import Flow, Lazy
+from ccflow import DateRangeContext, Flow, FromContext
+
+
+@Flow.model(context_type=DateRangeContext)
+def load_revenue(region: str, start_date: FromContext[date], end_date: FromContext[date]) -> float:
+    return 125.0
+```
+
+That preserves the primary `FromContext[...]` authoring model while letting
+callers pass richer context objects whose relevant fields satisfy the declared
+`context_type`.
+
+Do not mix both systems in one function signature. A function with an explicit
+`context: ContextBase` parameter cannot also declare `FromContext[...]`
+parameters.
+
+## Introspection APIs
+
+Generated models expose three useful introspection helpers:
+
+- `model.flow.context_inputs`: the full contextual contract,
+- `model.flow.unbound_inputs`: the contextual fields still required at runtime,
+- `model.flow.bound_inputs`: regular bound inputs plus any construction-time
+  contextual defaults.
+
+Example:
+
+```python
+from ccflow import Flow, FromContext
 
 
 @Flow.model
-def source(value: int) -> int:
+def add(a: int, b: FromContext[int], c: FromContext[int] = 5) -> int:
+    return a + b + c
+
+
+model = add(a=10)
+assert model.flow.context_inputs == {"b": int, "c": int}
+assert model.flow.unbound_inputs == {"b": int}
+assert model.flow.bound_inputs == {"a": 10}
+```
+
+## Lazy Dependencies
+
+`Lazy[T]` defers evaluation of an upstream dependency until the function body
+explicitly calls it. This is useful when a dependency is expensive and only
+needed conditionally:
+
+```python
+from ccflow import Flow, FlowContext, FromContext, Lazy
+
+
+@Flow.model
+def load_value(value: FromContext[int]) -> int:
     return value * 10
 
 
 @Flow.model
-def maybe_use_source(value: int, data: Lazy[int]) -> int:
-    if value > 10:
-        return value
-    return data()
+def maybe_use(current: int, fallback: Lazy[int], threshold: FromContext[int]) -> int:
+    if current > threshold:
+        return current          # fallback is never evaluated
+    return fallback()           # evaluate only when needed
+
+
+model = maybe_use(current=50, fallback=load_value())
+
+# current (50) > threshold (10), so load_value never runs:
+assert model.flow.compute(value=3, threshold=10).value == 50
+
+# current (5) <= threshold (10), so load_value runs (3 * 10 = 30):
+model2 = maybe_use(current=5, fallback=load_value())
+assert model2.flow.compute(value=3, threshold=10).value == 30
 ```
 
-## FlowContext
+Without `Lazy[T]`, the upstream model would always run. With it, the function
+controls exactly when (and whether) the dependency executes.
 
-`FlowContext` is the universal frozen carrier for generated contexts that do
-not map to a dedicated built-in context type.
+## When To Use `@Flow.model`
 
-The implementation stays intentionally small:
+Use `@Flow.model` when:
 
-- context validation is driven by `TypedDict` + `TypeAdapter`,
-- runtime execution uses one reusable `FlowContext` type,
-- public pydantic iteration (`dict(context)`) is used instead of pydantic
-  internals.
+- the stage logic is naturally a plain function,
+- you want ordinary arguments to look like ordinary Python function parameters,
+- the contextual contract is small and explicit,
+- the main goal is easy graph authoring on top of existing ccflow machinery.
 
-## BoundModel
+Use a hand-written class-based `CallableModel` when:
 
-`.flow.with_inputs(...)` returns a `BoundModel`, which is just a thin wrapper
-around:
+- the model needs custom methods or substantial internal state,
+- the full context object is the natural primary interface,
+- the stage is no longer best expressed as one function and a small amount of
+  wiring.
 
-- the original model, and
-- a mapping of input transforms.
+## Troubleshooting
 
-At call time it:
+**`compute()` says a field is not contextual**
 
-1. converts the incoming context into a plain dictionary,
-1. applies the configured transforms,
-1. rebuilds a `FlowContext`,
-1. delegates to the wrapped model.
+That field is a regular parameter. Bind it at construction time or wire it with
+`.pipe(...)`. Only `FromContext[...]` fields belong in `compute()`.
 
-That keeps transformed dependency wiring explicit without adding special
-annotation machinery to the core API.
+**`with_inputs()` rejects a field**
 
-## Flow.call with `auto_context`
+`with_inputs()` only rewrites contextual inputs. If you are trying to attach one
+stage to another, use regular argument binding or `.pipe(...)`.
 
-Separately from `@Flow.model`, `Flow.call(auto_context=...)` provides a similar
-convenience for class-based `CallableModel`s. Instead of defining a separate
-`ContextBase` subclass, the decorator generates one from the function's
-keyword-only parameters.
+**A contextual parameter still shows up in `context_inputs` after I bound it**
 
-```python
-from ccflow import CallableModel, Flow, GenericResult
+That is expected. `context_inputs` reports the full contextual contract.
+`unbound_inputs` reports only the contextual values still needed at runtime.
 
+**A shared dependency runs more than once**
 
-class MyModel(CallableModel):
-    @Flow.call(auto_context=True)
-    def __call__(self, *, x: int, y: str = "default") -> GenericResult:
-        return GenericResult(value=f"{x}-{y}")
-```
-
-Passing a `ContextBase` subclass (e.g., `auto_context=DateContext`) makes the
-generated context inherit from that class, so it remains compatible with
-infrastructure that expects the parent type.
-
-The generated class is registered via `create_ccflow_model` for serialization
-support.
+`@Flow.model` authors the graph cleanly, but execution still follows the normal
+ccflow evaluator path. If you need deduplication or graph scheduling, use the
+appropriate evaluators and cache settings just as you would for class-based
+`CallableModel`s.
