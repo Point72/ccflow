@@ -13,13 +13,13 @@ The design is intentionally narrow:
 - upstream `CallableModel`s can still be passed as ordinary arguments.
 
 The goal is that a reader can look at one function signature and immediately
-answer:
+see:
 
 1. which values come from runtime context,
 2. which values must be bound as regular configuration or dependencies,
 3. how to rewrite contextual inputs for one branch of the graph.
 
-## Primary Story
+## Core Example
 
 ```python
 from ccflow import Flow, FromContext
@@ -31,11 +31,13 @@ def foo(a: int, b: FromContext[int]) -> int:
 
 
 # Build an instance with a=11 bound, then supply b=12 at runtime:
-result = foo(a=11).flow.compute(b=12)
+configured = foo(a=11)
+result = configured.flow.compute(b=12)
 assert result.value == 23  # .value unwraps the GenericResult wrapper
 
-# Or pre-fill both — b=12 becomes a contextual default:
-result = foo(a=11, b=12).flow.compute()
+# Or create a different instance that stores b=12 as its contextual default:
+prefilled = foo(a=11, b=12)
+result = prefilled.flow.compute()
 assert result.value == 23
 ```
 
@@ -47,8 +49,14 @@ This is the core contract:
 
 - `a` is a regular parameter — it must be bound at construction time,
 - `b` is contextual because it is marked with `FromContext[int]` — it can come
-  from runtime context, a construction-time default, or a function default,
+  from runtime context, a contextual default stored on the model instance, or a
+  function default,
 - `.flow.compute(...)` only accepts contextual inputs.
+
+Nothing is being mutated at execution time in the second example.
+`prefilled = foo(a=11, b=12)` constructs a different model instance whose
+contextual default for `b` is already `12`. Because `b` is still contextual,
+incoming runtime context can still override that default.
 
 This means the following is **invalid**:
 
@@ -58,8 +66,7 @@ foo().flow.compute(a=11, b=12)
 # Bind regular parameter(s) separately: a
 ```
 
-`a` is not contextual, so it must be bound at construction time (`foo(a=11)`)
-or wired with `.pipe(...)`.
+`a` is not contextual, so it must be bound at construction time (`foo(a=11)`).
 
 ## Regular Parameters vs Contextual Parameters
 
@@ -106,16 +113,19 @@ Contextual parameters are the ones marked with `FromContext[...]`.
 They can be satisfied by:
 
 - runtime context,
-- construction-time contextual defaults,
+- contextual defaults stored on the model instance,
 - function defaults.
 
 They cannot be satisfied by `CallableModel` values.
+
+A construction-time value for a contextual parameter is still a default, not a
+conversion into a regular bound parameter.
 
 Contextual precedence is:
 
 1. branch-local `.flow.with_inputs(...)` rewrites,
 2. incoming runtime context,
-3. construction-time contextual defaults,
+3. contextual defaults stored on the model instance,
 4. function defaults.
 
 ## `.flow.compute(...)`
@@ -188,25 +198,6 @@ Key rules:
   the entire pipeline,
 - chained `with_inputs()` calls merge, with the newest transform winning for a
   repeated field.
-
-## `.pipe(...)`
-
-`.pipe(...)` is a convenience API for wiring one upstream model into a
-downstream regular parameter. It is equivalent to passing the model directly:
-
-```python
-source = load_value(offset=5)
-
-# These two are equivalent:
-model_a = add(a=source)
-model_b = source.pipe(add(), param="a")
-```
-
-`pipe()` is most useful when the downstream stage is already partially
-configured and you want to wire in one more dependency, or when you are
-building pipelines programmatically and the parameter name is determined at
-runtime. It only targets regular parameters — use `.flow.with_inputs(...)` to
-rewrite contextual inputs.
 
 ## Explicit Context Interop
 
@@ -328,13 +319,14 @@ Use a hand-written class-based `CallableModel` when:
 
 **`compute()` says a field is not contextual**
 
-That field is a regular parameter. Bind it at construction time or wire it with
-`.pipe(...)`. Only `FromContext[...]` fields belong in `compute()`.
+That field is a regular parameter. Bind it at construction time. Only
+`FromContext[...]` fields belong in `compute()`.
 
 **`with_inputs()` rejects a field**
 
 `with_inputs()` only rewrites contextual inputs. If you are trying to attach one
-stage to another, use regular argument binding or `.pipe(...)`.
+stage to another, pass the upstream model as a regular argument at construction
+time.
 
 **A contextual parameter still shows up in `context_inputs` after I bound it**
 

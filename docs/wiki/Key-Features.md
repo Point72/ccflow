@@ -48,6 +48,9 @@ def add(a: int, b: FromContext[int]) -> int:
 
 model = add(a=10)
 assert model.flow.compute(b=5).value == 15
+
+prefilled = add(a=10, b=7)
+assert prefilled.flow.compute().value == 17
 ```
 
 That means:
@@ -55,6 +58,10 @@ That means:
 - `a` is a regular parameter,
 - `b` is contextual,
 - `.flow.compute(...)` only accepts contextual inputs.
+
+`prefilled = add(a=10, b=7)` creates a different model instance with a stored
+contextual default for `b`. `compute()` does not mutate the model; it resolves
+the remaining contextual inputs for that execution.
 
 Regular parameters can be satisfied by:
 
@@ -65,7 +72,7 @@ Regular parameters can be satisfied by:
 Contextual parameters can be satisfied by:
 
 - runtime context,
-- construction-time contextual defaults,
+- contextual defaults stored on the model instance,
 - function defaults.
 
 Contextual parameters cannot be bound to `CallableModel` values.
@@ -140,9 +147,6 @@ context object and returns the same result as `model(context)`.
 
 `model.flow.with_inputs(...)` rewrites contextual inputs on one dependency edge.
 It only accepts contextual fields and remains branch-local.
-
-`model.pipe(...)` is a secondary helper for wiring one upstream model into a
-downstream regular parameter. It never targets `FromContext[...]` fields.
 
 Generated models also expose introspection helpers:
 

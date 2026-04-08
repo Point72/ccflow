@@ -263,22 +263,6 @@ def test_context_type_requires_from_context_or_explicit_context():
             return x
 
 
-def test_pipe_only_targets_regular_parameters():
-    @Flow.model
-    def source(value: FromContext[int]) -> int:
-        return value
-
-    @Flow.model
-    def consumer(a: int, b: FromContext[int]) -> int:
-        return a + b
-
-    piped = source().pipe(consumer())
-    assert piped.flow.compute(FlowContext(value=10, b=5)).value == 15
-
-    with pytest.raises(TypeError, match="is contextual"):
-        source().pipe(consumer(), param="b")
-
-
 def test_lazy_dependency_remains_lazy():
     calls = {"source": 0}
 

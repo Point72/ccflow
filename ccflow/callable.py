@@ -817,12 +817,6 @@ class CallableModel(_CallableModel):
 
         return FlowAPI(self)
 
-    def pipe(self, stage: Any, /, *, param: Optional[str] = None, **bindings: Any) -> Any:
-        """Wire this model into a downstream generated ``@Flow.model`` stage."""
-        from .flow_model import pipe_model
-
-        return pipe_model(self, stage, param=param, **bindings)
-
 
 class WrapperModel(CallableModel, Generic[CallableModelType], abc.ABC):
     """Abstract class that represents a wrapper around an underlying model, with the same context and return types.

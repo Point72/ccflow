@@ -337,99 +337,6 @@ def _generated_model_class(stage: Any) -> Optional[type["_GeneratedFlowModelBase
     return None
 
 
-def _describe_pipe_stage(stage: Any) -> str:
-    if isinstance(stage, BoundModel):
-        return repr(stage)
-    if isinstance(stage, _GeneratedFlowModelBase):
-        return repr(stage)
-    if callable(stage):
-        return _callable_name(stage)
-    return repr(stage)
-
-
-def _generated_model_explicit_kwargs(model: "_GeneratedFlowModelBase") -> Dict[str, Any]:
-    values = cast(Dict[str, Any], model.model_dump(mode="python", exclude_unset=True))
-    values.pop("type_", None)
-    values.pop("_target_", None)
-    values.pop("meta", None)
-    return values
-
-
-def _resolve_pipe_param(source: Any, stage: Any, param: Optional[str], bindings: Dict[str, Any]) -> Tuple[str, type["_GeneratedFlowModelBase"]]:
-    del source
-
-    generated_model_cls = _generated_model_class(stage)
-    if generated_model_cls is None:
-        raise TypeError("pipe() only supports downstream stages created by @Flow.model or bound versions of those stages.")
-
-    config = generated_model_cls.__flow_model_config__
-    stage_name = _describe_pipe_stage(stage)
-    regular_names = list(config.regular_param_names)
-
-    generated_model = _generated_model_instance(stage)
-    occupied_names = set(bindings)
-    if generated_model is not None:
-        occupied_names |= {name for name in _bound_field_names(generated_model) if name in regular_names}
-
-    if param is not None:
-        if param in config.contextual_param_names:
-            raise TypeError(f"pipe() target parameter '{param}' on {stage_name} is contextual. Use .flow.with_inputs(...) instead.")
-        if param not in regular_names:
-            valid = ", ".join(regular_names) or "<none>"
-            raise TypeError(f"pipe() target parameter '{param}' is not valid for {stage_name}. Available regular parameters: {valid}.")
-        if param in occupied_names:
-            raise TypeError(f"pipe() target parameter '{param}' is already bound for {stage_name}.")
-        return param, generated_model_cls
-
-    required_candidates = [p.name for p in config.regular_params if not p.has_function_default and p.name not in occupied_names]
-    if len(required_candidates) == 1:
-        return required_candidates[0], generated_model_cls
-    if len(required_candidates) > 1:
-        candidates = ", ".join(required_candidates)
-        raise TypeError(
-            f"pipe() could not infer a target parameter for {stage_name}; unbound regular candidates are: {candidates}. Pass param='...'."
-        )
-
-    fallback_candidates = [name for name in regular_names if name not in occupied_names]
-    if len(fallback_candidates) == 1:
-        return fallback_candidates[0], generated_model_cls
-    if len(fallback_candidates) > 1:
-        candidates = ", ".join(fallback_candidates)
-        raise TypeError(
-            f"pipe() could not infer a target parameter for {stage_name}; unbound regular candidates are: {candidates}. Pass param='...'."
-        )
-
-    raise TypeError(f"pipe() could not find an available regular target parameter for {stage_name}.")
-
-
-def pipe_model(source: Any, stage: Any, /, *, param: Optional[str] = None, **bindings: Any) -> Any:
-    """Wire ``source`` into a downstream generated ``@Flow.model`` stage."""
-
-    if not _is_model_dependency(source):
-        raise TypeError(f"pipe() source must be a CallableModel, got {type(source).__name__}.")
-
-    target_param, generated_model_cls = _resolve_pipe_param(source, stage, param, bindings)
-    build_kwargs = dict(bindings)
-    build_kwargs[target_param] = source
-
-    if isinstance(stage, BoundModel):
-        generated_model = _generated_model_instance(stage)
-        if generated_model is None:
-            raise TypeError("pipe() only supports downstream BoundModel stages created from @Flow.model.")
-        explicit_kwargs = _generated_model_explicit_kwargs(generated_model)
-        explicit_kwargs.update(build_kwargs)
-        rebound_model = generated_model_cls(**explicit_kwargs)
-        return BoundModel(model=rebound_model, input_transforms=dict(stage._input_transforms))
-
-    generated_model = _generated_model_instance(stage)
-    if generated_model is not None:
-        explicit_kwargs = _generated_model_explicit_kwargs(generated_model)
-        explicit_kwargs.update(build_kwargs)
-        return generated_model_cls(**explicit_kwargs)
-
-    return stage(**build_kwargs)
-
-
 def _context_input_types_for_model(model: CallableModel) -> Optional[Dict[str, Any]]:
     generated = _generated_model_instance(model)
     if generated is not None:
@@ -466,7 +373,7 @@ def _resolve_regular_param_value(model: "_GeneratedFlowModelBase", param: _FlowM
     if _is_unset_flow_input(value):
         raise TypeError(
             f"Regular parameter '{param.name}' for {_callable_name(type(model).__flow_model_config__.func)} is still unbound. "
-            "Bind it at construction time or via pipe()."
+            "Bind it at construction time."
         )
     if param.is_lazy:
         if _is_model_dependency(value):
@@ -721,9 +628,6 @@ class BoundModel(WrapperModel):
         data["_input_transforms_fingerprint"] = _fingerprint_transforms(self._input_transforms)
         return data
 
-    def pipe(self, stage: Any, /, *, param: Optional[str] = None, **bindings: Any) -> Any:
-        return pipe_model(self, stage, param=param, **bindings)
-
     def __repr__(self) -> str:
         transforms = ", ".join(f"{name}={_transform_repr(transform)}" for name, transform in self._input_transforms.items())
         return f"{self.model!r}.flow.with_inputs({transforms})"
@@ -826,7 +730,7 @@ def _make_call_impl(config: _FlowModelConfig) -> _AnyCallable:
             missing = ", ".join(sorted(missing_regular))
             raise TypeError(
                 f"Missing regular parameter(s) for {_callable_name(config.func)}: {missing}. "
-                "Bind them at construction time or via pipe(); compute() only supplies contextual inputs."
+                "Bind them at construction time; compute() only supplies contextual inputs."
             )
 
         fn_kwargs: Dict[str, Any] = {}

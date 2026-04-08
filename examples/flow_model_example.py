@@ -1,12 +1,12 @@
 #!/usr/bin/env python
-"""Canonical Flow.model example.
+"""Main `@Flow.model` example.
 
-This is the main `@Flow.model` story:
+Shows how to:
 
-1. define workflow steps as plain Python functions,
-2. wire them together by passing upstream models as normal arguments,
-3. use a small Python builder for reusable composition,
-4. execute either as a normal CallableModel or via `.flow.compute(...)`.
+1. define stages as plain Python functions,
+2. compose stages by passing upstream models as ordinary arguments,
+3. rewrite contextual inputs on one dependency edge with `.flow.with_inputs(...)`,
+4. execute either as `model(context)` or `model.flow.compute(...)`.
 
 Run with:
     python examples/flow_model_example.py
@@ -59,7 +59,7 @@ def shifted_window(model, *, days_back: int):
 
 
 def build_week_over_week_pipeline(region: str):
-    """Build one reusable pipeline from plain Flow.model functions."""
+    """Build one reusable comparison pipeline."""
     current = load_revenue(region=region)
     previous = shifted_window(current, days_back=7)
     return revenue_change(
@@ -87,11 +87,11 @@ def main() -> None:
         end_date=ctx.end_date,
     )
 
-    print("\nPipeline wired from plain functions:")
+    print("\nPipeline:")
     print("  current input:", pipeline.current)
     print("  previous input:", pipeline.previous)
 
-    print("\nDirect call and .flow.compute(...) are equivalent:")
+    print("\nExecution:")
     print(f"  direct == computed: {direct == computed}")
 
     print("\nResult:")
