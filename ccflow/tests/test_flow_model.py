@@ -639,6 +639,36 @@ def test_additional_validation_and_hint_fallback_paths(monkeypatch):
         def missing_return(value: int):
             return value
 
+    with pytest.raises(TypeError, match="does not support positional-only parameter 'value'"):
+
+        @Flow.model
+        def bad_positional_only(value: int, /, bonus: FromContext[int]) -> int:
+            return value + bonus
+
+    with pytest.raises(TypeError, match="does not support variadic positional parameter 'values'"):
+
+        @Flow.model
+        def bad_varargs(*values: int) -> int:
+            return sum(values)
+
+    with pytest.raises(TypeError, match="does not support variadic keyword parameter 'values'"):
+
+        @Flow.model
+        def bad_varkw(**values: int) -> int:
+            return sum(values.values())
+
+    @Flow.model
+    def keyword_only(value: int, *, bonus: FromContext[int]) -> int:
+        return value + bonus
+
+    assert keyword_only(value=2).flow.compute(bonus=3).value == 5
+
+    @Flow.model
+    def keyword_only_context(*, context: SimpleContext, offset: int) -> int:
+        return context.value + offset
+
+    assert keyword_only_context(offset=4).flow.compute({"value": 3}).value == 7
+
     def missing_hints(*args, **kwargs):
         raise AttributeError("missing hints")
 

@@ -856,6 +856,13 @@ def _analyze_flow_model(
     explicit_context_type = None
 
     if explicit_context_param is not None:
+        explicit_context = params[explicit_context_param]
+        if explicit_context.kind is inspect.Parameter.POSITIONAL_ONLY:
+            raise TypeError(f"Function {_callable_name(fn)} does not support positional-only parameter '{explicit_context_param}'.")
+        if explicit_context.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+            raise TypeError(
+                f"Function {_callable_name(fn)} does not support {explicit_context.kind.description} parameter '{explicit_context_param}'."
+            )
         context_annotation = resolved_hints.get(explicit_context_param, params[explicit_context_param].annotation)
         explicit_context_type = _concrete_context_type(context_annotation)
         if explicit_context_type is None:
@@ -866,6 +873,11 @@ def _analyze_flow_model(
     for name, param in params.items():
         if name == "self" or name == explicit_context_param:
             continue
+
+        if param.kind is inspect.Parameter.POSITIONAL_ONLY:
+            raise TypeError(f"Function {_callable_name(fn)} does not support positional-only parameter '{name}'.")
+        if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+            raise TypeError(f"Function {_callable_name(fn)} does not support {param.kind.description} parameter '{name}'.")
 
         annotation = resolved_hints.get(name, param.annotation)
         if annotation is inspect.Parameter.empty:
