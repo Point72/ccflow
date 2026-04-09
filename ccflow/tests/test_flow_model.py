@@ -49,44 +49,44 @@ class OrderedContext(ContextBase):
 
 
 @Flow.model
-def basic_loader(context: SimpleContext, source: str, multiplier: int) -> GenericResult[int]:
-    return GenericResult(value=context.value * multiplier)
+def basic_loader(source: str, multiplier: int, value: FromContext[int]) -> GenericResult[int]:
+    return GenericResult(value=value * multiplier)
 
 
 @Flow.model
-def string_processor(context: SimpleContext, prefix: str = "value=", suffix: str = "!") -> GenericResult[str]:
-    return GenericResult(value=f"{prefix}{context.value}{suffix}")
+def string_processor(value: FromContext[int], prefix: str = "value=", suffix: str = "!") -> GenericResult[str]:
+    return GenericResult(value=f"{prefix}{value}{suffix}")
 
 
 @Flow.model
-def data_source(context: SimpleContext, base_value: int) -> GenericResult[int]:
-    return GenericResult(value=context.value + base_value)
+def data_source(base_value: int, value: FromContext[int]) -> GenericResult[int]:
+    return GenericResult(value=value + base_value)
 
 
 @Flow.model
-def data_transformer(context: SimpleContext, source: int, factor: int) -> GenericResult[int]:
+def data_transformer(source: int, factor: int) -> GenericResult[int]:
     return GenericResult(value=source * factor)
 
 
 @Flow.model
-def data_aggregator(context: SimpleContext, input_a: int, input_b: int, operation: str = "add") -> GenericResult[int]:
+def data_aggregator(input_a: int, input_b: int, operation: str = "add") -> GenericResult[int]:
     if operation == "add":
         return GenericResult(value=input_a + input_b)
     raise ValueError(f"unsupported operation: {operation}")
 
 
 @Flow.model
-def pipeline_stage1(context: SimpleContext, initial: int) -> GenericResult[int]:
-    return GenericResult(value=context.value + initial)
+def pipeline_stage1(initial: int, value: FromContext[int]) -> GenericResult[int]:
+    return GenericResult(value=value + initial)
 
 
 @Flow.model
-def pipeline_stage2(context: SimpleContext, stage1_output: int, multiplier: int) -> GenericResult[int]:
+def pipeline_stage2(stage1_output: int, multiplier: int) -> GenericResult[int]:
     return GenericResult(value=stage1_output * multiplier)
 
 
 @Flow.model
-def pipeline_stage3(context: SimpleContext, stage2_output: int, offset: int) -> GenericResult[int]:
+def pipeline_stage3(stage2_output: int, offset: int) -> GenericResult[int]:
     return GenericResult(value=stage2_output + offset)
 
 
@@ -108,7 +108,7 @@ def date_range_loader_previous_day(
 
 
 @Flow.model
-def date_range_processor(context: DateRangeContext, raw_data: dict, normalize: bool = False) -> GenericResult[str]:
+def date_range_processor(raw_data: dict, normalize: bool = False) -> GenericResult[str]:
     prefix = "normalized:" if normalize else "raw:"
     return GenericResult(value=f"{prefix}{raw_data['source']}:{raw_data['start_date']} to {raw_data['end_date']}")
 
@@ -176,8 +176,8 @@ def test_bound_regular_param_name_can_collide_with_ambient_context():
 
 def test_contextual_param_rejects_callable_model():
     @Flow.model
-    def source(context: SimpleContext, offset: int) -> GenericResult[int]:
-        return GenericResult(value=context.value + offset)
+    def source(offset: int, value: FromContext[int]) -> GenericResult[int]:
+        return GenericResult(value=value + offset)
 
     @Flow.model
     def foo(a: int, b: FromContext[int]) -> int:
@@ -234,24 +234,18 @@ def test_context_type_validation_applies_to_resolved_contextual_values():
         add(a=2, b=1).flow.compute()
 
 
-def test_explicit_context_interop_accepts_pep604_optional_annotation():
-    @Flow.model
-    def loader(context: DateRangeContext | None, source: str = "db") -> GenericResult[str]:
-        assert context is not None
-        return GenericResult(value=f"{source}:{context.start_date}:{context.end_date}")
-
-    model = loader(source="api")
-    assert model.flow.compute(start_date="2024-01-01", end_date="2024-01-02").value == "api:2024-01-01:2024-01-02"
-
-
-def test_explicit_context_interop_still_works():
+def test_context_named_parameters_are_just_regular_parameters():
     @Flow.model
     def loader(context: DateRangeContext, source: str = "db") -> GenericResult[str]:
         return GenericResult(value=f"{source}:{context.start_date}:{context.end_date}")
 
-    model = loader(source="api")
-    assert model(DateRangeContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 2))).value == "api:2024-01-01:2024-01-02"
-    assert model.flow.compute(start_date="2024-01-01", end_date="2024-01-02").value == "api:2024-01-01:2024-01-02"
+    model = loader(context=DateRangeContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 2)), source="api")
+    assert model.flow.bound_inputs["context"] == DateRangeContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 2))
+    assert model.flow.context_inputs == {}
+    assert model.flow.compute().value == "api:2024-01-01:2024-01-02"
+
+    with pytest.raises(TypeError, match="Missing regular parameter\\(s\\) for loader: context"):
+        loader(source="api").flow.compute(start_date="2024-01-01", end_date="2024-01-02")
 
 
 def test_auto_unwrap_defaults_to_false_for_auto_wrapped_results():
@@ -334,12 +328,15 @@ def test_model_base_must_be_callable_model_subclass():
             return a + b
 
 
-def test_explicit_context_and_from_context_cannot_mix():
-    with pytest.raises(TypeError, match="cannot also declare FromContext"):
+def test_context_named_regular_parameter_can_coexist_with_from_context():
+    @Flow.model
+    def mixed(context: SimpleContext, y: FromContext[int]) -> int:
+        return context.value + y
 
-        @Flow.model
-        def bad(context: SimpleContext, y: FromContext[int]) -> int:
-            return context.value + y
+    model = mixed(context=SimpleContext(value=10))
+    assert model.flow.bound_inputs == {"context": SimpleContext(value=10)}
+    assert model.flow.context_inputs == {"y": int}
+    assert model.flow.compute(y=5).value == 15
 
 
 def test_context_args_keyword_is_removed():
@@ -350,7 +347,7 @@ def test_context_args_keyword_is_removed():
             return x
 
 
-def test_context_type_requires_from_context_or_explicit_context():
+def test_context_type_requires_from_context():
     with pytest.raises(TypeError, match="context_type=... requires FromContext"):
 
         @Flow.model(context_type=DateRangeContext)
@@ -383,8 +380,8 @@ def test_lazy_dependency_remains_lazy():
 
 def test_lazy_runtime_helper_is_removed():
     @Flow.model
-    def source(context: SimpleContext) -> GenericResult[int]:
-        return GenericResult(value=context.value)
+    def source(value: FromContext[int]) -> GenericResult[int]:
+        return GenericResult(value=value)
 
     with pytest.raises(TypeError, match="Lazy\\(model\\)\\(\\.\\.\\.\\) has been removed"):
         Lazy(source())
@@ -583,7 +580,7 @@ def test_internal_type_helpers_and_plain_callable_flow_api_paths():
         model.flow.compute(SimpleContext(value=1), value=2)
 
 
-def test_explicit_context_paths_and_underbar_context_parameter():
+def test_compute_accepts_context_object_for_from_context_models():
     model = basic_loader(source="warehouse", multiplier=3)
 
     assert model.flow.context_inputs == {"value": int}
@@ -593,12 +590,6 @@ def test_explicit_context_paths_and_underbar_context_parameter():
 
     with pytest.raises(TypeError, match="either one context object or contextual keyword arguments"):
         model.flow.compute(SimpleContext(value=1), value=2)
-
-    @Flow.model
-    def underbar(_: SimpleContext, a: int) -> int:
-        return _.value + a
-
-    assert underbar(a=10).flow.compute({"value": 2}).value == 12
 
 
 def test_additional_validation_and_hint_fallback_paths(monkeypatch):
@@ -638,8 +629,8 @@ def test_additional_validation_and_hint_fallback_paths(monkeypatch):
             return value
 
     @Flow.model
-    def source(context: SimpleContext) -> GenericResult[int]:
-        return GenericResult(value=context.value)
+    def source(value: FromContext[int]) -> GenericResult[int]:
+        return GenericResult(value=value)
 
     with pytest.raises(TypeError, match="cannot default to a CallableModel"):
 
@@ -681,7 +672,7 @@ def test_additional_validation_and_hint_fallback_paths(monkeypatch):
     def keyword_only_context(*, context: SimpleContext, offset: int) -> int:
         return context.value + offset
 
-    assert keyword_only_context(offset=4).flow.compute({"value": 3}).value == 7
+    assert keyword_only_context(context=SimpleContext(value=3), offset=4).flow.compute().value == 7
 
     def missing_hints(*args, **kwargs):
         raise AttributeError("missing hints")

@@ -77,21 +77,10 @@ Contextual parameters can be satisfied by:
 
 Contextual parameters cannot be bound to `CallableModel` values.
 
-#### Explicit Context Interop
+#### Nominal Context Validation
 
-An explicit context parameter is still supported when that is the natural API:
-
-```python
-from ccflow import DateRangeContext, Flow
-
-
-@Flow.model
-def load_data(context: DateRangeContext, source: str) -> float:
-    return 125.0
-```
-
-You can also keep the `FromContext[...]` style while validating those fields
-against an existing context type:
+You can keep the `FromContext[...]` style while validating those fields against
+an existing context type:
 
 ```python
 from datetime import date
@@ -103,7 +92,9 @@ def load_data(source: str, start_date: FromContext[date], end_date: FromContext[
     return 125.0
 ```
 
-Do not mix both styles in one signature.
+If the function genuinely needs the runtime context object itself inside the
+function body on each call, write a normal `CallableModel` subclass instead of
+using `@Flow.model`.
 
 #### Composing Dependencies
 

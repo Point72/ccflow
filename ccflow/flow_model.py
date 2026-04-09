@@ -103,7 +103,6 @@ class _FlowModelConfig:
     result_type: Type[ResultBase]
     auto_wrap_result: bool
     auto_unwrap: bool
-    explicit_context_param: Optional[str]
     parameters: Tuple[_FlowModelParam, ...]
     context_input_types: Dict[str, Any]
     context_required_names: Tuple[str, ...]
@@ -124,10 +123,6 @@ class _FlowModelConfig:
     @property
     def contextual_param_names(self) -> Tuple[str, ...]:
         return tuple(param.name for param in self.contextual_params)
-
-    @property
-    def uses_explicit_context(self) -> bool:
-        return self.explicit_context_param is not None
 
     def param(self, name: str) -> _FlowModelParam:
         for param in self.parameters:
@@ -467,11 +462,6 @@ def _build_generated_compute_context(model: "_GeneratedFlowModelBase", context: 
     if context is not _UNSET and kwargs:
         raise TypeError("compute() accepts either one context object or contextual keyword arguments, but not both.")
 
-    if config.uses_explicit_context:
-        if context is _UNSET:
-            return config.context_type.model_validate(kwargs)
-        return context if isinstance(context, ContextBase) else config.context_type.model_validate(context)
-
     if context is not _UNSET:
         if isinstance(context, FlowContext):
             return context
@@ -532,8 +522,6 @@ class FlowAPI:
         generated = _generated_model_instance(self._model)
         if generated is not None:
             config = type(generated).__flow_model_config__
-            if config.uses_explicit_context:
-                return {name: config.context_input_types[name] for name in config.context_required_names}
             result = {}
             for param in config.contextual_params:
                 if not _is_unset_flow_input(getattr(generated, param.name, _UNSET_FLOW_INPUT)):
@@ -621,7 +609,7 @@ class BoundModel(WrapperModel):
             ctx_dict[name] = value
 
         generated = _generated_model_instance(self.model)
-        if generated is not None and not type(generated).__flow_model_config__.uses_explicit_context:
+        if generated is not None:
             return FlowContext(**ctx_dict)
 
         context_type = _concrete_context_type(self.model.context_type)
@@ -754,10 +742,7 @@ def _make_call_impl(config: _FlowModelConfig) -> _AnyCallable:
         for param in config.regular_params:
             fn_kwargs[param.name] = _resolve_regular_param_value(self, param, context)
 
-        if config.uses_explicit_context:
-            fn_kwargs[cast(str, config.explicit_context_param)] = context
-        else:
-            fn_kwargs.update(_resolved_contextual_inputs(self, config, context))
+        fn_kwargs.update(_resolved_contextual_inputs(self, config, context))
 
         raw_result = config.func(**fn_kwargs)
         if config.auto_wrap_result:
@@ -851,32 +836,10 @@ def _analyze_flow_model(
 ) -> _FlowModelConfig:
     params = sig.parameters
 
-    explicit_context_param = None
-    if "context" in params:
-        explicit_context_param = "context"
-    elif "_" in params:
-        explicit_context_param = "_"
-
     analyzed_params: List[_FlowModelParam] = []
-    explicit_context_type = None
-
-    if explicit_context_param is not None:
-        explicit_context = params[explicit_context_param]
-        if explicit_context.kind is inspect.Parameter.POSITIONAL_ONLY:
-            raise TypeError(f"Function {_callable_name(fn)} does not support positional-only parameter '{explicit_context_param}'.")
-        if explicit_context.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
-            raise TypeError(
-                f"Function {_callable_name(fn)} does not support {explicit_context.kind.description} parameter '{explicit_context_param}'."
-            )
-        context_annotation = resolved_hints.get(explicit_context_param, params[explicit_context_param].annotation)
-        explicit_context_type = _concrete_context_type(context_annotation)
-        if explicit_context_type is None:
-            raise TypeError(f"Function {_callable_name(fn)}: '{explicit_context_param}' must be annotated with a ContextBase subclass.")
-        if context_type is not None:
-            raise TypeError("context_type=... is inferred from the explicit context parameter; remove the keyword argument.")
 
     for name, param in params.items():
-        if name == "self" or name == explicit_context_param:
+        if name == "self":
             continue
 
         if param.kind is inspect.Parameter.POSITIONAL_ONLY:
@@ -909,23 +872,15 @@ def _analyze_flow_model(
         )
 
     contextual_params = tuple(param for param in analyzed_params if param.is_contextual)
-    if explicit_context_param is not None and contextual_params:
-        raise TypeError("Functions using an explicit context parameter cannot also declare FromContext[...] parameters.")
-
     declared_context_type = None
-    if explicit_context_type is not None:
-        call_context_type = explicit_context_type
-        context_input_types = {name: info.annotation for name, info in explicit_context_type.model_fields.items()}
-        context_required_names = tuple(name for name, info in explicit_context_type.model_fields.items() if info.is_required())
-    else:
-        if context_type is not None and not contextual_params:
-            raise TypeError("context_type=... requires FromContext[...] parameters or an explicit context parameter.")
-        if context_type is not None:
-            declared_context_type = _validate_declared_context_type(context_type, contextual_params)
+    if context_type is not None and not contextual_params:
+        raise TypeError("context_type=... requires FromContext[...] parameters.")
+    if context_type is not None:
+        declared_context_type = _validate_declared_context_type(context_type, contextual_params)
 
-        call_context_type = FlowContext
-        context_input_types = {param.name: param.annotation for param in contextual_params}
-        context_required_names = tuple(param.name for param in contextual_params if not param.has_function_default)
+    call_context_type = FlowContext
+    context_input_types = {param.name: param.annotation for param in contextual_params}
+    context_required_names = tuple(param.name for param in contextual_params if not param.has_function_default)
 
     if declared_context_type is not None:
         updated_params = []
@@ -961,7 +916,6 @@ def _analyze_flow_model(
         result_type=result_type,
         auto_wrap_result=auto_wrap_result,
         auto_unwrap=auto_unwrap,
-        explicit_context_param=explicit_context_param,
         parameters=tuple(analyzed_params),
         context_input_types=context_input_types,
         context_required_names=context_required_names,

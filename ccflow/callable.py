@@ -562,13 +562,6 @@ class Flow(PydanticBaseModel):
             ) -> GenericResult[pl.DataFrame]:
                 return GenericResult(value=query_db(source, start_date, end_date))
 
-        Advanced interop path:
-            Functions may still declare an explicit context parameter annotated
-            with a ContextBase subclass.
-
-            @Flow.model
-            def load_prices(context: DateRangeContext, source: str) -> GenericResult[pl.DataFrame]:
-                return GenericResult(value=query_db(source, context.start_date, context.end_date))
 
         Dependencies:
             Any ordinary parameter can be bound either to a literal value or

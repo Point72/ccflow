@@ -274,27 +274,10 @@ Key rules:
 - chained `with_inputs()` calls merge, with the newest transform winning for a
   repeated field.
 
-## Explicit Context Interop
+## `context_type=...`
 
-`@Flow.model` still supports an explicit context parameter for cases where the
-function needs the whole context object:
-
-```python
-from ccflow import DateRangeContext, Flow
-
-
-@Flow.model
-def load_revenue(context: DateRangeContext, region: str) -> float:
-    days = (context.end_date - context.start_date).days + 1
-    return days * 50.0
-```
-
-This path is useful when interoperating with existing code that already uses
-typed `ContextBase` subclasses, or when the function genuinely needs access to
-the full context rather than individual fields.
-
-You can also keep the `FromContext[...]` style while asking ccflow to validate
-those contextual fields against an existing nominal context shape:
+When you want the `FromContext[...]` fields to match an existing nominal
+context shape, use `context_type=...`:
 
 ```python
 from ccflow import DateRangeContext, Flow, FromContext
@@ -309,9 +292,9 @@ That preserves the primary `FromContext[...]` authoring model while letting
 callers pass richer context objects whose relevant fields satisfy the declared
 `context_type`.
 
-Do not mix both systems in one function signature. A function with an explicit
-`context: ContextBase` parameter cannot also declare `FromContext[...]`
-parameters.
+If the function genuinely needs the runtime context object itself inside the
+function body on each call, use a normal `CallableModel` subclass instead of
+`@Flow.model`.
 
 ## Introspection APIs
 
