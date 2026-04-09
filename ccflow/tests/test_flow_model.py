@@ -239,6 +239,86 @@ def test_explicit_context_interop_still_works():
     assert model.flow.compute(start_date="2024-01-01", end_date="2024-01-02").value == "api:2024-01-01:2024-01-02"
 
 
+def test_auto_unwrap_defaults_to_false_for_auto_wrapped_results():
+    @Flow.model
+    def add(a: int, b: FromContext[int]) -> int:
+        return a + b
+
+    result = add(a=10).flow.compute(b=5)
+    assert isinstance(result, GenericResult)
+    assert result.value == 15
+
+
+def test_compute_does_not_unwrap_explicit_generic_result_returns():
+    @Flow.model
+    def load(value: FromContext[int]) -> GenericResult[int]:
+        return GenericResult(value=value * 2)
+
+    result = load().flow.compute(value=3)
+    assert isinstance(result, GenericResult)
+    assert result.value == 6
+
+
+def test_auto_unwrap_can_be_enabled_for_auto_wrapped_results():
+    @Flow.model(auto_unwrap=True)
+    def add(a: int, b: FromContext[int]) -> int:
+        return a + b
+
+    assert add(a=10).flow.compute(b=5) == 15
+
+
+def test_auto_unwrap_only_affects_external_compute_results():
+    @Flow.model
+    def source(value: FromContext[int]) -> int:
+        return value * 2
+
+    @Flow.model(auto_unwrap=True)
+    def add(left: int, bonus: FromContext[int]) -> int:
+        return left + bonus
+
+    model = add(left=source())
+    assert model.flow.compute(FlowContext(value=4, bonus=3)) == 11
+
+
+def test_model_base_allows_custom_callable_model_subclass():
+    class CustomFlowBase(CallableModel):
+        multiplier: int = 1
+
+        @model_validator(mode="after")
+        def _validate_multiplier(self):
+            if self.multiplier <= 0:
+                raise ValueError("multiplier must be positive")
+            return self
+
+        def scaled(self, value: int) -> int:
+            return value * self.multiplier
+
+        @Flow.call
+        def __call__(self, context: SimpleContext) -> GenericResult[int]:
+            return GenericResult(value=context.value)
+
+    @Flow.model(model_base=CustomFlowBase)
+    def add(a: int, b: FromContext[int]) -> int:
+        return a + b
+
+    model = add(a=10, multiplier=3)
+    assert isinstance(model, CustomFlowBase)
+    assert model.multiplier == 3
+    assert model.scaled(4) == 12
+    assert model.flow.compute(b=5).value == 15
+
+    with pytest.raises(ValueError, match="multiplier must be positive"):
+        add(a=10, multiplier=0)
+
+
+def test_model_base_must_be_callable_model_subclass():
+    with pytest.raises(TypeError, match="model_base must be a CallableModel subclass"):
+
+        @Flow.model(model_base=int)
+        def add(a: int, b: FromContext[int]) -> int:
+            return a + b
+
+
 def test_explicit_context_and_from_context_cannot_mix():
     with pytest.raises(TypeError, match="cannot also declare FromContext"):
 

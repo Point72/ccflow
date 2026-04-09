@@ -102,6 +102,7 @@ class _FlowModelConfig:
     context_type: Type[ContextBase]
     result_type: Type[ResultBase]
     auto_wrap_result: bool
+    auto_unwrap: bool
     explicit_context_param: Optional[str]
     parameters: Tuple[_FlowModelParam, ...]
     context_input_types: Dict[str, Any]
@@ -226,6 +227,17 @@ def _make_lazy_thunk(model: CallableModel, context: ContextBase) -> Callable[[],
         return cache["result"]
 
     return thunk
+
+
+def _maybe_auto_unwrap_external_result(target: CallableModel, result: Any) -> Any:
+    generated = _generated_model_instance(target)
+    if generated is None:
+        return result
+
+    config = type(generated).__flow_model_config__
+    if config.auto_wrap_result and config.auto_unwrap:
+        return _unwrap_model_result(result)
+    return result
 
 
 def _parse_annotation(annotation: Any) -> _ParsedAnnotation:
@@ -495,7 +507,7 @@ class FlowAPI:
         generated = _generated_model_instance(target)
         if generated is not None:
             built_context = _build_generated_compute_context(generated, context, kwargs)
-            return target(built_context)
+            return _maybe_auto_unwrap_external_result(target, target(built_context))
 
         if context is not _UNSET and kwargs:
             raise TypeError("compute() accepts either one context object or contextual keyword arguments, but not both.")
@@ -503,7 +515,7 @@ class FlowAPI:
             built_context = target.context_type.model_validate(kwargs)
         else:
             built_context = context if isinstance(context, ContextBase) else target.context_type.model_validate(context)
-        return target(built_context)
+        return _maybe_auto_unwrap_external_result(target, target(built_context))
 
     @property
     def context_inputs(self) -> Dict[str, Any]:
@@ -830,6 +842,7 @@ def _analyze_flow_model(
     resolved_hints: Dict[str, Any],
     *,
     context_type: Optional[Type[ContextBase]],
+    auto_unwrap: bool,
 ) -> _FlowModelConfig:
     params = sig.parameters
 
@@ -930,6 +943,7 @@ def _analyze_flow_model(
         context_type=call_context_type,
         result_type=result_type,
         auto_wrap_result=auto_wrap_result,
+        auto_unwrap=auto_unwrap,
         explicit_context_param=explicit_context_param,
         parameters=tuple(analyzed_params),
         context_input_types=context_input_types,
@@ -961,11 +975,24 @@ def _validate_factory_kwargs(config: _FlowModelConfig, kwargs: Dict[str, Any]) -
         _coerce_value(param.name, value, param.annotation, "Field")
 
 
+def _resolve_generated_model_bases(model_base: Type[CallableModel]) -> Tuple[type, ...]:
+    if not isinstance(model_base, type) or not issubclass(model_base, CallableModel):
+        raise TypeError(f"model_base must be a CallableModel subclass, got {model_base!r}")
+
+    if issubclass(model_base, _GeneratedFlowModelBase):
+        return (model_base,)
+    if model_base is CallableModel:
+        return (_GeneratedFlowModelBase,)
+    return (_GeneratedFlowModelBase, model_base)
+
+
 def flow_model(
     func: Optional[_AnyCallable] = None,
     *,
     context_args: Any = _REMOVED_CONTEXT_ARGS,
     context_type: Optional[Type[ContextBase]] = None,
+    auto_unwrap: bool = False,
+    model_base: Type[CallableModel] = CallableModel,
     cacheable: Any = _UNSET,
     volatile: Any = _UNSET,
     log_level: Any = _UNSET,
@@ -986,7 +1013,7 @@ def flow_model(
         except (AttributeError, NameError, TypeError):
             resolved_hints = {}
 
-        config = _analyze_flow_model(fn, sig, resolved_hints, context_type=context_type)
+        config = _analyze_flow_model(fn, sig, resolved_hints, context_type=context_type, auto_unwrap=auto_unwrap)
 
         annotations: Dict[str, Any] = {}
         namespace: Dict[str, Any] = {
@@ -1020,7 +1047,10 @@ def flow_model(
 
         namespace["__annotations__"] = annotations
 
-        GeneratedModel = cast(type[_GeneratedFlowModelBase], type(f"_{_callable_name(fn)}_Model", (_GeneratedFlowModelBase,), namespace))
+        GeneratedModel = cast(
+            type[_GeneratedFlowModelBase],
+            type(f"_{_callable_name(fn)}_Model", _resolve_generated_model_bases(model_base), namespace),
+        )
         GeneratedModel.__flow_model_config__ = config
         register_ccflow_import_path(GeneratedModel)
         GeneratedModel.model_rebuild()

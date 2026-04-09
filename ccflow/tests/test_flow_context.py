@@ -135,6 +135,36 @@ def test_bound_model_serialization_roundtrip_preserves_static_transforms():
     assert restored.model.flow.bound_inputs == {"a": 10}
 
 
+def test_bound_model_cloudpickle_roundtrip_preserves_callable_transforms():
+    @Flow.model
+    def add(a: int, b: FromContext[int]) -> int:
+        return a + b
+
+    bound = add(a=10).flow.with_inputs(b=lambda ctx: ctx.b + 1)
+    restored = cloudpickle.loads(cloudpickle.dumps(bound))
+
+    assert restored.flow.compute(b=4).value == 15
+
+
+def test_transformed_dag_cloudpickle_roundtrip_preserves_callable_transforms():
+    @Flow.model
+    def source(value: FromContext[int]) -> int:
+        return value
+
+    @Flow.model
+    def combine(left: int, right: int, value: FromContext[int]) -> int:
+        return left + right + value
+
+    base = source()
+    model = combine(
+        left=base.flow.with_inputs(value=lambda ctx: ctx.value + 1),
+        right=base.flow.with_inputs(value=lambda ctx: ctx.value + 10),
+    )
+    restored = cloudpickle.loads(cloudpickle.dumps(model))
+
+    assert restored.flow.compute(value=5).value == (6 + 15 + 5)
+
+
 def test_regular_callable_models_still_support_with_inputs():
     model = OffsetModel(offset=10)
     shifted = model.flow.with_inputs(x=lambda ctx: ctx.x * 2)

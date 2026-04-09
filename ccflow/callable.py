@@ -537,6 +537,11 @@ class Flow(PydanticBaseModel):
         Args:
             context_type: Optional ContextBase subclass used only to validate/coerce
                 `FromContext[...]` inputs against an existing nominal context shape
+            auto_unwrap: When True, `.flow.compute(...)` unwraps auto-wrapped
+                `GenericResult(value=...)` outputs back to the annotated return type.
+                Explicit `ResultBase` returns are left unchanged. Default: False.
+            model_base: Optional custom `CallableModel` subclass to use as an
+                additional base for the generated model class.
             cacheable: Enable caching of results (default: False)
             volatile: Mark as volatile (default: False)
             log_level: Logging verbosity (default: logging.DEBUG)
