@@ -107,3 +107,13 @@ class TestChunker(unittest.TestCase):
                 (date(2022, 3, 1), date(2022, 3, 7)),
             ],
         )
+
+    def test_dates_to_chunks_accepts_legacy_and_canonical_month_aliases(self):
+        self.assertListEqual(
+            dates_to_chunks(date(2022, 1, 6), date(2022, 1, 7), "2M"),
+            dates_to_chunks(date(2022, 1, 6), date(2022, 1, 7), "2ME"),
+        )
+        self.assertListEqual(
+            dates_to_chunks(date(2022, 1, 6), date(2022, 3, 7), "2M", trim=True),
+            dates_to_chunks(date(2022, 1, 6), date(2022, 3, 7), "2ME", trim=True),
+        )
