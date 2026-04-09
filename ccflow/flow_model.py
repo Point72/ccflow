@@ -479,17 +479,22 @@ def _build_generated_compute_context(model: "_GeneratedFlowModelBase", context: 
             return FlowContext(**_context_values(context))
         return FlowContext.model_validate(context)
 
-    invalid = sorted(set(kwargs) - set(config.context_input_types))
-    if invalid:
-        names = ", ".join(invalid)
-        raise TypeError(f"compute() only accepts contextual inputs. Bind regular parameter(s) separately: {names}.")
+    unresolved_regular = sorted(
+        name for name in config.regular_param_names if name in kwargs and _is_unset_flow_input(getattr(model, name, _UNSET_FLOW_INPUT))
+    )
+    if unresolved_regular:
+        names = ", ".join(unresolved_regular)
+        raise TypeError(
+            f"compute() cannot satisfy unbound regular parameter(s): {names}. "
+            "Bind them at construction time; compute() only supplies runtime context."
+        )
 
-    coerced = {}
+    ambient = dict(kwargs)
     for param in config.contextual_params:
         if param.name not in kwargs:
             continue
-        coerced[param.name] = _coerce_value(param.name, kwargs[param.name], param.validation_annotation, "compute() input")
-    return FlowContext(**coerced)
+        ambient[param.name] = _coerce_value(param.name, kwargs[param.name], param.validation_annotation, "compute() input")
+    return FlowContext(**ambient)
 
 
 class FlowAPI:

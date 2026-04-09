@@ -143,7 +143,7 @@ def test_from_context_anchor_behavior():
     assert foo(a=11).flow.compute(b=12).value == 23
     assert foo(a=11, b=12).flow.compute().value == 23
 
-    with pytest.raises(TypeError, match="compute\\(\\) only accepts contextual inputs"):
+    with pytest.raises(TypeError, match="compute\\(\\) cannot satisfy unbound regular parameter\\(s\\): a"):
         foo().flow.compute(a=11, b=12)
 
 
@@ -157,7 +157,21 @@ def test_regular_param_accepts_upstream_model():
         return a + b
 
     model = foo(a=source(offset=5))
+    assert model.flow.compute(value=7, b=12).value == 24
     assert model.flow.compute(FlowContext(value=7, b=12)).value == 24
+
+
+def test_bound_regular_param_name_can_collide_with_ambient_context():
+    @Flow.model
+    def source(a: FromContext[int]) -> int:
+        return a
+
+    @Flow.model
+    def combine(a: int, left: int, bonus: FromContext[int]) -> int:
+        return a + left + bonus
+
+    model = combine(a=100, left=source())
+    assert model.flow.compute(a=7, bonus=5).value == 112
 
 
 def test_contextual_param_rejects_callable_model():

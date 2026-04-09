@@ -103,6 +103,25 @@ def test_bound_model_with_inputs_is_branch_local_and_chained():
     assert model.flow.compute(value=5).value == (6 + 15 + 5)
 
 
+def test_compute_kwargs_can_supply_ambient_context_for_upstream_transforms():
+    @Flow.model
+    def source(value: FromContext[int]) -> int:
+        return value
+
+    @Flow.model
+    def combine(left: int, right: int, bonus: FromContext[int]) -> int:
+        return left + right + bonus
+
+    base = source()
+    model = combine(
+        left=base.flow.with_inputs(value=lambda ctx: ctx.value + 1),
+        right=base.flow.with_inputs(value=lambda ctx: ctx.value + 10),
+    )
+
+    assert model.flow.context_inputs == {"bonus": int}
+    assert model.flow.compute(value=5, bonus=100).value == (6 + 15 + 100)
+
+
 def test_bound_model_rejects_regular_field_rewrites():
     @Flow.model
     def add(a: int, b: FromContext[int]) -> int:

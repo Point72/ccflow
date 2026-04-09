@@ -8,7 +8,7 @@ The design is intentionally narrow:
 
 - ordinary unmarked parameters are regular bound inputs,
 - `FromContext[T]` marks the only runtime/contextual inputs,
-- `.flow.compute(...)` supplies contextual inputs,
+- `.flow.compute(...)` is the execution entry point for the full DAG,
 - `.flow.with_inputs(...)` rewires contextual inputs on one dependency edge,
 - upstream `CallableModel`s can still be passed as ordinary arguments.
 
@@ -51,7 +51,8 @@ This is the core contract:
 - `b` is contextual because it is marked with `FromContext[int]` — it can come
   from runtime context, a contextual default stored on the model instance, or a
   function default,
-- `.flow.compute(...)` only accepts contextual inputs.
+- `.flow.compute(...)` may carry extra ambient context for upstream graph
+  branches, but it never binds regular parameters.
 
 Nothing is being mutated at execution time in the second example.
 `prefilled = foo(a=11, b=12)` constructs a different model instance whose
@@ -62,11 +63,14 @@ This means the following is **invalid**:
 
 ```python
 foo().flow.compute(a=11, b=12)
-# TypeError: compute() only accepts contextual inputs.
-# Bind regular parameter(s) separately: a
+# TypeError: compute() cannot bind regular parameter(s): a.
+# Bind them at construction time.
 ```
 
 `a` is not contextual, so it must be bound at construction time (`foo(a=11)`).
+By contrast, extra ambient fields that are only needed by upstream
+`with_inputs(...)` rewrites are allowed on the kwargs entrypoint for
+implicit-`FlowContext` graphs.
 
 ## Regular Parameters vs Contextual Parameters
 
@@ -130,11 +134,12 @@ Contextual precedence is:
 
 ## `.flow.compute(...)`
 
-`.flow.compute(...)` is the ergonomic entry point for contextual execution.
+`.flow.compute(...)` is the ergonomic execution entry point for contextual
+execution of the whole DAG.
 
 For generated `@Flow.model` stages it accepts either:
 
-- contextual keyword arguments, or
+- keyword arguments that become the ambient runtime context bag, or
 - one context object.
 
 It does not accept both at the same time.
@@ -153,7 +158,77 @@ assert model.flow.compute(b=5).value == 15
 assert model.flow.compute(FlowContext(b=6)).value == 16
 ```
 
-`compute()` returns the same result object you would get from `model(context)`.
+For implicit-`FlowContext` models, the kwargs form is intentionally a DAG
+entrypoint: it can include extra fields needed only by upstream transformed
+dependencies. Regular parameters are still never read from runtime context. If
+the root model has an unbound regular parameter whose name appears in
+`compute(**kwargs)`, `compute()` raises early instead of silently treating that
+value as configuration.
+
+```python
+from ccflow import Flow, FromContext
+
+
+@Flow.model
+def source(value: FromContext[int]) -> int:
+    return value
+
+
+@Flow.model
+def add(left: int, right: int, bonus: FromContext[int]) -> int:
+    return left + right + bonus
+
+
+base = source()
+model = add(
+    left=base.flow.with_inputs(value=lambda ctx: ctx.value + 1),
+    right=base.flow.with_inputs(value=lambda ctx: ctx.value + 10),
+)
+
+assert model.flow.context_inputs == {"bonus": int}
+assert model.flow.compute(value=5, bonus=100).value == 121
+```
+
+If a regular parameter is already bound on the root model, a same-named key in
+`compute(**kwargs)` is treated as ambient context for the graph rather than a
+rebind of the root parameter:
+
+```python
+from ccflow import Flow, FromContext
+
+
+@Flow.model
+def source(a: FromContext[int]) -> int:
+    return a
+
+
+@Flow.model
+def combine(a: int, left: int, bonus: FromContext[int]) -> int:
+    return a + left + bonus
+
+
+model = combine(a=100, left=source())
+
+# Root 'a' stays bound to 100. The runtime 'a=7' is still available to
+# upstream graph nodes that read it from context.
+assert model.flow.compute(a=7, bonus=5).value == 112
+```
+
+`compute()` returns the same result object you would get from `model(context)`,
+unless `auto_unwrap=True` is enabled for an auto-wrapped plain return type:
+
+```python
+from ccflow import Flow, FromContext
+
+
+@Flow.model(auto_unwrap=True)
+def add(a: int, b: FromContext[int]) -> int:
+    return a + b
+
+
+result = add(a=10).flow.compute(b=5)
+assert result == 15
+```
 
 ## `.flow.with_inputs(...)`
 
