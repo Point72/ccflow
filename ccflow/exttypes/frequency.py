@@ -1,3 +1,4 @@
+import re
 import warnings
 from datetime import timedelta
 from functools import cached_property
@@ -32,6 +33,23 @@ class Frequency(str):
         if isinstance(value, cls):
             return cls._validate(str(value))
 
+        if isinstance(value, timedelta):
+            # Keep ccflow's day-sized spellings stable when pandas round-trips
+            # timedeltas through its newer canonical offset machinery.
+            # Context for the offset alias changes:
+            # https://pandas.pydata.org/docs/dev/whatsnew/v3.0.0.html#enforced-deprecation-of-aliases-m-q-y-etc-in-favour-of-me-qe-ye-etc-for-offsets
+            if value.total_seconds() % 86400 == 0:
+                return cls(f"{int(value.total_seconds() // 86400)}D")
+
+        if isinstance(value, str):
+            # Pandas deprecated legacy aliases like M/Q/Y in 2.2 and enforced the
+            # new ME/QE/YE forms in 3.0. Normalize old user-facing inputs before
+            # handing them to pandas.
+            # Exact sections:
+            # https://pandas.pydata.org/docs/whatsnew/v2.2.0.html#deprecate-aliases-m-q-y-etc-in-favour-of-me-qe-ye-etc-for-offsets
+            # https://pandas.pydata.org/docs/dev/whatsnew/v3.0.0.html#enforced-deprecation-of-aliases-m-q-y-etc-in-favour-of-me-qe-ye-etc-for-offsets
+            value = _normalize_frequency_alias(value)
+
         if isinstance(value, (timedelta, str)):
             try:
                 with warnings.catch_warnings():
@@ -54,3 +72,39 @@ class Frequency(str):
 
 
 _TYPE_ADAPTER = TypeAdapter(Frequency)
+
+
+_LEGACY_FREQ_PATTERN = re.compile(
+    r"^(?P<count>[+-]?\d+)?(?P<unit>T|M|A|Y)(?:-(?P<suffix>[A-Za-z]{3}))?$",
+    re.IGNORECASE,
+)
+
+
+def _normalize_frequency_alias(value: str) -> str:
+    # Pandas 2.2 deprecated, and pandas 3.0 enforced removal of, several
+    # legacy offset aliases. Keep accepting the old forms at the ccflow API
+    # boundary and translate them to pandas' canonical spellings here.
+    # Exact sections:
+    # https://pandas.pydata.org/docs/whatsnew/v2.2.0.html#deprecate-aliases-m-q-y-etc-in-favour-of-me-qe-ye-etc-for-offsets
+    # https://pandas.pydata.org/docs/dev/whatsnew/v3.0.0.html#enforced-deprecation-of-aliases-m-q-y-etc-in-favour-of-me-qe-ye-etc-for-offsets
+    normalized = value.strip()
+    if not normalized:
+        return normalized
+
+    match = _LEGACY_FREQ_PATTERN.fullmatch(normalized)
+    if not match:
+        day_match = re.fullmatch(r"(?P<count>[+-]?\d+)?d", normalized, re.IGNORECASE)
+        if day_match:
+            return f"{day_match.group('count') or 1}D"
+        return normalized
+
+    count = match.group("count") or "1"
+    unit = match.group("unit").upper()
+    suffix = (match.group("suffix") or "DEC").upper()
+    replacements = {
+        "T": f"{count}min",
+        "M": f"{count}ME",
+        "A": f"{count}YE-{suffix}",
+        "Y": f"{count}YE-{suffix}",
+    }
+    return replacements[unit]
