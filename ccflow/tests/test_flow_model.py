@@ -2,6 +2,7 @@
 
 import graphlib
 from datetime import date, timedelta
+from typing import Annotated
 
 import pytest
 from pydantic import model_validator
@@ -496,3 +497,155 @@ def test_unexpected_type_hint_resolution_errors_propagate(monkeypatch):
 
     with pytest.raises(RuntimeError, match="boom"):
         Flow.model(add)
+
+
+def test_internal_generated_model_helpers_and_config_properties():
+    @Flow.model
+    def add(a: int, b: FromContext[int]) -> int:
+        return a + b
+
+    generated_cls = flow_model_module._generated_model_class(add)
+    assert generated_cls is not None
+
+    config = generated_cls.__flow_model_config__
+    assert config.regular_param_names == ("a",)
+    assert config.contextual_param_names == ("b",)
+    assert config.param("a").name == "a"
+    assert config.param("b").name == "b"
+
+    with pytest.raises(KeyError):
+        config.param("missing")
+
+    model = add(a=10)
+    assert flow_model_module._generated_model_class(model) is generated_cls
+
+    class DerivedGeneratedBase(flow_model_module._GeneratedFlowModelBase):
+        @Flow.call
+        def __call__(self, context: SimpleContext) -> GenericResult[int]:
+            return GenericResult(value=context.value)
+
+        @Flow.deps
+        def __deps__(self, context: SimpleContext):
+            del context
+            return []
+
+    assert flow_model_module._resolve_generated_model_bases(DerivedGeneratedBase) == (DerivedGeneratedBase,)
+
+
+def test_internal_type_helpers_and_plain_callable_flow_api_paths():
+    assert flow_model_module._concrete_context_type(SimpleContext | None) is SimpleContext
+    assert flow_model_module._concrete_context_type(int) is None
+    assert flow_model_module._type_accepts_str(Annotated[str, flow_model_module._FromContextMarker()]) is True
+    assert flow_model_module._type_accepts_str(int | None) is False
+    assert flow_model_module._transform_repr(lambda value: value) == "<lambda>"
+    assert flow_model_module._bound_field_names(object()) == set()
+
+    class PlainModel(CallableModel):
+        @property
+        def context_type(self):
+            return SimpleContext
+
+        @property
+        def result_type(self):
+            return GenericResult[int]
+
+        @Flow.call
+        def __call__(self, context: SimpleContext) -> GenericResult[int]:
+            return GenericResult(value=context.value)
+
+        @Flow.deps
+        def __deps__(self, context: SimpleContext):
+            del context
+            return []
+
+    model = PlainModel()
+
+    assert model.flow.context_inputs == {"value": int}
+    assert model.flow.unbound_inputs == {"value": int}
+    assert model.flow.bound_inputs == {}
+    assert model.flow.compute({"value": 3}).value == 3
+
+    with pytest.raises(TypeError, match="either one context object or contextual keyword arguments"):
+        model.flow.compute(SimpleContext(value=1), value=2)
+
+
+def test_explicit_context_paths_and_underbar_context_parameter():
+    model = basic_loader(source="warehouse", multiplier=3)
+
+    assert model.flow.context_inputs == {"value": int}
+    assert model.flow.unbound_inputs == {"value": int}
+    assert model.flow.compute({"value": 4}).value == 12
+    assert model.flow.compute(SimpleContext(value=5)).value == 15
+
+    with pytest.raises(TypeError, match="either one context object or contextual keyword arguments"):
+        model.flow.compute(SimpleContext(value=1), value=2)
+
+    @Flow.model
+    def underbar(_: SimpleContext, a: int) -> int:
+        return _.value + a
+
+    assert underbar(a=10).flow.compute({"value": 2}).value == 12
+
+
+def test_additional_validation_and_hint_fallback_paths(monkeypatch):
+    class MissingFieldContext(ContextBase):
+        start_date: date
+
+    with pytest.raises(TypeError, match="must define fields for all FromContext parameters"):
+
+        @Flow.model(context_type=MissingFieldContext)
+        def bad_missing(start_date: FromContext[date], end_date: FromContext[date]) -> int:
+            return 0
+
+    class ExtraRequiredContext(ContextBase):
+        start_date: date
+        end_date: date
+        label: str
+
+    with pytest.raises(TypeError, match="has required fields that are not declared as FromContext parameters"):
+
+        @Flow.model(context_type=ExtraRequiredContext)
+        def bad_extra(start_date: FromContext[date], end_date: FromContext[date]) -> int:
+            return 0
+
+    class BadAnnotationContext(ContextBase):
+        value: str
+
+    with pytest.raises(TypeError, match="annotates"):
+
+        @Flow.model(context_type=BadAnnotationContext)
+        def bad_annotation(value: FromContext[int]) -> int:
+            return value
+
+    with pytest.raises(TypeError, match="context_type must be a ContextBase subclass"):
+
+        @Flow.model(context_type=int)
+        def bad_context_type(value: FromContext[int]) -> int:
+            return value
+
+    @Flow.model
+    def source(context: SimpleContext) -> GenericResult[int]:
+        return GenericResult(value=context.value)
+
+    with pytest.raises(TypeError, match="cannot default to a CallableModel"):
+
+        @Flow.model
+        def bad_default(value: FromContext[int] = source()) -> int:
+            return value
+
+    with pytest.raises(TypeError, match="return type annotation"):
+
+        @Flow.model
+        def missing_return(value: int):
+            return value
+
+    def missing_hints(*args, **kwargs):
+        raise AttributeError("missing hints")
+
+    monkeypatch.setattr(flow_model_module, "get_type_hints", missing_hints)
+
+    @Flow.model
+    def add(x: int, y: FromContext[int]) -> int:
+        return x + y
+
+    assert add(x=1).flow.compute(y=2).value == 3
