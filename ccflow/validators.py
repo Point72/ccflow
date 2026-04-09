@@ -9,7 +9,6 @@ import pandas as pd
 from pydantic import TypeAdapter, ValidationError
 
 from .exttypes import PyObjectPath
-from .exttypes.frequency import _normalize_frequency_alias
 
 _DatetimeAdapter = TypeAdapter(datetime)
 
@@ -26,7 +25,7 @@ def normalize_date(v: Any) -> Any:
     """Validator that will convert string offsets to date based on today, and convert datetime to date."""
     if isinstance(v, str):  # Check case where it's an offset
         try:
-            timestamp = pd.tseries.frequencies.to_offset(_normalize_frequency_alias(v)) + date.today()
+            timestamp = pd.tseries.frequencies.to_offset(v) + date.today()
             return timestamp.date()
         except ValueError:
             pass
@@ -45,7 +44,7 @@ def normalize_datetime(v: Any) -> Any:
     """Validator that will convert string offsets to datetime based on today, and convert datetime to date."""
     if isinstance(v, str):  # Check case where it's an offset
         try:
-            return (pd.tseries.frequencies.to_offset(_normalize_frequency_alias(v)) + date.today()).to_pydatetime()
+            return (pd.tseries.frequencies.to_offset(v) + date.today()).to_pydatetime()
         except ValueError:
             pass
     if isinstance(v, dict):
