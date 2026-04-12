@@ -87,6 +87,18 @@ jobs:
     - name: Twine check
       run: make dist
 
+    - name: Test wheel install
+      run: |
+        python -m venv /tmp/test-wheel
+        /tmp/test-wheel/bin/pip install dist/*.whl
+        /tmp/test-wheel/bin/python -c "import ccflow"
+
+    - name: Test sdist install
+      run: |
+        python -m venv /tmp/test-sdist
+        /tmp/test-sdist/bin/pip install dist/*.tar.gz
+        /tmp/test-sdist/bin/python -c "import ccflow"
+
     - uses: actions/upload-artifact@v7
       with:
         name: dist-${{matrix.os}}

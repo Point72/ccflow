@@ -1,12 +1,18 @@
 ---
+<<<<<<< before updating
 name: Bug report
 about: Create a report to help us improve
 title: ''
+=======
+name: Bug Report
+about: Report a bug to help us improve
+title: '[BUG] '
+>>>>>>> after updating
 labels: bug
 assignees: ''
-
 ---
 
+<<<<<<< before updating
 <!--
 Thank you for taking the time to file a bug report. Before creating a
 new issue, please take a few minutes to search the issue tracker for an
@@ -47,3 +53,26 @@ the issue.
 <!-- Explain how this issue affects your work or why it should be
 prioritized. If there are additional details that don't fit elsewhere,
 include them here. -->
+=======
+**Description**
+A clear and concise description of the bug.
+
+**Steps to Reproduce**
+1.
+2.
+3.
+
+**Expected Behavior**
+What you expected to happen.
+
+**Actual Behavior**
+What actually happened. Include full error messages or tracebacks if available.
+
+**Environment**
+- OS: [e.g. Ubuntu 22.04, macOS 14.0, Windows 11]
+- Python version: [e.g. 3.11.5] (`python --version`)
+- Package version: (`pip show ccflow | grep Version`)
+
+**Additional Context**
+Add any other relevant context, logs, or screenshots.
+>>>>>>> after updating
