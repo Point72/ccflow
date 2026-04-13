@@ -1,6 +1,7 @@
 """Focused tests for the FromContext-based Flow.model API."""
 
 import graphlib
+import logging
 from datetime import date, timedelta
 from typing import Annotated
 
@@ -21,7 +22,7 @@ from ccflow import (
     Lazy,
     ModelRegistry,
 )
-from ccflow.evaluators import GraphEvaluator
+from ccflow.evaluators import GraphEvaluator, LoggingEvaluator, MemoryCacheEvaluator, MultiEvaluator, get_dependency_graph
 
 
 class SimpleContext(ContextBase):
@@ -393,6 +394,150 @@ def test_lazy_and_from_context_combination_is_rejected():
         @Flow.model
         def bad(x: Lazy[FromContext[int]]) -> int:
             return x()
+
+
+def test_generated_cache_identity_ignores_unrelated_ambient_fields():
+    calls = {"source": 0, "root": 0}
+
+    @Flow.model
+    def source(value: FromContext[int]) -> int:
+        calls["source"] += 1
+        return value * 10
+
+    @Flow.model
+    def root(x: int, penalty: FromContext[int]) -> int:
+        calls["root"] += 1
+        return x + penalty
+
+    model = root(x=source())
+    evaluator = MultiEvaluator(evaluators=[LoggingEvaluator(log_level=logging.INFO, verbose=False), MemoryCacheEvaluator()])
+
+    with FlowOptionsOverride(options={"evaluator": evaluator, "cacheable": True}):
+        assert model.flow.compute(FlowContext(value=10, penalty=1)).value == 101
+        assert model.flow.compute(FlowContext(value=10, penalty=2)).value == 102
+
+    assert calls == {"source": 1, "root": 2}
+
+
+def test_with_inputs_equivalent_child_requests_share_cached_generated_child():
+    calls = {"source": 0}
+
+    @Flow.model
+    def source(value: FromContext[int]) -> int:
+        calls["source"] += 1
+        return value * 10
+
+    @Flow.model
+    def merge(left: int, right: int) -> int:
+        return left + right
+
+    model = merge(
+        left=source().flow.with_inputs(value=lambda ctx: ctx.base + ctx.offset),
+        right=source().flow.with_inputs(value=lambda ctx: ctx.total),
+    )
+
+    with FlowOptionsOverride(options={"evaluator": MemoryCacheEvaluator(), "cacheable": True}):
+        assert model.flow.compute(base=3, offset=4, total=7).value == 140
+
+    assert calls["source"] == 1
+
+
+def test_with_inputs_child_request_change_invalidates_generated_child():
+    calls = {"source": 0}
+
+    @Flow.model
+    def source(value: FromContext[int]) -> int:
+        calls["source"] += 1
+        return value * 10
+
+    @Flow.model
+    def merge(left: int, right: int) -> int:
+        return left + right
+
+    model = merge(
+        left=source().flow.with_inputs(value=lambda ctx: ctx.base + ctx.offset),
+        right=source().flow.with_inputs(value=lambda ctx: ctx.total),
+    )
+
+    with FlowOptionsOverride(options={"evaluator": MemoryCacheEvaluator(), "cacheable": True}):
+        assert model.flow.compute(base=3, offset=4, total=7).value == 140
+        assert model.flow.compute(base=3, offset=5, total=8).value == 160
+
+    assert calls["source"] == 2
+
+
+def test_generated_identity_falls_back_for_non_generated_children():
+    calls = {"child": 0, "root": 0}
+
+    class PlainChild(CallableModel):
+        @property
+        def context_type(self):
+            return FlowContext
+
+        @property
+        def result_type(self):
+            return GenericResult[int]
+
+        @Flow.call
+        def __call__(self, context: FlowContext) -> GenericResult[int]:
+            calls["child"] += 1
+            return GenericResult(value=context.value * 10)
+
+    @Flow.model
+    def root(x: int, penalty: FromContext[int]) -> int:
+        calls["root"] += 1
+        return x + penalty
+
+    model = root(x=PlainChild())
+
+    with FlowOptionsOverride(options={"evaluator": MemoryCacheEvaluator(), "cacheable": True}):
+        assert model.flow.compute(FlowContext(value=10, penalty=1)).value == 101
+        assert model.flow.compute(FlowContext(value=10, penalty=2)).value == 102
+
+    assert calls == {"child": 2, "root": 2}
+
+
+def test_lazy_callable_dependency_participates_in_generated_identity():
+    calls = {"source": 0, "choose": 0}
+
+    @Flow.model
+    def source(value: FromContext[int]) -> int:
+        calls["source"] += 1
+        return value * 10
+
+    @Flow.model
+    def choose(lazy_value: Lazy[int], threshold: FromContext[int]) -> int:
+        calls["choose"] += 1
+        return lazy_value() + threshold
+
+    model = choose(lazy_value=source())
+
+    with FlowOptionsOverride(options={"evaluator": MemoryCacheEvaluator(), "cacheable": True}):
+        assert model.flow.compute(FlowContext(value=3, threshold=1)).value == 31
+        assert model.flow.compute(FlowContext(value=4, threshold=1)).value == 41
+
+    assert calls == {"source": 2, "choose": 2}
+
+
+def test_generated_graph_identity_reuses_child_node_across_unrelated_ambient_changes():
+    @Flow.model
+    def source(value: FromContext[int]) -> int:
+        return value * 10
+
+    @Flow.model
+    def root(x: int, penalty: FromContext[int]) -> int:
+        return x + penalty
+
+    model = root(x=source())
+
+    graph1 = get_dependency_graph(model.__call__.get_evaluation_context(model, FlowContext(value=10, penalty=1)))
+    graph2 = get_dependency_graph(model.__call__.get_evaluation_context(model, FlowContext(value=10, penalty=2)))
+
+    child_key1 = next(key for key in graph1.ids if key != graph1.root_id)
+    child_key2 = next(key for key in graph2.ids if key != graph2.root_id)
+
+    assert child_key1 == child_key2
+    assert graph1.root_id != graph2.root_id
 
 
 def test_auto_wrap_and_serialization_roundtrip():

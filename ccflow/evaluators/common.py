@@ -1,7 +1,10 @@
+import hashlib
 import itertools
 import logging
+import marshal
 import time
 from contextlib import nullcontext
+from dataclasses import dataclass
 from datetime import timedelta
 from pprint import pformat
 from types import MappingProxyType
@@ -13,6 +16,13 @@ from typing_extensions import override
 
 from ..base import BaseModel, make_lazy_result
 from ..callable import CallableModel, ContextBase, EvaluatorBase, ModelEvaluationContext, ResultType
+from ..flow_model import (
+    _callable_fingerprint,
+    _declared_model_dependencies,
+    _generated_model_instance,
+    _missing_regular_param_names,
+    _resolved_contextual_inputs,
+)
 
 __all__ = [
     "cache_key",
@@ -206,6 +216,172 @@ def cache_key(flow_obj: Union[ModelEvaluationContext, ContextBase, CallableModel
         raise TypeError(f"object of type {type(flow_obj)} cannot be serialized by this function!")
 
 
+def _callable_definition_identity(func: Any) -> str:
+    module = getattr(func, "__module__", None) or type(func).__module__
+    qualname = getattr(func, "__qualname__", None) or type(func).__qualname__
+    code = getattr(func, "__code__", None)
+    if code is None:
+        return f"callable:{module}:{qualname}"
+
+    payload = "|".join(
+        [
+            module,
+            qualname,
+            code.co_filename,
+            str(code.co_firstlineno),
+            hashlib.sha256(marshal.dumps(code)).hexdigest(),
+            repr(getattr(func, "__defaults__", None)),
+        ]
+    )
+    return f"callable:{payload}"
+
+
+def _unwrap_generated_identity_context(evaluation_context: ModelEvaluationContext) -> Optional[ModelEvaluationContext]:
+    current = evaluation_context
+    seen: Set[int] = set()
+
+    while isinstance(current.model, EvaluatorBase):
+        if id(current) in seen:
+            return None
+        seen.add(id(current))
+        if not isinstance(current.context, ModelEvaluationContext):
+            return None
+        current = current.context
+
+    return current
+
+
+def _literal_identity_value(value: Any) -> Any:
+    if callable(value):
+        return ("callable", _callable_fingerprint(value))
+    return value
+
+
+@dataclass(frozen=True)
+class _LiteralBinding:
+    name: str
+    value: Any
+
+
+@dataclass(frozen=True)
+class _ContextBinding:
+    name: str
+    value: Any
+
+
+@dataclass(frozen=True)
+class _OpaqueChildReference:
+    key: bytes
+
+
+@dataclass(frozen=True)
+class _GeneratedLocalRequest:
+    definition_id: str
+    context_type_id: str
+    fn: str
+    literal_inputs: tuple[_LiteralBinding, ...]
+    contextual_inputs: tuple[_ContextBinding, ...]
+    dependencies: tuple["_GeneratedLocalRequest | _OpaqueChildReference", ...]
+
+
+def _context_type_identity(context_type: Any) -> str:
+    return f"{getattr(context_type, '__module__', None)}:{getattr(context_type, '__qualname__', repr(context_type))}"
+
+
+def _opaque_child_reference(model: CallableModel, context: ContextBase) -> _OpaqueChildReference:
+    return _OpaqueChildReference(key=cache_key(ModelEvaluationContext(model=model, context=context)))
+
+
+def _generated_local_request(evaluation_context: ModelEvaluationContext) -> Optional[_GeneratedLocalRequest]:
+    memo: Dict[bytes, Optional[_GeneratedLocalRequest]] = {}
+    return _generated_local_request_impl(evaluation_context, memo, set())
+
+
+def _generated_local_identity_key(evaluation_context: ModelEvaluationContext) -> Optional[bytes]:
+    request = _generated_local_request(evaluation_context)
+    if request is None:
+        return None
+    return dask.base.tokenize(request).encode("utf-8")
+
+
+def _generated_local_request_impl(
+    evaluation_context: ModelEvaluationContext,
+    memo: Dict[bytes, Optional[_GeneratedLocalRequest]],
+    in_progress: Set[bytes],
+) -> Optional[_GeneratedLocalRequest]:
+    inner = _unwrap_generated_identity_context(evaluation_context)
+    if inner is None or inner.context is None:
+        return None
+
+    try:
+        memo_key = cache_key(inner)
+    except Exception:
+        return None
+
+    if memo_key in memo:
+        return memo[memo_key]
+    if memo_key in in_progress:
+        return None
+
+    generated = _generated_model_instance(inner.model)
+    if generated is None or inner.fn not in {"__call__", "__deps__"}:
+        memo[memo_key] = None
+        return None
+
+    config = type(generated).__flow_model_config__
+    if _missing_regular_param_names(generated, config):
+        memo[memo_key] = None
+        return None
+
+    in_progress.add(memo_key)
+    try:
+        try:
+            contextual_inputs = _resolved_contextual_inputs(generated, config, inner.context)
+            dependencies = _declared_model_dependencies(generated, config, inner.context, include_lazy=True)
+        except Exception:
+            memo[memo_key] = None
+            return None
+
+        literal_inputs = []
+        for param in config.regular_params:
+            value = getattr(generated, param.name)
+            if isinstance(value, CallableModel):
+                continue
+            literal_inputs.append(_LiteralBinding(name=param.name, value=_literal_identity_value(value)))
+
+        dependency_requests = []
+        for model, contexts in dependencies:
+            for context in contexts:
+                child_evaluation = ModelEvaluationContext(model=model, context=context)
+                child_request = _generated_local_request_impl(child_evaluation, memo, in_progress)
+                if child_request is None:
+                    child_request = _opaque_child_reference(model, context)
+                dependency_requests.append(child_request)
+
+        request = _GeneratedLocalRequest(
+            definition_id=_callable_definition_identity(config.func),
+            context_type_id=_context_type_identity(config.context_type),
+            fn=inner.fn,
+            literal_inputs=tuple(literal_inputs),
+            contextual_inputs=tuple(_ContextBinding(name=param.name, value=contextual_inputs[param.name]) for param in config.contextual_params),
+            dependencies=tuple(dependency_requests),
+        )
+        memo[memo_key] = request
+        return memo[memo_key]
+    except Exception:
+        memo[memo_key] = None
+        return None
+    finally:
+        in_progress.discard(memo_key)
+
+
+def _evaluation_cache_key(evaluation_context: ModelEvaluationContext) -> bytes:
+    generated_key = _generated_local_identity_key(evaluation_context)
+    if generated_key is not None:
+        return generated_key
+    return cache_key(evaluation_context)
+
+
 class MemoryCacheEvaluator(EvaluatorBase):
     """Evaluator that caches results in memory."""
 
@@ -215,7 +391,7 @@ class MemoryCacheEvaluator(EvaluatorBase):
 
     def key(self, context: ModelEvaluationContext):
         """Function to convert a ModelEvaluationContext to a key"""
-        return cache_key(context)
+        return _evaluation_cache_key(context)
 
     @property
     def cache(self):
@@ -252,7 +428,7 @@ class CallableModelGraph(BaseModel):
 
 
 def _build_dependency_graph(evaluation_context: ModelEvaluationContext, graph: CallableModelGraph, parent_key: Optional[bytes] = None):
-    key = cache_key(evaluation_context)
+    key = _evaluation_cache_key(evaluation_context)
     if parent_key:
         graph.graph[parent_key].add(key)
     if key not in graph.ids:
@@ -275,7 +451,7 @@ def get_dependency_graph(evaluation_context: ModelEvaluationContext) -> Callable
     Args:
         evaluation_context: The model and context to build the graph for.
     """
-    root_key = cache_key(evaluation_context)
+    root_key = _evaluation_cache_key(evaluation_context)
     graph = CallableModelGraph(ids={}, graph={}, root_id=root_key)
     _build_dependency_graph(evaluation_context, graph)
     return graph

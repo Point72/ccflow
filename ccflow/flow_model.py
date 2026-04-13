@@ -296,8 +296,8 @@ def _callable_closure_repr(transform: Any) -> str:
 
 
 def _callable_fingerprint(transform: Any) -> str:
-    module = getattr(transform, "__module__", type(transform).__module__)
-    qualname = getattr(transform, "__qualname__", type(transform).__qualname__)
+    module = getattr(transform, "__module__", None) or type(transform).__module__
+    qualname = getattr(transform, "__qualname__", None) or type(transform).__qualname__
     code = getattr(transform, "__code__", None)
     if code is None:
         return f"callable:{module}:{qualname}:{repr(transform)}"
@@ -759,23 +759,33 @@ def _make_call_impl(config: _FlowModelConfig) -> _AnyCallable:
     return __call__
 
 
+def _declared_model_dependencies(
+    model: "_GeneratedFlowModelBase",
+    config: _FlowModelConfig,
+    context: ContextBase,
+    *,
+    include_lazy: bool,
+) -> GraphDepList:
+    missing_regular = _missing_regular_param_names(model, config)
+    if missing_regular:
+        missing = ", ".join(sorted(missing_regular))
+        raise TypeError(f"Missing regular parameter(s) for {_callable_name(config.func)}: {missing}. Bind them before dependency evaluation.")
+
+    deps = []
+    for param in config.regular_params:
+        if param.is_lazy and not include_lazy:
+            continue
+        value = getattr(model, param.name, _UNSET_FLOW_INPUT)
+        if isinstance(value, BoundModel):
+            deps.append((value.model, [value._transform_context(context)]))
+        elif isinstance(value, CallableModel):
+            deps.append((value, [context]))
+    return deps
+
+
 def _make_deps_impl(config: _FlowModelConfig) -> _AnyCallable:
     def __deps__(self, context):
-        missing_regular = _missing_regular_param_names(self, config)
-        if missing_regular:
-            missing = ", ".join(sorted(missing_regular))
-            raise TypeError(f"Missing regular parameter(s) for {_callable_name(config.func)}: {missing}. Bind them before dependency evaluation.")
-
-        deps = []
-        for param in config.regular_params:
-            if param.is_lazy:
-                continue
-            value = getattr(self, param.name, _UNSET_FLOW_INPUT)
-            if isinstance(value, BoundModel):
-                deps.append((value.model, [value._transform_context(context)]))
-            elif isinstance(value, CallableModel):
-                deps.append((value, [context]))
-        return deps
+        return _declared_model_dependencies(self, config, context, include_lazy=False)
 
     cast(Any, __deps__).__signature__ = inspect.Signature(
         parameters=[
