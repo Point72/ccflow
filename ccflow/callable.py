@@ -41,6 +41,7 @@ __all__ = (
     "FlowOptionsDeps",
     "FlowOptionsOverride",
     "ModelEvaluationContext",
+    "TransparentModelEvaluationContext",
     "EvaluatorBase",
     "Evaluator",
     "WrapperModel",
@@ -262,7 +263,7 @@ class FlowOptions(BaseModel):
             if as_dict:
                 return dict(model=evaluator, context=evaluation_context)
             else:
-                return ModelEvaluationContext(model=evaluator, context=evaluation_context)
+                return evaluator.make_evaluation_context(evaluation_context)
 
         # The decorator implementation
         def wrapper(model, context=Signature.empty, *, _options: Optional[FlowOptions] = None, **kwargs):
@@ -510,9 +511,46 @@ class EvaluatorBase(_CallableModel, abc.ABC):
     def __exit__(self):
         pass
 
+    def is_transparent(self, context: ModelEvaluationContext) -> bool:
+        """Whether this evaluator does NOT modify the return value for the given context.
+
+        Transparent evaluators may add side effects (logging, caching, timing,
+        dependency ordering) but always return the same value as ``context()``.
+        This allows cache key computation and dependency graph deduplication to
+        skip these layers.
+
+        Override this method to return ``True`` for evaluators that are always
+        transparent, or implement context-dependent logic for evaluators that
+        are only sometimes transparent.
+        """
+        return False
+
+    def make_evaluation_context(self, context: ModelEvaluationContext, **kwargs) -> ModelEvaluationContext:
+        """Create a ModelEvaluationContext wrapping this evaluator around the given context.
+
+        Returns a ``TransparentModelEvaluationContext`` when ``is_transparent(context)``
+        is ``True``, signaling that this layer can be skipped for cache key computation.
+        """
+        if self.is_transparent(context):
+            return TransparentModelEvaluationContext(model=self, context=context, **kwargs)
+        return ModelEvaluationContext(model=self, context=context, **kwargs)
+
+
+class TransparentModelEvaluationContext(ModelEvaluationContext):
+    """A ModelEvaluationContext layer that is safe to skip for cache key computation.
+
+    Created by ``EvaluatorBase.make_evaluation_context()`` when the evaluator's
+    ``is_transparent()`` returns ``True``. Signals that this evaluator layer does
+    not modify the return value and can be ignored when computing cache keys or
+    deduplicating dependency graph nodes.
+    """
+
 
 class Evaluator(EvaluatorBase):
     """A higher-order model that evaluates a function on a CallableModel and a Context."""
+
+    def is_transparent(self, context: ModelEvaluationContext) -> bool:
+        return True
 
     @override
     def __call__(self, context: ModelEvaluationContext) -> ResultType:
