@@ -87,6 +87,14 @@ jobs:
     - name: Twine check
       run: make dist
 
+    - uses: actions-ext/python/test-wheel@main
+      with:
+        module: ccflow
+
+    - uses: actions-ext/python/test-sdist@main
+      with:
+        module: ccflow
+
     - uses: actions/upload-artifact@v7
       with:
         name: dist-${{matrix.os}}
