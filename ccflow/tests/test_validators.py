@@ -52,6 +52,14 @@ class TestValidators(TestCase):
             now.astimezone(tz=ZoneInfo("US/Hawaii")),
         )
 
+    def test_normalize_date_accepts_legacy_and_canonical_frequency_aliases(self):
+        self.assertEqual(normalize_date("1M"), normalize_date("1ME"))
+        self.assertEqual(normalize_date("1A-DEC"), normalize_date("1YE-DEC"))
+
+    def test_normalize_datetime_accepts_legacy_and_canonical_frequency_aliases(self):
+        self.assertEqual(normalize_datetime("1M"), normalize_datetime("1ME"))
+        self.assertEqual(normalize_datetime("1A-DEC"), normalize_datetime("1YE-DEC"))
+
     def test_load_object(self):
         self.assertEqual(load_object("ccflow.tests.test_validators.A"), A)
         self.assertIsNone(load_object(None))

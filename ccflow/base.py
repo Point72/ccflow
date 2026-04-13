@@ -9,7 +9,8 @@ import warnings
 from types import MappingProxyType
 from typing import Any, Callable, Dict, List, Optional, Tuple, Type, TypeVar
 
-from omegaconf import DictConfig
+import omegaconf
+from omegaconf import DictConfig, OmegaConf
 from pydantic import (
     BaseModel as PydanticBaseModel,
     ConfigDict,
@@ -26,6 +27,7 @@ from pydantic.fields import Field
 from typing_extensions import Self
 
 from .exttypes.pyobjectpath import PyObjectPath
+from .local_persistence import register_ccflow_import_path, sync_to_module
 
 log = logging.getLogger(__name__)
 
@@ -85,13 +87,85 @@ class _RegistryMixin:
         return deps
 
 
-class BaseModel(PydanticBaseModel, _RegistryMixin):
-    """BaseModel is a base class for all pydantic models within the cubist flow framework.
+# Pydantic 2 has different handling of serialization.
+# This requires some workarounds at the moment until the feature is added to easily get a mode that
+# is compatible with Pydantic 1
+# This is done by adjusting annotations via a MetaClass for any annotation that includes a BaseModel,
+# such that the new annotation contains SerializeAsAny
+# https://docs.pydantic.dev/latest/concepts/serialization/#serializing-with-duck-typing
+# https://github.com/pydantic/pydantic/issues/6423
+# https://github.com/pydantic/pydantic-core/pull/740
+# See https://github.com/pydantic/pydantic/issues/6381 for inspiration on implementation
+# NOTE: For this logic to be removed, require https://github.com/pydantic/pydantic-core/pull/1478
+from pydantic._internal._model_construction import ModelMetaclass  # noqa: E402
+
+_IS_PY39 = version.parse(platform.python_version()) < version.parse("3.10")
+
+
+def _adjust_annotations(annotation):
+    origin = get_origin(annotation)
+    args = get_args(annotation)
+    if not _IS_PY39:
+        from types import UnionType
+
+        if origin is UnionType:
+            origin = Union
+
+    if isinstance(annotation, GenericAlias) or (inspect.isclass(annotation) and issubclass(annotation, PydanticBaseModel)):
+        return SerializeAsAny[annotation]
+    elif origin and args:
+        # Filter out typing.Type and generic types
+        if origin is type or (inspect.isclass(origin) and issubclass(origin, Generic)):
+            return annotation
+        elif origin is ClassVar:  # ClassVar doesn't accept a tuple of length 1 in py39
+            return ClassVar[_adjust_annotations(args[0])]
+        else:
+            try:
+                return origin[tuple(_adjust_annotations(arg) for arg in args)]
+            except TypeError:
+                raise TypeError(f"Could not adjust annotations for {origin}")
+    else:
+        return annotation
+
+
+class _SerializeAsAnyMeta(ModelMetaclass):
+    def __new__(self, name: str, bases: Tuple[type], namespaces: Dict[str, Any], **kwargs):
+        annotations: dict = namespaces.get("__annotations__", {})
+
+        for base in bases:
+            for base_ in base.__mro__:
+                if base_ is PydanticBaseModel:
+                    annotations.update(base_.__annotations__)
+
+        for field, annotation in annotations.items():
+            if not field.startswith("__"):
+                annotations[field] = _adjust_annotations(annotation)
+
+        namespaces["__annotations__"] = annotations
+
+        return super().__new__(self, name, bases, namespaces, **kwargs)
+
+
+class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta):
+    """BaseModel is a base class for all pydantic models within the ccflow framework.
 
     This gives us a way to add functionality to the framework, including
         - Type of object is part of serialization/deserialization
         - Registration by name, and coercion from string name to allow for object re-use from the configs
     """
+
+    @classmethod
+    def __pydantic_init_subclass__(cls, **kwargs):
+        super().__pydantic_init_subclass__(**kwargs)
+        # Register local-scope classes and __main__ classes so they're importable via PyObjectPath.
+        # - Local classes (<locals> in qualname) aren't importable via their qualname path
+        # - __main__ classes aren't importable cross-process (cloudpickle recreates them but
+        #   doesn't add them to sys.modules["__main__"])
+        # Note: Cross-process unpickle sync (when __ccflow_import_path__ is already set) happens
+        # lazily via sync_to_module, since cloudpickle sets class attributes
+        # AFTER __pydantic_init_subclass__ runs.
+        if "<locals>" in cls.__qualname__ or cls.__module__ == "__main__":
+            register_ccflow_import_path(cls)
 
     @computed_field(
         alias="_target_",
@@ -102,8 +176,18 @@ class BaseModel(PydanticBaseModel, _RegistryMixin):
     )
     @property
     def type_(self) -> PyObjectPath:
-        """The path to the object type"""
-        return PyObjectPath.validate(type(self))
+        """The path to the object type.
+
+        For local classes (defined in functions), this returns the __ccflow_import_path__.
+        For cross-process unpickle scenarios, this also ensures the class is synced to
+        the ccflow.local_persistence module so the import path resolves correctly.
+        """
+        cls = type(self)
+        # Handle cross-process unpickle: cloudpickle sets __ccflow_import_path__ but
+        # the class may not be on ccflow.local_persistence yet in this process
+        if "__ccflow_import_path__" in cls.__dict__:
+            sync_to_module(cls)
+        return PyObjectPath.validate(cls)
 
     # We want to track under what names a model has been registered
     _registrations: List[Tuple["ModelRegistry", str]] = PrivateAttr(default_factory=list)
@@ -155,6 +239,34 @@ class BaseModel(PydanticBaseModel, _RegistryMixin):
         kwargs.update(json_kwargs or {})
         # Can't use self.model_dump_json or self.model_dump because they don't expose the fallback argument
         return JSON(self.__pydantic_serializer__.to_python(self, **kwargs), **(widget_kwargs or {}))
+
+    def __panel__(self):
+        """Return a Panel viewable for this model.
+
+        Requires ccflow UI dependencies (panel, panel_material_ui).
+        """
+        try:
+            from ccflow.ui.model import ModelViewer
+        except ImportError:
+            raise ImportError(
+                "panel and other optional dependencies must be installed to use ModelViewer. Pip install ccflow[full] to install all optional dependencies."
+            ) from None
+
+        return ModelViewer(model=self)
+
+    def get_panel(self):
+        """Get a Panel pane for this model.
+
+        Requires panel to be installed.
+        """
+        try:
+            import panel as pn
+        except ImportError:
+            raise ImportError(
+                "panel and other optional dependencies must be installed to use get_panel(). Pip install ccflow[full] to install all optional dependencies."
+            ) from None
+
+        return pn.panel(self)
 
     @model_validator(mode="wrap")
     def _base_model_validator(cls, v, handler, info):
@@ -315,6 +427,15 @@ class ModelRegistry(BaseModel, collections.abc.Mapping):
         """Return an immutable pointer to the models dictionary."""
         return MappingProxyType(self._models)
 
+    def __panel__(self):
+        """Return a Panel viewable for this registry.
+
+        Requires ccflow UI dependencies (panel, panel_material_ui).
+        """
+        from ccflow.ui.registry import ModelRegistryViewer
+
+        return ModelRegistryViewer(self)
+
     @classmethod
     def root(cls) -> Self:
         """Return a static instance of the root registry."""
@@ -439,6 +560,7 @@ class ModelRegistry(BaseModel, collections.abc.Mapping):
         cfg: DictConfig,
         overwrite: bool = False,
         skip_exceptions: bool = False,
+        resolve_from: Optional["ModelRegistry"] = None,
     ) -> Self:
         """Load from OmegaConf DictConfig that follows hydra conventions.
 
@@ -446,9 +568,11 @@ class ModelRegistry(BaseModel, collections.abc.Mapping):
             cfg: An OmegaConf DictConfig
             overwrite: Whether to allow overwriting of names that already exist
             skip_exceptions: Whether to skip any exceptions that are thrown when validating and registering models
+            resolve_from: An optional registry to use as the root for resolving absolute paths. When provided,
+                absolute paths (starting with ``/``) resolve from this registry instead of from ``self``.
         """
         loader = _ModelRegistryLoader(overwrite=overwrite)
-        return loader.load_config(cfg, self, skip_exceptions=skip_exceptions)
+        return loader.load_config(cfg, self, skip_exceptions=skip_exceptions, resolve_from=resolve_from)
 
     def create_config_from_path(
         self,
@@ -545,7 +669,9 @@ class _ModelRegistryLoader:
 
         return models_to_register
 
-    def load_config(self, cfg: DictConfig, registry: ModelRegistry, skip_exceptions: bool = False) -> ModelRegistry:
+    def load_config(
+        self, cfg: DictConfig, registry: ModelRegistry, skip_exceptions: bool = False, resolve_from: Optional[ModelRegistry] = None
+    ) -> ModelRegistry:
         """Load from OmegaConf DictConfig that follows hydra conventions."""
         # Here we use hydra's 'instantiate' to instantiate models,
         # because it provides a standard way to resolve the class name
@@ -556,7 +682,11 @@ class _ModelRegistryLoader:
         from hydra.errors import InstantiationException
         from hydra.utils import instantiate
 
-        models_to_register = self._make_subregistries(cfg, [registry])
+        if resolve_from is not None and resolve_from is not registry:
+            initial_chain = [resolve_from, registry]
+        else:
+            initial_chain = [registry]
+        models_to_register = self._make_subregistries(cfg, initial_chain)
         while True:
             unresolved_models = []
             for registries, k, v, _ in models_to_register:
@@ -569,6 +699,14 @@ class _ModelRegistryLoader:
                         elif not skip_exceptions:
                             raise e
                         continue
+                # If model is a simple type or a config, don't try to add it to the registry (which would raise an error)
+                # It could be a config value that was programmatically generated via _target_ and which used elsewhere via interpolation
+                if not isinstance(model, BaseModel):
+                    try:
+                        OmegaConf.create([model])
+                        continue
+                    except omegaconf.UnsupportedValueType:
+                        pass
 
                 if hasattr(model, "meta") and hasattr(model.meta, "name") and model.meta.name == "":
                     model.meta.name = k
@@ -760,6 +898,9 @@ class ContextBase(ResultBase):
 
     @model_validator(mode="wrap")
     def _context_validator(cls, v, handler, info):
+        if v is None:
+            return handler({})
+
         # Add deepcopy for v2 because it doesn't support copy_on_model_validation
         v = copy.deepcopy(v)
 

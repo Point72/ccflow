@@ -21,6 +21,7 @@ from ccflow import (
     ResultType,
     WrapperModel,
 )
+from ccflow.local_persistence import LOCAL_ARTIFACTS_MODULE_NAME
 
 
 class MyContext(ContextBase):
@@ -30,6 +31,10 @@ class MyContext(ContextBase):
 class MyExtendedContext(MyContext):
     b: float
     c: bool
+
+
+class MyOtherContext(ContextBase):
+    a: int
 
 
 class ListContext(ContextBase):
@@ -152,7 +157,7 @@ class BadModelMismatchedContextAndCall(CallableModel):
 
     @property
     def context_type(self):
-        return NullContext
+        return MyOtherContext
 
     @property
     def result_type(self):
@@ -163,7 +168,7 @@ class BadModelMismatchedContextAndCall(CallableModel):
         return context
 
 
-class BadModelGenericMismatchedContextAndCall(CallableModelGenericType[NullContext, MyResult]):
+class BadModelGenericMismatchedContextAndCall(CallableModelGenericType[MyOtherContext, MyResult]):
     """Model with mismatched context_type and __call__ annotation"""
 
     @Flow.call
@@ -460,7 +465,7 @@ class TestCallableModel(TestCase):
         error = "__call__ method must take a single argument, named 'context'"
         self.assertRaisesRegex(ValueError, error, BadModelDoubleContextArg)
 
-        error = "The context_type <class 'ccflow.context.NullContext'> must match the type of the context accepted by __call__ <class 'ccflow.tests.test_callable.MyContext'>"
+        error = "The context_type <class 'ccflow.tests.test_callable.MyOtherContext'> must match the type of the context accepted by __call__ <class 'ccflow.tests.test_callable.MyContext'>"
         self.assertRaisesRegex(ValueError, error, BadModelMismatchedContextAndCall)
 
         error = "The result_type <class 'ccflow.result.generic.GenericResult'> must match the return type of __call__ <class 'ccflow.tests.test_callable.MyResult'>"
@@ -487,6 +492,38 @@ class TestCallableModel(TestCase):
         result = m(NullContext())
         self.assertIsInstance(result, AResult)
         self.assertEqual(result.a, 1)
+
+
+class TestCallableModelRegistration(TestCase):
+    """Smoke test verifying CallableModel inherits registration from BaseModel.
+
+    NOTE: Registration behavior is thoroughly tested at the BaseModel level in
+    test_local_persistence.py. This single test verifies inheritance works.
+    """
+
+    def test_local_callable_smoke_test(self):
+        """Verify that local CallableModel classes inherit registration from BaseModel."""
+
+        class LocalContext(ContextBase):
+            value: int
+
+        class LocalCallable(CallableModel):
+            @Flow.call
+            def __call__(self, context: LocalContext) -> GenericResult:
+                return GenericResult(value=context.value * 2)
+
+        # Basic registration should work (inherits from BaseModel)
+        self.assertIn("<locals>", LocalCallable.__qualname__)
+        self.assertTrue(hasattr(LocalCallable, "__ccflow_import_path__"))
+        self.assertTrue(LocalCallable.__ccflow_import_path__.startswith(LOCAL_ARTIFACTS_MODULE_NAME))
+
+        # type_ should work
+        instance = LocalCallable()
+        self.assertEqual(instance.type_.object, LocalCallable)
+
+        # Callable should execute correctly
+        result = instance(LocalContext(value=21))
+        self.assertEqual(result.value, 42)
 
 
 class TestWrapperModel(TestCase):
@@ -642,7 +679,7 @@ class TestCallableModelGenericType(TestCase):
             MyCallable()
 
     def test_types_generic(self):
-        error = "Context type annotation <class 'ccflow.tests.test_callable.MyContext'> on __call__ does not match context_type <class 'ccflow.context.NullContext'> defined by CallableModelGenericType"
+        error = "Context type annotation <class 'ccflow.tests.test_callable.MyContext'> on __call__ does not match context_type <class 'ccflow.tests.test_callable.MyOtherContext'> defined by CallableModelGenericType"
         self.assertRaisesRegex(TypeError, error, BadModelGenericMismatchedContextAndCall)
 
         error = "Return type annotation <class 'ccflow.tests.test_callable.MyResult'> on __call__ does not match result_type <class 'ccflow.result.generic.GenericResult'> defined by CallableModelGenericType"

@@ -36,6 +36,30 @@ class MyClass:
         self.q = q
 
 
+def my_list() -> List[str]:
+    return ["i", "j"]
+
+
+def create_dynamic_subregistry(shared_model_path: str) -> ModelRegistry:
+    """Called via _target_ — dynamically creates a sub-registry with
+    models that reference both root (absolute) and local (relative) models."""
+    sub = ModelRegistry(name="dynamic")
+    cfg = {
+        "local_model": {
+            "_target_": "ccflow.tests.test_base_registry.MyTestModel",
+            "a": "local",
+            "b": 2.0,
+        },
+        "ref_model": {
+            "_target_": "ccflow.tests.test_base_registry.MyNestedModel",
+            "x": shared_model_path,
+            "y": "local_model",
+        },
+    }
+    sub.load_config(cfg, resolve_from=ModelRegistry.root())
+    return sub
+
+
 class MyNestedModel(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)  # To allow z = MyClass, even though there is no validator
 
@@ -321,6 +345,30 @@ class TestRegistryLoading(TestCase):
         r.load_config(cfg, overwrite=True)
         self.assertEqual(r["foo"], m)
 
+    def test_load_config_with_function(self):
+        cfg = OmegaConf.create(
+            {
+                "bar": {  # This is not a callable model to register, but a function call to be used in an interpolation elsewhere
+                    "_target_": "ccflow.tests.test_base_registry.my_list",
+                },
+                "foo": {
+                    "_target_": "ccflow.tests.test_base_registry.MyTestModel",
+                    "a": "test",
+                    "b": 0.0,
+                    "c": "${bar}",
+                    "d": {"k": 2.0},
+                },
+                "baz": {"qux": "garbage"},  # i.e. a helper dictionary (not a subregistry!)
+            }
+        )
+        r = ModelRegistry(name="test")
+        r.load_config(cfg)
+        self.assertNotIn("bar", r.models)
+        self.assertNotIn("baz", r.models)
+
+        m = MyTestModel(a="test", b=0.0, c=["i", "j"], d={"k": 2.0})
+        self.assertEqual(r["foo"], m)
+
     def test_config_round_trip(self):
         cfg = {
             "foo": {
@@ -460,6 +508,81 @@ class TestRegistryLoading(TestCase):
             r["subregistry2/baz"].get_registry_dependencies(),
             [["/subregistry1/foo"], ["/subregistry2/qux"]],
         )
+
+    def test_load_config_resolve_from(self):
+        """load_config on sub-registry resolves absolute paths via resolve_from."""
+        r = ModelRegistry.root()
+        shared = MyTestModel(a="shared", b=1.0)
+        r.add("shared_model", shared)
+
+        sub = ModelRegistry(name="sub")
+        r.add("sub", sub)
+
+        cfg = OmegaConf.create(
+            {
+                # Forward reference: ref_model defined before local_model
+                "ref_model": {
+                    "_target_": "ccflow.tests.test_base_registry.MyNestedModel",
+                    "x": "/shared_model",  # Absolute path — needs root
+                    "y": "local_model",  # Relative path — forward reference to sibling
+                },
+                "local_model": {
+                    "_target_": "ccflow.tests.test_base_registry.MyTestModel",
+                    "a": "local",
+                    "b": 2.0,
+                },
+            }
+        )
+
+        # Without resolve_from: fails because /shared_model can't resolve from sub
+        sub2 = ModelRegistry(name="sub2")
+        with self.assertRaises(InstantiationException):
+            sub2.load_config(cfg)
+
+        # With resolve_from: works
+        sub.load_config(cfg, resolve_from=r)
+        self.assertIs(sub["ref_model"].x, r["shared_model"])
+        self.assertIs(sub["ref_model"].y, sub["local_model"])
+
+    def test_load_config_resolve_from_nested_target(self):
+        """_target_ function dynamically creates a sub-registry with both
+        absolute references (to root) and relative references (to siblings)."""
+        r = ModelRegistry.root()
+        shared = MyTestModel(a="shared", b=1.0)
+        r.add("shared_model", shared)
+
+        cfg = OmegaConf.create(
+            {
+                "dynamic": {
+                    "_target_": "ccflow.tests.test_base_registry.create_dynamic_subregistry",
+                    "shared_model_path": "/shared_model",
+                }
+            }
+        )
+
+        r.load_config(cfg)
+
+        # The dynamic sub-registry was created and added to root
+        self.assertIsInstance(r["dynamic"], ModelRegistry)
+        # Absolute reference resolved from root
+        self.assertIs(r["dynamic"]["ref_model"].x, r["shared_model"])
+        # Relative reference resolved within the sub-registry
+        self.assertIs(r["dynamic"]["ref_model"].y, r["dynamic"]["local_model"])
+
+    def test_load_config_resolve_from_self_noop(self):
+        """resolve_from=self is equivalent to resolve_from=None (no-op)."""
+        r = ModelRegistry.root()
+        cfg = OmegaConf.create(
+            {
+                "foo": {
+                    "_target_": "ccflow.tests.test_base_registry.MyTestModel",
+                    "a": "test",
+                    "b": 0.0,
+                },
+            }
+        )
+        r.load_config(cfg, resolve_from=r)
+        self.assertEqual(r["foo"], MyTestModel(a="test", b=0.0))
 
 
 class TestRegistryLoadingErrors(TestCase):

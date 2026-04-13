@@ -11,11 +11,6 @@ from typing import Any, Callable, Dict, List, Optional
 from hydra._internal.defaults_list import DefaultsList
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
-try:
-    import panel as pn
-except ImportError:
-    pn = None
-
 from ..base import ModelRegistry
 from ..callable import FlowOptions, FlowOptionsOverride
 
@@ -24,6 +19,9 @@ _log = getLogger(__name__)
 __all__ = (
     "ConfigLoadResult",
     "load_config",
+    "add_hydra_config_args",
+    "add_panel_server_args",
+    "resolve_config_paths",
     "get_args_parser_default",
     "get_args_parser_default_ui",
     "ui_launcher_default",
@@ -237,27 +235,33 @@ def load_config(
     return result
 
 
-def get_args_parser_default() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(add_help=True, description="Hydra Config Audit Tool")
+def add_hydra_config_args(parser: argparse.ArgumentParser) -> None:
+    """Add standard hydra config loading arguments to a parser.
+
+    Adds the following arguments:
+    - overrides: Positional arguments for key=value config overrides
+    - --config-path/-cp: Path to the hydra config directory
+    - --config-name/-cn: Name of the config file
+    - --config-dir/-cd: Additional config directory to add to search path
+    - --config-dir-config-name/-cdcn: Config name within config-dir
+    - --basepath: Base path for searching config directories
+    """
     parser.add_argument(
         "overrides",
         nargs="*",
         help="Any key=value arguments to override config values (use dots for.nested=overrides)",
     )
-
     parser.add_argument(
         "--config-path",
         "-cp",
         help="""Overrides the config_path specified in hydra.main().
                     The config_path is absolute or relative to the Python file declaring @hydra.main()""",
     )
-
     parser.add_argument(
         "--config-name",
         "-cn",
         help="Overrides the config_name specified in hydra.main()",
     )
-
     parser.add_argument(
         "--config-dir",
         "-cd",
@@ -272,16 +276,19 @@ def get_args_parser_default() -> argparse.ArgumentParser:
         "--basepath",
         help="The base path to start searching for the `config_dir` (if not the cwd). This is useful when you want to load from an absolute (rather than relative) path.",
     )
-    parser.add_argument(
-        "--no-gui",
-        action="store_true",
-        help="Disable the GUI",
-    )
-    return parser
 
 
-def get_args_parser_default_ui() -> argparse.ArgumentParser:
-    parser = get_args_parser_default()
+def add_panel_server_args(parser: argparse.ArgumentParser) -> None:
+    """Add standard Panel server arguments to a parser.
+
+    Adds the following arguments:
+    - --address: Address to bind the server to (default: 127.0.0.1)
+    - --port: Port to bind the server to (default: 8080)
+    - --allow-websocket-origin: Allowed websocket origins (default: *)
+    - --basic-auth: Enable basic authentication (username:password format)
+    - --cookie-secret: Cookie secret for the server
+    - --show: Open browser automatically
+    """
     parser.add_argument(
         "--address",
         type=str,
@@ -316,6 +323,11 @@ def get_args_parser_default_ui() -> argparse.ArgumentParser:
         default=None,
     )
     parser.add_argument("--cookie-secret", type=str, default="secret", help="Cookie secret for the server.")
+    parser.add_argument(
+        "--show",
+        action="store_true",
+        help="Open browser automatically",
+    )
     parser.epilog = dedent("""\
         This will launch the server that can be used to view the configuration.
         The server will be accessible at http://<address>:<port> by default.
@@ -324,11 +336,80 @@ def get_args_parser_default_ui() -> argparse.ArgumentParser:
         You can enable basic authentication using the --basic-auth argument.
         You can specify the cookie secret using the --cookie-secret argument.
         """)
+
+
+def resolve_config_paths(
+    args: argparse.Namespace,
+    config_path: str = "",
+    config_name: str = "",
+    hydra_main: Optional[Callable] = None,
+) -> tuple:
+    """Resolve root_config_dir and root_config_name from CLI args or defaults.
+
+    This helper extracts the common logic for resolving config paths from either
+    CLI arguments or default values provided by the decorated hydra.main function.
+
+    Parameters
+    ----------
+    args
+        Parsed argparse namespace containing config_path and config_name attributes
+    config_path
+        Default config_path, typically from hydra.main() decorator
+    config_name
+        Default config_name, typically from hydra.main() decorator
+    hydra_main
+        The function decorated with hydra.main(). Used to resolve config_path
+        relative to the decorated function's file location.
+
+    Returns
+    -------
+    tuple
+        (root_config_dir, root_config_name)
+
+    Raises
+    ------
+    ValueError
+        If neither args.config_path nor hydra_main+config_path are provided
+        If neither args.config_name nor config_name are provided
+    """
+    if args.config_path:
+        root_config_dir = args.config_path
+    elif hydra_main and config_path:
+        root_config_dir = str(Path(inspect.getfile(hydra_main.__wrapped__)).parent / config_path)
+    else:
+        raise ValueError("Must provide --config-path.")
+
+    if args.config_name:
+        root_config_name = args.config_name
+    elif config_name:
+        root_config_name = config_name
+    else:
+        raise ValueError("Must provide --config-name.")
+
+    return root_config_dir, root_config_name
+
+
+def get_args_parser_default() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(add_help=True, description="Hydra Config Audit Tool")
+    add_hydra_config_args(parser)
+    parser.add_argument(
+        "--no-gui",
+        action="store_true",
+        help="Disable the GUI",
+    )
+    return parser
+
+
+def get_args_parser_default_ui() -> argparse.ArgumentParser:
+    parser = get_args_parser_default()
+    add_panel_server_args(parser)
     return parser
 
 
 def ui_launcher_default(cfg, **kwargs):
-    if pn is None:
+    try:
+        import panel as pn
+    except ImportError:
         raise ImportError("Panel is not installed. Please install panel to use the UI.")
     pn.extension()
     pn.extension("jsoneditor")
@@ -360,19 +441,7 @@ def cfg_explain_cli(
         parser = get_args_parser_default_ui()
         args = parser.parse_args()
 
-    if args.config_path:
-        root_config_dir = args.config_path
-    elif hydra_main and config_path:
-        root_config_dir = str(Path(inspect.getfile(hydra_main.__wrapped__)).parent / config_path)
-    else:
-        raise ValueError("Must provide --config-path.")
-
-    if args.config_name:
-        root_config_name = args.config_name
-    elif config_name:
-        root_config_name = config_name
-    else:
-        raise ValueError("Must provide --config-name.")
+    root_config_dir, root_config_name = resolve_config_paths(args, config_path, config_name, hydra_main)
 
     result = load_config(
         root_config_dir=root_config_dir,
@@ -389,10 +458,11 @@ def cfg_explain_cli(
         pprint(merged_cfg, width=120, indent=2)
     elif ui_launcher is not None:
         ui_launcher(merged_cfg, **vars(args))
-    elif pn is not None:
-        ui_launcher_default(merged_cfg, **vars(args))
     else:
-        raise ValueError("Cannot launch UI, no ui_launcher provided and/or panel not installed. Use --no-gui to print the results.")
+        try:
+            ui_launcher_default(merged_cfg, **vars(args))
+        except ImportError:
+            raise ValueError("Cannot launch UI, no ui_launcher provided and/or panel not installed. Use --no-gui to print the results.")
 
 
 def _load_model_registry(cfg: DictConfig):

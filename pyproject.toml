@@ -1,14 +1,18 @@
 [build-system]
-requires = ["hatchling"]
-build-backend="hatchling.build"
+requires = [
+    "hatchling",
+]
+build-backend = "hatchling.build"
 
 [project]
 name = "ccflow"
-authors = [{name = "Point72, L.P.", email = "OpenSource@point72.com"}]
+authors = [
+    {name = "Point72, L.P.", email = "OpenSource@point72.com"},
+]
 description = "ccflow is a collection of tools for workflow configuration, orchestration, and dependency injection"
 readme = "README.md"
 license = { text = "Apache-2.0" }
-version = "0.7.0"
+version = "0.8.1"
 requires-python = ">=3.10"
 keywords = [
     "configuration",
@@ -36,6 +40,7 @@ dependencies = [
     "cloudpathlib",
     "cloudpickle",
     "dask",
+    "deprecated",
     "hydra-core",
     "IPython",
     "jinja2",
@@ -51,9 +56,12 @@ dependencies = [
 
 [project.optional-dependencies]
 full = [
+    "bleach",
     "cexprtk",
     "duckdb",
     "pandas",
+    "panel",
+    "panel_material_ui",
     "plotly",
     "polars",
     "ray",
@@ -63,21 +71,25 @@ full = [
 develop = [
     "build",
     "bump-my-version",
-    "check-manifest",
-    "codespell>=2.4,<2.5",
+    "check-dist",
+    "codespell",
     "hatchling",
-    "mdformat>=0.7.22,<1.1",
+    "mdformat",
     "mdformat-tables>=1",
-    "ruff>=0.9,<0.15",
+    "ruff",
     "toml",
     "twine",
+    "ty",
     "uv",
     "wheel",
     # Full deps
+    "bleach",
     "cexprtk",
     "csp>=0.8.0,<1",
     "duckdb",
     "pandas",
+    "panel",
+    "panel_material_ui",
     "plotly",
     "polars",
     "ray",
@@ -108,7 +120,7 @@ Repository = "https://github.com/Point72/ccflow"
 Homepage = "https://github.com/Point72/ccflow"
 
 [tool.bumpversion]
-current_version = "0.7.0"
+current_version = "0.8.1"
 commit = true
 tag = false
 commit_args = "-s"
@@ -123,18 +135,12 @@ filename = "pyproject.toml"
 search = 'version = "{current_version}"'
 replace = 'version = "{new_version}"'
 
-[tool.check-manifest]
-ignore = [
-    ".copier-answers.yaml",
-    "Makefile",
-    "docs/**/*",
-]
-
 [tool.coverage.run]
 branch = true
 omit = [
     "ccflow/tests/integration/",
 ]
+
 [tool.coverage.report]
 exclude_also = [
     "raise NotImplementedError",
@@ -151,25 +157,28 @@ artifacts = []
 src = "/"
 
 [tool.hatch.build.targets.sdist]
-packages = ["ccflow"]
+packages = [
+    "ccflow",
+]
 exclude = [
-    "/.github",
-    "/.gitignore",
-    "/docs",
+    "docs",
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["ccflow"]
+packages = [
+    "ccflow",
+]
 exclude = [
-    "/.github",
-    "/.gitignore",
-    "/docs",
+    "docs",
 ]
 
 [tool.hatch.build.targets.wheel.shared-data]
 
 [tool.pytest.ini_options]
-addopts = ["-vvv", "--junitxml=junit.xml"]
+addopts = [
+    "-vvv",
+    "--junitxml=junit.xml",
+]
 testpaths = "ccflow/tests"
 
 [tool.ruff]
@@ -177,13 +186,26 @@ line-length = 150
 exclude = ["ccflow/examples/tpch/queries"]
 
 [tool.ruff.lint]
-extend-select = ["I"]
+extend-select = [
+    "I",
+]
 
 [tool.ruff.lint.isort]
 combine-as-imports = true
 default-section = "third-party"
-known-first-party = ["ccflow"]
-section-order = ["future", "standard-library", "third-party", "first-party", "local-folder"]
+known-first-party = [
+    "ccflow",
+]
+section-order = [
+    "future",
+    "standard-library",
+    "third-party",
+    "first-party",
+    "local-folder",
+]
 
 [tool.ruff.lint.per-file-ignores]
-"__init__.py" = ["F401", "F403"]
+"__init__.py" = [
+    "F401",
+    "F403",
+]

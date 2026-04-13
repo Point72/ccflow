@@ -20,6 +20,7 @@ class TestFrequency(TestCase):
     def test_validate_bad(self):
         self.assertRaises(ValueError, Frequency.validate, None)
         self.assertRaises(ValueError, Frequency.validate, "foo")
+        self.assertRaises(ValueError, Frequency.validate, "")
 
     def test_validate_1D(self):
         f = Frequency("1D")
@@ -69,3 +70,10 @@ class TestFrequency(TestCase):
         self.assertEqual(Frequency.validate("1y"), f)
         self.assertEqual(Frequency.validate(Frequency("1A-DEC")), f)
         self.assertEqual(Frequency.validate(Frequency("1y")), f)
+
+    def test_legacy_and_canonical_aliases_normalize_to_same_frequency(self):
+        self.assertEqual(Frequency.validate("5T"), Frequency.validate("5min"))
+        self.assertEqual(Frequency.validate("1M"), Frequency.validate("1ME"))
+        self.assertEqual(Frequency.validate("2M"), Frequency.validate("2ME"))
+        self.assertEqual(Frequency.validate("1A-DEC"), Frequency.validate("1YE-DEC"))
+        self.assertEqual(Frequency.validate("1Y"), Frequency.validate("1YE-DEC"))

@@ -1,10 +1,15 @@
+import importlib
+import inspect
+import re
 from datetime import date, datetime, timedelta, timezone
 from unittest import TestCase
 
 import pandas as pd
 from pydantic import TypeAdapter, ValidationError
 
+import ccflow.context as ctx
 from ccflow.context import (
+    ContextBase,
     DateContext,
     DateRangeContext,
     DatetimeContext,
@@ -25,6 +30,11 @@ from ccflow.context import (
 from ccflow.result import GenericResult
 
 
+class MyDefaultContext(ContextBase):
+    b: float = 3.14
+    c: bool = False
+
+
 class TestContexts(TestCase):
     def test_null_context(self):
         n1 = NullContext()
@@ -33,10 +43,24 @@ class TestContexts(TestCase):
         self.assertEqual(hash(n1), hash(n2))
 
     def test_null_context_validation(self):
+        # Context creation is based on two main assumptions:
+        # 1. If there is enough information to create a context, it should be created.
+        # 2. Since NullContext has no required fields, it can be created from None,
+        #    empty containers ({} or []), or any other context.
         self.assertEqual(NullContext.model_validate([]), NullContext())
         self.assertEqual(NullContext.model_validate({}), NullContext())
         self.assertEqual(NullContext.model_validate(None), NullContext())
+        self.assertIsInstance(NullContext.model_validate(DateContext(date="0d")), NullContext)
         self.assertRaises(ValueError, NullContext.model_validate, [True])
+
+    def test_context_with_defaults(self):
+        # Contexts may define default values. Extending the assumptions above:
+        # Any context inherits the behavior from NullContext, and can be
+        # created as long as all required fields (if any) are satisfied.
+        self.assertEqual(TypeAdapter(MyDefaultContext).validate_python(None), MyDefaultContext(b=3.14, c=False))
+        self.assertEqual(TypeAdapter(MyDefaultContext).validate_python({}), MyDefaultContext(b=3.14, c=False))
+        self.assertEqual(TypeAdapter(MyDefaultContext).validate_python([]), MyDefaultContext(b=3.14, c=False))
+        self.assertEqual(TypeAdapter(MyDefaultContext).validate_python({"b": 10.0}), MyDefaultContext(b=10.0, c=False))
 
     def test_date_validation(self):
         c = DateContext(date=date.today())
@@ -95,6 +119,11 @@ class TestContexts(TestCase):
         self.assertEqual(TypeAdapter(DateRangeContext).validate_python(("-1d", "0d")), c)
         self.assertEqual(TypeAdapter(DateRangeContext).validate_python(["-1d", "0d"]), c)
         self.assertEqual(TypeAdapter(DateRangeContext).validate_python(["-1d", datetime.now()]), c)
+
+    def test_date_range_from_date(self):
+        # Test validation from a DateContext
+        d0 = date.today()
+        self.assertEqual(TypeAdapter(DateRangeContext).validate_python(DateContext(date=d0)), DateRangeContext(start_date=d0, end_date=d0))
 
     def test_freq(self):
         self.assertEqual(
@@ -209,3 +238,92 @@ class TestGenericContext(TestCase):
         self.assertEqual(GenericContext[int](value=GenericResult[int](value=v)), GenericContext[int](value=v))
 
         self.assertEqual(GenericContext[str].model_validate(GenericResult(value=5)), GenericContext[str](value="5"))
+
+
+class TestContextInheritance(TestCase):
+    def setUp(self):
+        self.classes = {
+            name: obj
+            for name, obj in inspect.getmembers(ctx, inspect.isclass)
+            if obj.__module__ == ctx.__name__ and issubclass(obj, ContextBase) and not getattr(obj, "__deprecated__", False)
+        }
+
+    def test_field_ordering(self):
+        """Test that complex contexts have fields in the same order as the basic contexts they are composed of."""
+
+        def split_camel(name: str):
+            return re.findall(r"[A-Z][a-z]*", name)
+
+        basic_contexts_map = {}
+        complex_contexts_map = {}
+
+        for name, cls in self.classes.items():
+            name_noralized = name.replace("Context", "").replace("EntryTime", "Entrytime").replace("Range", "range")
+            if ContextBase in cls.__bases__:
+                basic_contexts_map[name_noralized] = list(cls.model_fields.keys())
+            else:
+                complex_contexts_map[name_noralized] = list(cls.model_fields.keys())
+
+        for complex_context, complex_context_fields in complex_contexts_map.items():
+            expected_fields = []
+            for basic_context in split_camel(complex_context):
+                expected_fields.extend(basic_contexts_map[basic_context])
+            self.assertEqual(
+                expected_fields, complex_context_fields, f"{expected_fields} do not match {complex_context_fields} for context {complex_context}."
+            )
+
+    def test_inheritance(self):
+        """Test that if a context has a superset of fields of another context, it is a subclass of that context."""
+
+        for parent_name, parent_class in self.classes.items():
+            for child_name, child_class in self.classes.items():
+                if parent_class is child_class:
+                    continue
+
+                parent_fields = set(parent_class.model_fields.keys())
+                child_fields = set(child_class.model_fields.keys())
+                if parent_fields.issubset(child_fields):
+                    self.assertTrue(
+                        issubclass(child_class, parent_class),
+                        f"ERROR: {child_name} has a superset of {parent_name}'s fields but is NOT a subclass of {parent_name}",
+                    )
+
+
+class TestDeprecated(TestCase):
+    # TODO - remove once deprecated contexts are removed
+    def test_deprecated(self):
+        """
+        Tests that all deprecated context classes are:
+        1. importable,
+        2. marked with __deprecated__ = True,
+        3. accompanied by a DeprecationWarning when instantiated.
+        """
+
+        deprecated_class_names = [
+            "SeededContext",
+            "SeededDateRangeContext",
+            "SeededDatetimeRangeContext",
+            "UniverseFrequencyDateRangeContext",
+            "UniverseFrequencyDatetimeRangeContext",
+            "UniverseFrequencyHorizonDateRangeContext",
+            "UniverseFrequencyHorizonDatetimeRangeContext",
+            "VersionedUniverseDateContext",
+            "VersionedUniverseDatetimeContext",
+            "VersionedUniverseDateRangeContext",
+            "VersionedUniverseDatetimeRangeContext",
+            "VersionedModelDateContext",
+            "VersionedModelDatetimeContext",
+            "VersionedModelDateRangeContext",
+            "VersionedModelDatetimeRangeContext",
+            "VersionedDateContext",
+            "VersionedDatetimeContext",
+            "VersionedDateRangeContext",
+            "VersionedDatetimeRangeContext",
+        ]
+
+        module = importlib.import_module("ccflow.context")
+        for cls_name in deprecated_class_names:
+            cls = getattr(module, cls_name)
+            self.assertTrue(cls.__deprecated__)
+            with self.assertWarns(DeprecationWarning):
+                cls.model_construct()
