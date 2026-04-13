@@ -10,7 +10,7 @@ from types import UnionType
 from typing import Annotated, Any, Callable, ClassVar, Dict, List, Optional, Tuple, Type, Union, cast, get_args, get_origin, get_type_hints
 
 from pydantic import Field, PrivateAttr, TypeAdapter, ValidationError, model_serializer, model_validator
-from pydantic.errors import PydanticUndefinedAnnotation
+from pydantic.errors import PydanticSchemaGenerationError, PydanticUndefinedAnnotation
 
 from .base import BaseModel, ContextBase, ResultBase
 from .callable import CallableModel, Flow, GraphDepList, WrapperModel
@@ -29,10 +29,31 @@ class _UnsetFlowInput:
         return "<unset>"
 
 
+class _InternalSentinel:
+    def __init__(self, name: str):
+        self._name = name
+
+    def __repr__(self) -> str:
+        return self._name
+
+    def __reduce__(self):
+        return (_get_internal_sentinel, (self._name,))
+
+
 _UNSET_FLOW_INPUT = _UnsetFlowInput()
-_UNSET = object()
-_REMOVED_CONTEXT_ARGS = object()
 _UNION_ORIGINS = (Union, UnionType)
+
+
+def _get_internal_sentinel(name: str) -> _InternalSentinel:
+    return _INTERNAL_SENTINELS[name]
+
+
+_INTERNAL_SENTINELS = {
+    "_UNSET": _InternalSentinel("_UNSET"),
+    "_REMOVED_CONTEXT_ARGS": _InternalSentinel("_REMOVED_CONTEXT_ARGS"),
+}
+_UNSET = _INTERNAL_SENTINELS["_UNSET"]
+_REMOVED_CONTEXT_ARGS = _INTERNAL_SENTINELS["_REMOVED_CONTEXT_ARGS"]
 
 
 def _unset_flow_input_factory() -> _UnsetFlowInput:
@@ -185,7 +206,7 @@ def _type_adapter(annotation: Any) -> TypeAdapter:
 def _can_validate_type(annotation: Any) -> bool:
     try:
         _type_adapter(annotation)
-    except (PydanticUndefinedAnnotation, TypeError, ValueError):
+    except (PydanticSchemaGenerationError, PydanticUndefinedAnnotation, TypeError, ValueError):
         return False
     return True
 
