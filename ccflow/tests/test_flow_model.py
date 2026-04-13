@@ -419,6 +419,19 @@ def test_generated_models_cloudpickle_roundtrip():
     assert restored.flow.compute(b=7).value == 42
 
 
+def test_generated_models_cloudpickle_preserves_unset_validation_sentinel():
+    @Flow.model
+    def multiply(a: int, b: FromContext[int]) -> int:
+        return a * b
+
+    model = multiply(a=6)
+    restored = rcploads(rcpdumps(model, protocol=5))
+    param = type(restored).__flow_model_config__.contextual_params[0]
+
+    assert param.context_validation_annotation is flow_model_module._UNSET
+    assert param.validation_annotation is int
+
+
 def test_graph_integration_fanout_fanin():
     @Flow.model
     def source(base: int, value: FromContext[int]) -> int:
