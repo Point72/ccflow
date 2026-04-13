@@ -3,7 +3,6 @@
 import hashlib
 import inspect
 import logging
-import marshal
 from dataclasses import dataclass
 from functools import lru_cache, wraps
 from types import UnionType
@@ -316,25 +315,64 @@ def _callable_closure_repr(transform: Any) -> str:
     return "|".join(pieces)
 
 
-def _callable_fingerprint(transform: Any) -> str:
-    module = getattr(transform, "__module__", type(transform).__module__)
-    qualname = getattr(transform, "__qualname__", type(transform).__qualname__)
-    code = getattr(transform, "__code__", None)
-    if code is None:
-        return f"callable:{module}:{qualname}:{repr(transform)}"
+def _code_hash(code: Any) -> str:
+    """Hash the semantically meaningful parts of a code object.
 
-    payload = "|".join(
-        [
-            module,
-            qualname,
-            code.co_filename,
-            str(code.co_firstlineno),
-            hashlib.sha256(marshal.dumps(code)).hexdigest(),
-            repr(getattr(transform, "__defaults__", None)),
-            _callable_closure_repr(transform),
-        ]
-    )
-    return f"callable:{payload}"
+    ``marshal.dumps(code)`` includes debug/position metadata that can differ
+    after cloudpickle round-trips even when the actual code is identical.
+    Hashing only the stable attributes ensures fingerprint stability.
+
+    ``co_consts`` can contain nested code objects (from comprehensions, lambdas,
+    or nested function definitions) whose ``repr()`` includes memory addresses.
+    These are recursively normalized to their own stable tuples.
+    """
+
+    def _stable_tuple(c: Any) -> tuple:
+        return (
+            c.co_code,
+            tuple(_normalize_const(x) for x in c.co_consts),
+            c.co_names,
+            c.co_varnames,
+            c.co_freevars,
+            c.co_cellvars,
+        )
+
+    def _normalize_const(value: Any) -> Any:
+        if hasattr(value, "co_code"):
+            return _stable_tuple(value)
+        return value
+
+    return hashlib.sha256(repr(_stable_tuple(code)).encode()).hexdigest()
+
+
+def _callable_fingerprint(func: Any, *, include_closure: bool = True) -> str:
+    """Fingerprint a callable for identity comparison.
+
+    When *include_closure* is True (the default), closure variable values are
+    included.  This is correct for lambda transforms (``with_inputs``) where
+    closure variables are semantic inputs.  Pass ``include_closure=False`` for
+    ``@Flow.model`` function definitions where closure variables may be mutable
+    side-effect trackers that must not affect identity stability.
+    """
+    module = getattr(func, "__module__", None) or type(func).__module__
+    qualname = getattr(func, "__qualname__", None) or type(func).__qualname__
+    code = getattr(func, "__code__", None)
+    if code is None:
+        if include_closure:
+            return f"callable:{module}:{qualname}:{repr(func)}"
+        return f"callable:{module}:{qualname}"
+
+    parts = [
+        module,
+        qualname,
+        code.co_filename,
+        str(code.co_firstlineno),
+        _code_hash(code),
+        repr(getattr(func, "__defaults__", None)),
+    ]
+    if include_closure:
+        parts.append(_callable_closure_repr(func))
+    return f"callable:{'|'.join(parts)}"
 
 
 def _fingerprint_transforms(transforms: Dict[str, Any]) -> Tuple[Tuple[str, str], ...]:

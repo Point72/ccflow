@@ -432,6 +432,106 @@ def test_generated_models_cloudpickle_preserves_unset_validation_sentinel():
     assert param.validation_annotation is int
 
 
+def test_generated_model_pydantic_roundtrip_via_base_model():
+    @Flow.model
+    def add(a: int, b: FromContext[int]) -> int:
+        return a + b
+
+    from ccflow import BaseModel
+
+    model = add(a=10)
+    dumped = model.model_dump(mode="python")
+
+    # BaseModel.model_validate uses the _target_ field (PyObjectPath) to
+    # reconstruct the correct generated class.
+    restored = BaseModel.model_validate(dumped)
+    assert type(restored) is type(model)
+    assert restored.flow.compute(b=5).value == 15
+
+
+def test_generated_model_json_roundtrip():
+    @Flow.model
+    def add(a: int, b: FromContext[int]) -> int:
+        return a + b
+
+    from ccflow import BaseModel
+
+    model = add(a=10, b=3)
+    json_str = model.model_dump_json()
+    restored = BaseModel.model_validate_json(json_str)
+    assert type(restored) is type(model)
+    assert restored.flow.compute().value == 13
+    assert restored.flow.compute(b=7).value == 17
+
+
+def test_dependency_graph_cloudpickle_roundtrip():
+    from ccflow.evaluators import get_dependency_graph
+
+    @Flow.model
+    def source(value: FromContext[int]) -> int:
+        return value * 10
+
+    @Flow.model
+    def root(x: int, penalty: FromContext[int]) -> int:
+        return x + penalty
+
+    model = root(x=source())
+    ctx = FlowContext(value=10, penalty=1)
+    graph = get_dependency_graph(model.__call__.get_evaluation_context(model, ctx))
+
+    restored = rcploads(rcpdumps(graph))
+    assert restored.root_id == graph.root_id
+    assert set(restored.graph.keys()) == set(graph.graph.keys())
+    assert set(restored.ids.keys()) == set(graph.ids.keys())
+
+    # The restored graph's evaluation contexts should still be functional
+    for key in graph.ids:
+        original_ec = graph.ids[key]
+        restored_ec = restored.ids[key]
+        assert type(restored_ec.model).__name__ == type(original_ec.model).__name__
+        assert restored_ec.fn == original_ec.fn
+
+
+def test_callable_fingerprint_stable_through_cloudpickle():
+    """_callable_fingerprint must produce identical results before and after cloudpickle."""
+
+    @Flow.model
+    def source(value: FromContext[int]) -> int:
+        return value * 10
+
+    model = source()
+    config = type(model).__flow_model_config__
+
+    fp_before = flow_model_module._callable_fingerprint(config.func)
+
+    restored = rcploads(rcpdumps(model))
+    config_after = type(restored).__flow_model_config__
+
+    fp_after = flow_model_module._callable_fingerprint(config_after.func)
+    assert fp_before == fp_after
+
+
+def test_callable_fingerprint_stable_with_nested_code_objects():
+    """Functions containing comprehensions/lambdas have nested code objects in
+    co_consts.  repr() of code objects includes memory addresses, so the hash
+    must recursively normalize them."""
+
+    @Flow.model
+    def with_comprehension(value: FromContext[int]) -> GenericResult[list]:
+        return GenericResult(value=[x * value for x in range(5)])
+
+    model = with_comprehension()
+    config = type(model).__flow_model_config__
+
+    fp_before = flow_model_module._callable_fingerprint(config.func)
+
+    restored = rcploads(rcpdumps(model))
+    config_after = type(restored).__flow_model_config__
+
+    fp_after = flow_model_module._callable_fingerprint(config_after.func)
+    assert fp_before == fp_after
+
+
 def test_graph_integration_fanout_fanin():
     @Flow.model
     def source(base: int, value: FromContext[int]) -> int:
