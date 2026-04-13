@@ -87,66 +87,7 @@ class _RegistryMixin:
         return deps
 
 
-# Pydantic 2 has different handling of serialization.
-# This requires some workarounds at the moment until the feature is added to easily get a mode that
-# is compatible with Pydantic 1
-# This is done by adjusting annotations via a MetaClass for any annotation that includes a BaseModel,
-# such that the new annotation contains SerializeAsAny
-# https://docs.pydantic.dev/latest/concepts/serialization/#serializing-with-duck-typing
-# https://github.com/pydantic/pydantic/issues/6423
-# https://github.com/pydantic/pydantic-core/pull/740
-# See https://github.com/pydantic/pydantic/issues/6381 for inspiration on implementation
-# NOTE: For this logic to be removed, require https://github.com/pydantic/pydantic-core/pull/1478
-from pydantic._internal._model_construction import ModelMetaclass  # noqa: E402
-
-_IS_PY39 = version.parse(platform.python_version()) < version.parse("3.10")
-
-
-def _adjust_annotations(annotation):
-    origin = get_origin(annotation)
-    args = get_args(annotation)
-    if not _IS_PY39:
-        from types import UnionType
-
-        if origin is UnionType:
-            origin = Union
-
-    if isinstance(annotation, GenericAlias) or (inspect.isclass(annotation) and issubclass(annotation, PydanticBaseModel)):
-        return SerializeAsAny[annotation]
-    elif origin and args:
-        # Filter out typing.Type and generic types
-        if origin is type or (inspect.isclass(origin) and issubclass(origin, Generic)):
-            return annotation
-        elif origin is ClassVar:  # ClassVar doesn't accept a tuple of length 1 in py39
-            return ClassVar[_adjust_annotations(args[0])]
-        else:
-            try:
-                return origin[tuple(_adjust_annotations(arg) for arg in args)]
-            except TypeError:
-                raise TypeError(f"Could not adjust annotations for {origin}")
-    else:
-        return annotation
-
-
-class _SerializeAsAnyMeta(ModelMetaclass):
-    def __new__(self, name: str, bases: Tuple[type], namespaces: Dict[str, Any], **kwargs):
-        annotations: dict = namespaces.get("__annotations__", {})
-
-        for base in bases:
-            for base_ in base.__mro__:
-                if base_ is PydanticBaseModel:
-                    annotations.update(base_.__annotations__)
-
-        for field, annotation in annotations.items():
-            if not field.startswith("__"):
-                annotations[field] = _adjust_annotations(annotation)
-
-        namespaces["__annotations__"] = annotations
-
-        return super().__new__(self, name, bases, namespaces, **kwargs)
-
-
-class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta):
+class BaseModel(PydanticBaseModel, _RegistryMixin):
     """BaseModel is a base class for all pydantic models within the ccflow framework.
 
     This gives us a way to add functionality to the framework, including
@@ -237,8 +178,7 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
 
         kwargs = {"fallback": str, "mode": "json"}
         kwargs.update(json_kwargs or {})
-        # Can't use self.model_dump_json or self.model_dump because they don't expose the fallback argument
-        return JSON(self.__pydantic_serializer__.to_python(self, **kwargs), **(widget_kwargs or {}))
+        return JSON(self.model_dump(**kwargs), **(widget_kwargs or {}))
 
     def __panel__(self):
         """Return a Panel viewable for this model.

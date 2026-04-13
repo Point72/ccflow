@@ -160,6 +160,18 @@ class TestBaseModelSerialization(unittest.TestCase):
     def test_serialization_nested_subclass(self):
         self._check_serialization(NestedModel(a=ChildModel(field1=0, field2=10)))
 
+    def test_serialization_nested_subclass_uses_duck_typing(self):
+        model = NestedModel(a=ChildModel(field1=0, field2=10))
+
+        assert model.model_dump(mode="python") == {
+            "a": {
+                "field1": 0,
+                "field2": 10,
+                "type_": "ccflow.tests.test_base_serialize.ChildModel",
+            },
+            "type_": "ccflow.tests.test_base_serialize.NestedModel",
+        }
+
     def test_from_str_serialization(self):
         serialized = '{"_target_": "ccflow.tests.test_base_serialize.ChildModel", "field1": 9, "field2": 4}'
         deserialized = BaseModel.model_validate_json(serialized)

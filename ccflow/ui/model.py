@@ -254,5 +254,5 @@ class ModelViewer(param.Parameterized):
         self._tabs.active = 0
 
         # Update & show JSONEditor
-        self._json_editor.value = model.__pydantic_serializer__.to_python(model, fallback=str, mode="json")
+        self._json_editor.value = model.model_dump(mode="json", fallback=str)
         self._json_container.visible = True
