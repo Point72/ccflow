@@ -7,7 +7,6 @@ from pprint import pformat
 from types import MappingProxyType
 from typing import Any, Callable, Dict, List, Optional, Set, Union
 
-import dask.base
 from pydantic import Field, PrivateAttr, field_validator
 from typing_extensions import override
 
@@ -18,7 +17,6 @@ from ..callable import (
     EvaluatorBase,
     ModelEvaluationContext,
     ResultType,
-    TransparentModelEvaluationContext,
 )
 
 __all__ = [
@@ -227,21 +225,8 @@ def cache_key(flow_obj: Union[ModelEvaluationContext, ContextBase, CallableModel
     Args:
         flow_obj: The object to be tokenized to form the cache key.
     """
-    if isinstance(flow_obj, ModelEvaluationContext):
-        fn = flow_obj.fn
-        non_transparent = []
-        while isinstance(flow_obj.context, ModelEvaluationContext):
-            fn = flow_obj.fn if flow_obj.fn != "__call__" else fn
-            if not isinstance(flow_obj, TransparentModelEvaluationContext):
-                non_transparent.append(flow_obj.model)
-            flow_obj = flow_obj.context
-        d = flow_obj.model_dump(mode="python")
-        d["fn"] = fn if fn != "__call__" else flow_obj.fn
-        if non_transparent:
-            d["_evaluators"] = [e.model_dump(mode="python") for e in non_transparent]
-        return dask.base.tokenize(d).encode("utf-8")
-    elif isinstance(flow_obj, (ContextBase, CallableModel)):
-        return dask.base.tokenize(flow_obj.model_dump(mode="python")).encode("utf-8")
+    if isinstance(flow_obj, (ModelEvaluationContext, ContextBase, CallableModel)):
+        return flow_obj.model_token.encode("utf-8")
     else:
         raise TypeError(f"object of type {type(flow_obj)} cannot be serialized by this function!")
 
