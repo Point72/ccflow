@@ -20,6 +20,7 @@ Notes for editors:
 - [Configuration](Configuration)
 - [Workflows](Workflows)
 - [ETL](ETL)
+- [Tokenization](Tokenization)
 
 **Developer Guide**
 

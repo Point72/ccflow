@@ -451,6 +451,40 @@ class ModelEvaluationContext(
     # Otherwise, the validation will re-run fully despite the models already being validated on construction
     # TODO: Make the instance check compatible with the generic types instead of the base type
 
+    @property
+    def model_token(self) -> str:
+        """Compute a cache-key token for this MEC chain.
+
+        Walks the MEC chain, strips ``TransparentModelEvaluationContext``
+        layers, and tokenizes the innermost context plus any opaque evaluators.
+        """
+        cache = self.model_config.get("cache_token", True)
+        if cache and self._model_token is not None:
+            return self._model_token
+
+        fn = self.fn
+        non_transparent = []
+        current = self
+        while isinstance(current.context, ModelEvaluationContext):
+            fn = current.fn if current.fn != "__call__" else fn
+            if not isinstance(current, TransparentModelEvaluationContext):
+                non_transparent.append(current.model)
+            current = current.context
+
+        # Build a canonical representation from the innermost MEC
+        from .utils.tokenize import normalize_token
+
+        inner_norm = normalize_token(current)
+        effective_fn = fn if fn != "__call__" else current.fn
+        parts = (inner_norm, effective_fn)
+        if non_transparent:
+            parts = parts + (tuple(normalize_token(e) for e in non_transparent),)
+        token = self.__ccflow_tokenizer__.hash_canonical(parts)
+
+        if cache:
+            self.__pydantic_private__["_model_token"] = token
+        return token
+
     @model_validator(mode="wrap")
     def _context_validator(cls, values, handler, info):
         """Override _context_validator from parent"""

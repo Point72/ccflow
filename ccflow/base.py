@@ -31,6 +31,7 @@ from typing_extensions import Self
 
 from .exttypes.pyobjectpath import PyObjectPath
 from .local_persistence import register_ccflow_import_path, sync_to_module
+from .utils.tokenize import DefaultTokenizer, Tokenizer, normalize_token
 
 log = logging.getLogger(__name__)
 
@@ -195,6 +196,42 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
     # We want to track under what names a model has been registered
     _registrations: List[Tuple["ModelRegistry", str]] = PrivateAttr(default_factory=list)
 
+    # Tokenization support
+    __ccflow_tokenizer__: ClassVar[Tokenizer] = DefaultTokenizer.with_bytecode()
+    _model_token: Optional[str] = PrivateAttr(default=None)
+
+    @property
+    def model_token(self) -> str:
+        """Return a deterministic content hash of this model.
+
+        Token caching is controlled by ``cache_token`` in model_config.
+        By default, only frozen models cache their token (safe — immutable,
+        never stale).  Mutable models recompute on every access.
+        Set ``cache_token=True`` on a mutable model to opt in to caching
+        (e.g. for large data that is expensive to tokenize and won't change).
+        """
+        cache = self.model_config.get("cache_token", self.model_config.get("frozen", False))
+        if cache and self._model_token is not None:
+            return self._model_token
+        token = self.__ccflow_tokenizer__.tokenize(self)
+        if cache:
+            self.__pydantic_private__["_model_token"] = token
+        return token
+
+    @model_validator(mode="after")
+    def _clear_token_cache(self):
+        """Clear the cached token on construction and field assignment."""
+        if self.model_config.get("cache_token", self.model_config.get("frozen", False)):
+            self.__pydantic_private__["_model_token"] = None
+        return self
+
+    def model_copy(self, *, update=None, deep=False):
+        """Override model_copy to clear the stale token cache on the copy."""
+        copy = super().model_copy(update=update, deep=deep)
+        if update and copy.__pydantic_private__ is not None:
+            copy.__pydantic_private__["_model_token"] = None
+        return copy
+
     model_config = ConfigDict(
         # Note that validate_assignment only partially works: https://github.com/pydantic/pydantic/issues/7105
         validate_assignment=True,
@@ -316,6 +353,18 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
     def __setstate__(self, state):
         state["__pydantic_fields_set__"] = set(state["__pydantic_fields_set__"])
         super().__setstate__(state)
+        # Clear stale token cache from pickle
+        if self.__pydantic_private__ is not None and "_model_token" in self.__pydantic_private__:
+            self.__pydantic_private__["_model_token"] = None
+
+
+# Register ccflow BaseModel-specific normalize_token handler
+# Delegates to the model's tokenizer so normalization is consistent
+# regardless of whether the model is accessed via model_token or
+# encountered as a value inside a container.
+@normalize_token.register(BaseModel)
+def _normalize_ccflow_basemodel(obj):
+    return obj.__ccflow_tokenizer__.normalize(obj)
 
 
 class _ModelRegistryData(PydanticBaseModel):

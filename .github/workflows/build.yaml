@@ -35,7 +35,7 @@ jobs:
           - '3.11'
         dependencies:
           - ''
-          - '"pandas<2" "numpy<2" "xarray<2025.09.0" "dask<2024.7.0"'
+          - '"pandas<2" "numpy<2" "xarray<2025.09.0"'
           - '"pandas<3"'
           - '"pandas<4"'
 
