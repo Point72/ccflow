@@ -1,11 +1,12 @@
 """Focused tests for the FromContext-based Flow.model API."""
 
 import graphlib
+import pickle
 from datetime import date, timedelta
 from typing import Annotated
 
 import pytest
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from ray.cloudpickle import dumps as rcpdumps, loads as rcploads
 
 import ccflow.flow_model as flow_model_module
@@ -135,6 +136,44 @@ def contextual_processor(
     return GenericResult(value=f"{prefix}:{data['source']}:{data['start_date']} to {data['end_date']}")
 
 
+@Flow.transform
+def increment_b(b: FromContext[int], amount: int) -> int:
+    return b + amount
+
+
+@Flow.transform
+def shift_integer_window(start_date: FromContext[int], end_date: FromContext[int], amount: int) -> dict[str, object]:
+    return {
+        "start_date": start_date + amount,
+        "end_date": end_date + amount,
+    }
+
+
+@Flow.transform
+def bump_start_date(start_date: FromContext[int], amount: int) -> int:
+    return start_date + amount
+
+
+@Flow.transform
+def annotated_start_patch(start_date: FromContext[int]) -> Annotated[dict[str, object], "meta"]:
+    return {"start_date": start_date + 1}
+
+
+@Flow.transform
+def optional_start_patch(start_date: FromContext[int]) -> dict[str, object] | None:
+    return {"start_date": start_date + 2}
+
+
+@Flow.transform
+def static_bad() -> int:
+    return 2
+
+
+@Flow.transform
+def static_patch() -> dict[str, object]:
+    return {"a": 2}
+
+
 def test_from_context_anchor_behavior():
     @Flow.model
     def foo(a: int, b: FromContext[int]) -> int:
@@ -171,7 +210,10 @@ def test_bound_regular_param_name_can_collide_with_ambient_context():
         return a + left + bonus
 
     model = combine(a=100, left=source())
-    assert model.flow.compute(a=7, bonus=5).value == 112
+    assert model.flow.compute(FlowContext(a=7, bonus=5)).value == 112
+
+    with pytest.raises(TypeError, match="does not accept regular parameter override\\(s\\): a"):
+        model.flow.compute(a=7, bonus=5)
 
 
 def test_contextual_param_rejects_callable_model():
@@ -212,6 +254,16 @@ def test_contextual_function_defaults_remain_contextual():
     assert model.flow.compute(b=10).value == 12
 
 
+def test_compute_rejects_kwargs_for_already_bound_regular_params():
+    @Flow.model
+    def add(a: int, b: FromContext[int]) -> int:
+        return a + b
+
+    model = add(a=1)
+    with pytest.raises(TypeError, match="does not accept regular parameter override\\(s\\): a"):
+        model.flow.compute(a=999, b=2)
+
+
 def test_context_type_accepts_richer_subclass_for_from_context():
     @Flow.model(context_type=ParentRangeContext)
     def span_days(multiplier: int, start_date: FromContext[date], end_date: FromContext[date]) -> int:
@@ -231,7 +283,46 @@ def test_context_type_validation_applies_to_resolved_contextual_values():
         add().flow.compute(a=2, b=1)
 
     with pytest.raises(ValueError, match="a must be <= b"):
-        add(a=2, b=1).flow.compute()
+        add(a=2, b=1)
+
+
+def test_context_type_validates_construction_time_contextual_defaults_early():
+    class PositiveContext(ContextBase):
+        x: int = Field(gt=0)
+
+    @Flow.model(context_type=PositiveContext)
+    def identity(x: FromContext[int]) -> int:
+        return x
+
+    with pytest.raises(ValueError, match="greater than 0"):
+        identity(x=-1)
+
+
+def test_context_type_validates_static_with_inputs_overrides_early():
+    @Flow.model(context_type=OrderedContext)
+    def add(a: FromContext[int], b: FromContext[int]) -> int:
+        return a + b
+
+    with pytest.raises(ValueError, match="a must be <= b"):
+        add().flow.with_inputs(a=2, b=1)
+
+
+def test_context_type_validates_static_field_transform_overrides_early():
+    @Flow.model(context_type=OrderedContext)
+    def add(a: FromContext[int], b: FromContext[int] = 1) -> int:
+        return a + b
+
+    with pytest.raises(ValueError, match="a must be <= b"):
+        add().flow.with_inputs(a=static_bad())
+
+
+def test_context_type_validates_static_patch_transform_overrides_early():
+    @Flow.model(context_type=OrderedContext)
+    def add(a: FromContext[int], b: FromContext[int] = 1) -> int:
+        return a + b
+
+    with pytest.raises(ValueError, match="a must be <= b"):
+        add().flow.with_inputs(static_patch())
 
 
 def test_context_named_parameters_are_just_regular_parameters():
@@ -419,6 +510,16 @@ def test_generated_models_cloudpickle_roundtrip():
     assert restored.flow.compute(b=7).value == 42
 
 
+def test_generated_models_plain_pickle_roundtrip():
+    @Flow.model
+    def multiply(a: int, b: FromContext[int]) -> int:
+        return a * b
+
+    model = multiply(a=6)
+    restored = pickle.loads(pickle.dumps(model, protocol=5))
+    assert restored.flow.compute(b=7).value == 42
+
+
 def test_generated_models_cloudpickle_preserves_unset_validation_sentinel():
     @Flow.model
     def multiply(a: int, b: FromContext[int]) -> int:
@@ -492,44 +593,92 @@ def test_dependency_graph_cloudpickle_roundtrip():
         assert restored_ec.fn == original_ec.fn
 
 
-def test_callable_fingerprint_stable_through_cloudpickle():
-    """_callable_fingerprint must produce identical results before and after cloudpickle."""
+def test_with_inputs_validates_static_override_types():
+    """Static value type mismatch should be caught when rewrite specs are normalized."""
 
     @Flow.model
-    def source(value: FromContext[int]) -> int:
-        return value * 10
+    def add(a: int, b: FromContext[int]) -> int:
+        return a + b
 
-    model = source()
-    config = type(model).__flow_model_config__
-
-    fp_before = flow_model_module._callable_fingerprint(config.func)
-
-    restored = rcploads(rcpdumps(model))
-    config_after = type(restored).__flow_model_config__
-
-    fp_after = flow_model_module._callable_fingerprint(config_after.func)
-    assert fp_before == fp_after
+    with pytest.raises(TypeError, match="with_inputs\\(\\)"):
+        add(a=1).flow.with_inputs(b="not_an_int")
 
 
-def test_callable_fingerprint_stable_with_nested_code_objects():
-    """Functions containing comprehensions/lambdas have nested code objects in
-    co_consts.  repr() of code objects includes memory addresses, so the hash
-    must recursively normalize them."""
+def test_flow_transform_binding_serializes_import_path_and_bound_args():
+    binding = increment_b(amount=3)
+    assert isinstance(binding, flow_model_module.TransformBinding)
+    assert binding.kind == "transform_binding"
+    assert binding.bound_args == {"amount": 3}
+    assert str(binding.path).endswith(".increment_b")
 
+
+def test_flow_transform_rejects_nested_functions():
+    with pytest.raises(TypeError, match="top-level named Python functions"):
+
+        @Flow.transform
+        def nested(value: FromContext[int]) -> int:
+            return value
+
+
+def test_with_inputs_rejects_raw_callables():
     @Flow.model
-    def with_comprehension(value: FromContext[int]) -> GenericResult[list]:
-        return GenericResult(value=[x * value for x in range(5)])
+    def add(a: int, b: FromContext[int]) -> int:
+        return a + b
 
-    model = with_comprehension()
-    config = type(model).__flow_model_config__
+    with pytest.raises(TypeError, match="no longer accepts raw callables"):
+        add(a=1).flow.with_inputs(b=lambda ctx: ctx.b + 1)
 
-    fp_before = flow_model_module._callable_fingerprint(config.func)
 
-    restored = rcploads(rcpdumps(model))
-    config_after = type(restored).__flow_model_config__
+def test_with_inputs_rejects_wrong_transform_position():
+    @Flow.model
+    def load(start_date: FromContext[int], end_date: FromContext[int]) -> int:
+        return start_date + end_date
 
-    fp_after = flow_model_module._callable_fingerprint(config_after.func)
-    assert fp_before == fp_after
+    with pytest.raises(TypeError, match="Field transforms must be passed by keyword"):
+        load().flow.with_inputs(increment_b(amount=1))
+
+    with pytest.raises(TypeError, match="Patch transforms must be passed positionally"):
+        load().flow.with_inputs(start_date=shift_integer_window(amount=10))
+
+
+def test_with_inputs_accepts_wrapped_mapping_patch_annotations():
+    @Flow.model
+    def load(start_date: FromContext[int], end_date: FromContext[int]) -> int:
+        return start_date * 1000 + end_date
+
+    annotated = load().flow.with_inputs(annotated_start_patch())
+    optional = load().flow.with_inputs(optional_start_patch())
+
+    assert annotated.flow.compute(start_date=1, end_date=5).value == 2005
+    assert optional.flow.compute(start_date=1, end_date=5).value == 3005
+
+
+def test_patch_then_keyword_override_precedence():
+    @Flow.model
+    def load(start_date: FromContext[int], end_date: FromContext[int]) -> int:
+        return start_date * 1000 + end_date
+
+    bound = load().flow.with_inputs(shift_integer_window(amount=10), start_date=100)
+    result = bound(FlowContext(start_date=1, end_date=2))
+    assert result.value == 100_012
+
+    dumped = bound.model_dump(mode="json")
+    assert dumped["rewrite"]["patches"][0]["binding"]["bound_args"] == {"amount": 10}
+    assert dumped["rewrite"]["field_overrides"]["start_date"]["kind"] == "static_value"
+
+
+def test_transforms_evaluate_against_original_runtime_context():
+    @Flow.model
+    def load(start_date: FromContext[int], end_date: FromContext[int]) -> int:
+        return start_date * 1000 + end_date
+
+    bound = load().flow.with_inputs(
+        shift_integer_window(amount=10),
+        start_date=bump_start_date(amount=100),
+    )
+
+    result = bound(FlowContext(start_date=1, end_date=2))
+    assert result.value == 101_012
 
 
 def test_graph_integration_fanout_fanin():
@@ -661,7 +810,7 @@ def test_internal_type_helpers_and_plain_callable_flow_api_paths():
     assert flow_model_module._concrete_context_type(int) is None
     assert flow_model_module._type_accepts_str(Annotated[str, flow_model_module._FromContextMarker()]) is True
     assert flow_model_module._type_accepts_str(int | None) is False
-    assert flow_model_module._transform_repr(lambda value: value) == "<lambda>"
+    assert flow_model_module._transform_repr(increment_b(amount=1)) == "increment_b(amount=1)"
     assert flow_model_module._bound_field_names(object()) == set()
 
     class PlainModel(CallableModel):
@@ -797,3 +946,53 @@ def test_additional_validation_and_hint_fallback_paths(monkeypatch):
         return x + y
 
     assert add(x=1).flow.compute(y=2).value == 3
+
+
+def test_unresolved_forward_refs_do_not_silently_strip_from_context():
+    namespace: dict[str, object] = {}
+
+    with pytest.raises(NameError, match="MissingType"):
+        exec(
+            """
+from __future__ import annotations
+from ccflow import Flow, FromContext
+
+@Flow.transform
+def transform(a: MissingType, b: FromContext[int]) -> int:
+    return b
+""",
+            namespace,
+        )
+
+    with pytest.raises(NameError, match="MissingType"):
+        exec(
+            """
+from __future__ import annotations
+from ccflow import Flow, FromContext
+
+@Flow.model
+def model(a: MissingType, b: FromContext[int]) -> int:
+    return b
+""",
+            namespace,
+        )
+
+
+def test_context_type_validates_parameterized_annotations():
+    class IntListContext(ContextBase):
+        vals: list[int]
+
+    @Flow.model(context_type=IntListContext)
+    def total(vals: FromContext[list[int]]) -> int:
+        return sum(vals)
+
+    assert total().flow.compute(vals=["1", "2"]).value == 3
+
+    class StrListContext(ContextBase):
+        vals: list[str]
+
+    with pytest.raises(TypeError, match="annotates"):
+
+        @Flow.model(context_type=StrListContext)
+        def bad(vals: FromContext[list[int]]) -> int:
+            return sum(vals)

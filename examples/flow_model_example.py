@@ -50,18 +50,19 @@ def revenue_change(
     }
 
 
-def shifted_window(model, *, days_back: int):
-    """Reuse one upstream model with a shifted runtime window."""
-    return model.flow.with_inputs(
-        start_date=lambda ctx: ctx.start_date - timedelta(days=days_back),
-        end_date=lambda ctx: ctx.end_date - timedelta(days=days_back),
-    )
+@Flow.transform
+def previous_window(start_date: FromContext[date], end_date: FromContext[date], days_back: int) -> dict[str, object]:
+    """Shift both date fields together for a previous reporting window."""
+    return {
+        "start_date": start_date - timedelta(days=days_back),
+        "end_date": end_date - timedelta(days=days_back),
+    }
 
 
 def build_week_over_week_pipeline(region: str):
     """Build one reusable comparison pipeline."""
     current = load_revenue(region=region)
-    previous = shifted_window(current, days_back=7)
+    previous = current.flow.with_inputs(previous_window(days_back=7))
     return revenue_change(
         current=current,
         previous=previous,

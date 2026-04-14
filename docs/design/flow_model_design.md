@@ -8,8 +8,9 @@ The design is intentionally narrow:
 
 - ordinary unmarked parameters are regular bound inputs,
 - `FromContext[T]` marks the only runtime/contextual inputs,
+- `@Flow.transform` defines reusable contextual rewrites,
 - `.flow.compute(...)` is the execution entry point for the full DAG,
-- `.flow.with_inputs(...)` rewires contextual inputs on one dependency edge,
+- `.flow.with_inputs(*patches, **field_overrides)` rewires contextual inputs on one dependency edge,
 - upstream `CallableModel`s can still be passed as ordinary arguments.
 
 The goal is that a reader can look at one function signature and immediately
@@ -63,14 +64,15 @@ This means the following is **invalid**:
 
 ```python
 foo().flow.compute(a=11, b=12)
-# TypeError: compute() cannot bind regular parameter(s): a.
-# Bind them at construction time.
+# TypeError: compute() cannot satisfy unbound regular parameter(s): a.
+# Bind them at construction time; compute() only supplies runtime context.
 ```
 
 `a` is not contextual, so it must be bound at construction time (`foo(a=11)`).
 By contrast, extra ambient fields that are only needed by upstream
-`with_inputs(...)` rewrites are allowed on the kwargs entrypoint for
-implicit-`FlowContext` graphs.
+`with_inputs(...)` rewrites are allowed in `compute(**kwargs)` because
+`@Flow.model` generated models use `FlowContext` (an open bag) as their
+runtime context type.
 
 ## Regular Parameters vs Contextual Parameters
 
@@ -158,12 +160,16 @@ assert model.flow.compute(b=5).value == 15
 assert model.flow.compute(FlowContext(b=6)).value == 16
 ```
 
-For implicit-`FlowContext` models, the kwargs form is intentionally a DAG
+For `@Flow.model` generated models, the kwargs form is intentionally a DAG
 entrypoint: it can include extra fields needed only by upstream transformed
-dependencies. Regular parameters are still never read from runtime context. If
-the root model has an unbound regular parameter whose name appears in
-`compute(**kwargs)`, `compute()` raises early instead of silently treating that
-value as configuration.
+dependencies. Regular parameters are still never read from runtime context.
+`compute()` enforces two guardrails on keyword arguments:
+
+- If a key matches an **unbound** regular parameter, it raises early instead of
+  silently treating that value as configuration.
+- If a key matches an **already-bound** regular parameter, it raises to prevent
+  accidental rebinding. Use a context object (`FlowContext`) when you need
+  ambient fields whose names collide with bound regular parameters.
 
 ```python
 from ccflow import Flow, FromContext
@@ -179,22 +185,28 @@ def add(left: int, right: int, bonus: FromContext[int]) -> int:
     return left + right + bonus
 
 
+@Flow.transform
+def add_offset(value: FromContext[int], amount: int) -> int:
+    return value + amount
+
+
 base = source()
 model = add(
-    left=base.flow.with_inputs(value=lambda ctx: ctx.value + 1),
-    right=base.flow.with_inputs(value=lambda ctx: ctx.value + 10),
+    left=base.flow.with_inputs(value=add_offset(amount=1)),
+    right=base.flow.with_inputs(value=add_offset(amount=10)),
 )
 
 assert model.flow.context_inputs == {"bonus": int}
 assert model.flow.compute(value=5, bonus=100).value == 121
 ```
 
-If a regular parameter is already bound on the root model, a same-named key in
-`compute(**kwargs)` is treated as ambient context for the graph rather than a
-rebind of the root parameter:
+If a regular parameter is already bound on the root model and you need to pass
+an ambient context field with the same name for upstream graph nodes, use a
+context object instead of keyword arguments. The kwargs form rejects keys that
+match already-bound regular parameters to prevent accidental rebinding:
 
 ```python
-from ccflow import Flow, FromContext
+from ccflow import Flow, FlowContext, FromContext
 
 
 @Flow.model
@@ -209,9 +221,13 @@ def combine(a: int, left: int, bonus: FromContext[int]) -> int:
 
 model = combine(a=100, left=source())
 
-# Root 'a' stays bound to 100. The runtime 'a=7' is still available to
-# upstream graph nodes that read it from context.
-assert model.flow.compute(a=7, bonus=5).value == 112
+# The context object form lets ambient 'a=7' flow to upstream nodes
+# while root 'a' stays bound to 100:
+assert model.flow.compute(FlowContext(a=7, bonus=5)).value == 112
+
+# The kwargs form rejects 'a' because it is a bound regular parameter:
+# model.flow.compute(a=7, bonus=5)
+# → TypeError: compute() does not accept regular parameter override(s): a.
 ```
 
 `compute()` returns the same result object you would get from `model(context)`,
@@ -230,10 +246,18 @@ result = add(a=10).flow.compute(b=5)
 assert result == 15
 ```
 
-## `.flow.with_inputs(...)`
+## `@Flow.transform` and `.flow.with_inputs(...)`
 
-`.flow.with_inputs(...)` rewrites contextual inputs locally for one wrapped
-dependency.
+`@Flow.transform` defines reusable, serializable contextual rewrites using the
+same `FromContext[...]` language as `@Flow.model`. A transform's return type
+determines how it can be used in `with_inputs()`:
+
+- **Patch transforms** return a `Mapping` (e.g. `dict[str, object]`) of
+  contextual field names to replacement values. They are passed as **positional
+  arguments** to `with_inputs()`.
+- **Field transforms** return a single scalar value. They are passed as
+  **keyword arguments** to `with_inputs()`, keyed by the contextual field they
+  replace.
 
 ```python
 from datetime import date, timedelta
@@ -252,27 +276,50 @@ def revenue_growth(current: float, previous: float, start_date: FromContext[date
     return {"window_end": end_date, "growth_pct": round((current - previous) / previous * 100, 2)}
 
 
+@Flow.transform
+def previous_start(start_date: FromContext[date], days: int) -> date:
+    return start_date - timedelta(days=days)
+
+
+@Flow.transform
+def previous_window(start_date: FromContext[date], end_date: FromContext[date], days: int) -> dict[str, object]:
+    return {
+        "start_date": start_date - timedelta(days=days),
+        "end_date": end_date - timedelta(days=days),
+    }
+
+
 current = load_revenue(region="us")
-previous = current.flow.with_inputs(
-    start_date=lambda ctx: ctx.start_date - timedelta(days=30),
-    end_date=lambda ctx: ctx.end_date - timedelta(days=30),
+previous = current.flow.with_inputs(previous_window(days=30))
+comparison = current.flow.with_inputs(
+    previous_window(days=30),
+    start_date=previous_start(days=7),
 )
 
 growth = revenue_growth(current=current, previous=previous)
 result = growth(DateRangeContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31)))
 ```
 
-In this example, `current` and `previous` share the same `load_revenue` model
-but see different date windows at runtime. The `with_inputs()` call on
-`previous` shifts the dates back 30 days without affecting `current`.
+In this example, `current` and `previous` share the same underlying
+`load_revenue` configuration but see different date windows at runtime. The
+`with_inputs()` call on `previous` shifts the dates back 30 days without
+affecting `current`. `comparison` demonstrates both rewrite forms:
+`previous_window(days=30)` is a patch transform (positional, returns a mapping),
+while `previous_start(days=7)` is a field transform (keyword, returns one
+value for `start_date`).
 
 Key rules:
 
 - `with_inputs()` only targets contextual fields,
+- positional arguments must be patch transforms,
+- keyword overrides may be literals or field transforms,
+- raw anonymous callables are rejected; use named `@Flow.transform` helpers,
 - transforms are branch-local — they only affect the wrapped dependency, not
   the entire pipeline,
-- chained `with_inputs()` calls merge, with the newest transform winning for a
-  repeated field.
+- patch results merge left-to-right, then keyword overrides apply last,
+- every transform evaluates against the original incoming runtime context; if
+  multiple fields must move together, put that logic inside one patch
+  transform.
 
 ## `context_type=...`
 
@@ -291,6 +338,10 @@ def load_revenue(region: str, start_date: FromContext[date], end_date: FromConte
 That preserves the primary `FromContext[...]` authoring model while letting
 callers pass richer context objects whose relevant fields satisfy the declared
 `context_type`.
+
+`context_type=...` is a validation/coercion contract for the named
+`FromContext[...]` fields. Generated `@Flow.model` instances still expose
+`FlowContext` as their runtime `context_type`.
 
 If the function genuinely needs the runtime context object itself inside the
 function body on each call, use a normal `CallableModel` subclass instead of

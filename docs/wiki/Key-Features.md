@@ -33,6 +33,11 @@ and serialization machinery.
 If the function returns a plain value instead of a `ResultBase`, the generated
 model wraps it in `GenericResult`.
 
+`@Flow.transform` is the companion API for defining serializable contextual
+rewrites used by `.flow.with_inputs(*patches, **field_overrides)`. Transforms
+that return a mapping are **patch transforms** (passed positionally); transforms
+that return a single value are **field transforms** (passed by keyword).
+
 #### Primary Authoring Model
 
 `FromContext[T]` is the only marker for runtime/contextual inputs.
@@ -92,6 +97,10 @@ def load_data(source: str, start_date: FromContext[date], end_date: FromContext[
     return 125.0
 ```
 
+This validates/coerces the named `FromContext[...]` fields against
+`DateRangeContext`, but generated `@Flow.model` instances still report
+`FlowContext` as their runtime `context_type`.
+
 If the function genuinely needs the runtime context object itself inside the
 function body on each call, write a normal `CallableModel` subclass instead of
 using `@Flow.model`.
@@ -116,13 +125,18 @@ def revenue_growth(current: float, previous: float, start_date: FromContext[date
     return {"window_end": end_date, "growth_pct": round((current - previous) / previous * 100, 2)}
 
 
+@Flow.transform
+def previous_window(start_date: FromContext[date], end_date: FromContext[date], days: int) -> dict[str, object]:
+    return {
+        "start_date": start_date - timedelta(days=days),
+        "end_date": end_date - timedelta(days=days),
+    }
+
+
 current = load_revenue(region="us")
 
 # Reuse the same model with a shifted date window for "previous":
-previous = current.flow.with_inputs(
-    start_date=lambda ctx: ctx.start_date - timedelta(days=30),
-    end_date=lambda ctx: ctx.end_date - timedelta(days=30),
-)
+previous = current.flow.with_inputs(previous_window(days=30))
 
 growth = revenue_growth(current=current, previous=previous)
 
@@ -134,10 +148,15 @@ result = growth(ctx)
 #### Deferred Execution Helpers
 
 `model.flow.compute(...)` accepts either contextual keyword arguments or one
-context object and returns the same result as `model(context)`.
+context object and returns the same result as `model(context)` (unless
+`auto_unwrap=True` is set, in which case auto-wrapped `GenericResult` values
+are unwrapped to plain values).
 
-`model.flow.with_inputs(...)` rewrites contextual inputs on one dependency edge.
-It only accepts contextual fields and remains branch-local.
+`model.flow.with_inputs(*patches, **field_overrides)` rewrites contextual inputs
+on one dependency edge. Positional args are patch transforms that return a
+mapping of contextual field names. Keyword overrides accept either literal
+values or field transforms. The rewrite is branch-local and serializes as data,
+not raw callable state.
 
 Generated models also expose introspection helpers:
 
@@ -169,7 +188,10 @@ def choose(current: int, deferred: Lazy[int], threshold: FromContext[int]) -> in
 ```
 
 Use `Lazy[T]` when a dependency is expensive and the function should decide
-whether to execute it.
+whether to execute it. Without `Lazy[T]`, all upstream `CallableModel`
+dependencies are evaluated eagerly before the function runs. With it, the
+dependency is wrapped in a zero-argument thunk that the function calls
+explicitly (or never calls, avoiding the cost entirely).
 
 ## Model Registry
 
