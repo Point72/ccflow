@@ -22,7 +22,8 @@ from ccflow import (
     Lazy,
     ModelRegistry,
 )
-from ccflow.evaluators import GraphEvaluator
+from ccflow.callable import FlowOptions
+from ccflow.evaluators import GraphEvaluator, MemoryCacheEvaluator
 
 
 class SimpleContext(ContextBase):
@@ -996,3 +997,84 @@ def test_context_type_validates_parameterized_annotations():
         @Flow.model(context_type=StrListContext)
         def bad(vals: FromContext[list[int]]) -> int:
             return sum(vals)
+
+
+def test_compute_forwards_options_with_custom_evaluator():
+    calls = {"count": 0}
+
+    @Flow.model
+    def counter(value: FromContext[int]) -> int:
+        calls["count"] += 1
+        return value
+
+    cache = MemoryCacheEvaluator()
+    model = counter()
+
+    result1 = model.flow.compute(value=10, _options=FlowOptions(evaluator=cache, cacheable=True))
+    result2 = model.flow.compute(value=10, _options=FlowOptions(evaluator=cache, cacheable=True))
+
+    assert result1.value == 10
+    assert result2.value == 10
+    assert calls["count"] == 1
+
+
+def test_compute_forwards_options_with_graph_evaluator():
+    @Flow.model
+    def source(value: FromContext[int]) -> int:
+        return value * 10
+
+    @Flow.model
+    def root(x: int, bonus: FromContext[int]) -> int:
+        return x + bonus
+
+    model = root(x=source())
+
+    # GraphEvaluator evaluates in topo order; verify _options flows through
+    # and the graph evaluator is actually used (doesn't raise CycleError, computes correctly)
+    result = model.flow.compute(
+        FlowContext(value=3, bonus=7),
+        _options=FlowOptions(evaluator=GraphEvaluator()),
+    )
+
+    assert result.value == 37
+
+
+def test_compute_forwards_options_through_bound_model():
+    calls = {"count": 0}
+
+    @Flow.model
+    def add(a: int, b: FromContext[int]) -> int:
+        calls["count"] += 1
+        return a + b
+
+    cache = MemoryCacheEvaluator()
+    bound = add(a=10).flow.with_inputs(b=5)
+
+    result1 = bound.flow.compute(_options=FlowOptions(evaluator=cache, cacheable=True))
+    result2 = bound.flow.compute(_options=FlowOptions(evaluator=cache, cacheable=True))
+
+    assert result1.value == 15
+    assert result2.value == 15
+    assert calls["count"] == 1
+
+
+def test_compute_forwards_options_for_plain_callable_model():
+    calls = {"count": 0}
+
+    class Counter(CallableModel):
+        offset: int
+
+        @Flow.call
+        def __call__(self, context: SimpleContext) -> GenericResult[int]:
+            calls["count"] += 1
+            return GenericResult(value=context.value + self.offset)
+
+    cache = MemoryCacheEvaluator()
+    model = Counter(offset=5)
+
+    result1 = model.flow.compute(value=10, _options=FlowOptions(evaluator=cache, cacheable=True))
+    result2 = model.flow.compute(value=10, _options=FlowOptions(evaluator=cache, cacheable=True))
+
+    assert result1.value == 15
+    assert result2.value == 15
+    assert calls["count"] == 1

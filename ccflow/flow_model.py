@@ -28,7 +28,7 @@ from pydantic import BaseModel as PydanticModel, Field, TypeAdapter, ValidationE
 from pydantic.errors import PydanticSchemaGenerationError, PydanticUndefinedAnnotation
 
 from .base import BaseModel, ContextBase, ResultBase
-from .callable import CallableModel, Flow, GraphDepList, WrapperModel
+from .callable import CallableModel, Flow, FlowOptions, GraphDepList, WrapperModel
 from .context import FlowContext
 from .exttypes import PyObjectPath
 from .local_persistence import register_ccflow_import_path
@@ -913,12 +913,12 @@ class FlowAPI:
     def _compute_target(self) -> CallableModel:
         return self._model
 
-    def compute(self, context: Any = _UNSET, /, **kwargs) -> Any:
+    def compute(self, context: Any = _UNSET, /, _options: Optional[FlowOptions] = None, **kwargs) -> Any:
         target = self._compute_target
         generated = _generated_model_instance(target)
         if generated is not None:
             built_context = _build_generated_compute_context(generated, context, kwargs)
-            return _maybe_auto_unwrap_external_result(target, target(built_context))
+            return _maybe_auto_unwrap_external_result(target, target(built_context, _options=_options))
 
         if context is not _UNSET and kwargs:
             raise TypeError("compute() accepts either one context object or contextual keyword arguments, but not both.")
@@ -926,7 +926,7 @@ class FlowAPI:
             built_context = target.context_type.model_validate(kwargs)
         else:
             built_context = context if isinstance(context, ContextBase) else target.context_type.model_validate(context)
-        return _maybe_auto_unwrap_external_result(target, target(built_context))
+        return _maybe_auto_unwrap_external_result(target, target(built_context, _options=_options))
 
     @property
     def context_inputs(self) -> Dict[str, Any]:
