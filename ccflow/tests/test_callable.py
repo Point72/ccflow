@@ -1,5 +1,5 @@
 from pickle import dumps as pdumps, loads as ploads
-from typing import Generic, List, Optional, Tuple, Type, TypeVar, Union
+from typing import Annotated, Generic, List, Optional, Tuple, Type, TypeVar, Union
 from unittest import TestCase
 
 import ray
@@ -21,6 +21,7 @@ from ccflow import (
     ResultType,
     WrapperModel,
 )
+from ccflow.callable import ModelEvaluationContext
 from ccflow.local_persistence import LOCAL_ARTIFACTS_MODULE_NAME
 
 
@@ -416,6 +417,31 @@ class TestCallableModel(TestCase):
         target = m(context)
         self.assertEqual(m(context=context), target)
         self.assertEqual(m().y, "default")
+
+    def test_optional_context_model_evaluation_context(self):
+        """ModelEvaluationContext should work with optional-context callables."""
+        m = MyCallableOptionalContext()
+        # With a concrete context dict
+        mec = ModelEvaluationContext(model=m, context={"a": "bar"})
+        result = mec()
+        self.assertEqual(result.y, "bar")
+        # With None context
+        mec_none = ModelEvaluationContext(model=m, context=None)
+        result_none = mec_none()
+        self.assertEqual(result_none.y, "default")
+
+    def test_optional_context_flow_compute(self):
+        """flow.compute() should work with optional-context callables."""
+        m = MyCallableOptionalContext()
+        # With no arguments (should pass None through optional path)
+        result = m.flow.compute()
+        self.assertEqual(result.y, "default")
+        # With explicit None
+        result = m.flow.compute(None)
+        self.assertEqual(result.y, "default")
+        # With a concrete context
+        result = m.flow.compute(MyContext(a="from_compute"))
+        self.assertEqual(result.y, "from_compute")
 
     def test_inheritance(self):
         m = MyCallableChild(i=5)
@@ -906,6 +932,56 @@ class TestAutoContext(TestCase):
 
         self.assertIn("required_field", str(cm.exception))
 
+    def test_parent_field_type_incompatibility_rejected(self):
+        """auto_context with parent rejects incompatible field type overrides."""
+
+        class ParentContext(ContextBase):
+            base: int
+
+        with self.assertRaises(TypeError) as cm:
+
+            class BadCallable(CallableModel):
+                @Flow.call(auto_context=ParentContext)
+                def __call__(self, *, base: str) -> GenericResult:
+                    return GenericResult(value=base)
+
+        self.assertIn("incompatible", str(cm.exception))
+        self.assertIn("base", str(cm.exception))
+
+    def test_parent_field_same_type_accepted(self):
+        """auto_context with parent accepts matching field types."""
+
+        class ParentContext(ContextBase):
+            base: int
+
+        class MatchingCallable(CallableModel):
+            @Flow.call(auto_context=ParentContext)
+            def __call__(self, *, base: int, extra: str = "x") -> GenericResult:
+                return GenericResult(value=f"{base}-{extra}")
+
+        auto_ctx = MatchingCallable.__call__.__wrapped__.__auto_context__
+        self.assertTrue(issubclass(auto_ctx, ParentContext))
+
+    def test_parent_field_generic_annotations_accepted(self):
+        """auto_context with parent accepts generic annotations like list[int], dict[str, int]."""
+        from typing import Dict
+
+        class ParentContext(ContextBase):
+            vals: list[int]
+            mapping: Dict[str, int] = {}
+
+        class GenericCallable(CallableModel):
+            @Flow.call(auto_context=ParentContext)
+            def __call__(self, *, vals: list[int], mapping: Dict[str, int] = {}) -> GenericResult:
+                return GenericResult(value=sum(vals) + sum(mapping.values()))
+
+        auto_ctx = GenericCallable.__call__.__wrapped__.__auto_context__
+        self.assertTrue(issubclass(auto_ctx, ParentContext))
+
+        model = GenericCallable()
+        result = model(vals=[1, 2, 3], mapping={"a": 10})
+        self.assertEqual(result.value, 16)
+
     def test_cloudpickle_roundtrip(self):
         """Test cloudpickle roundtrip for auto_context callable."""
 
@@ -1112,6 +1188,13 @@ class TestDeclaredTypeMatches(TestCase):
         from ccflow.callable import _declared_type_matches
 
         self.assertFalse(_declared_type_matches(int, "not_a_type"))
+
+    def test_annotated_types_are_unwrapped(self):
+        """Annotated wrappers should not affect generic type matching."""
+        from ccflow.callable import _declared_type_matches
+
+        self.assertTrue(_declared_type_matches(Annotated[int, "actual"], Annotated[int, "expected"]))
+        self.assertTrue(_declared_type_matches(int, Annotated[int, "expected"]))
 
 
 class TestCallableModelGenericValidation(TestCase):

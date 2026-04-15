@@ -1,9 +1,12 @@
 """Focused tests for the FromContext-based Flow.model API."""
 
+import base64
 import graphlib
 import pickle
+import subprocess
+import sys
 from datetime import date, timedelta
-from typing import Annotated
+from typing import Annotated, Any, Literal
 
 import pytest
 from pydantic import Field, model_validator
@@ -201,6 +204,76 @@ def test_regular_param_accepts_upstream_model():
     assert model.flow.compute(FlowContext(value=7, b=12)).value == 24
 
 
+def test_regular_param_upstream_dependency_coerced():
+    """Upstream model returning str should be coerced to downstream int annotation."""
+
+    @Flow.model
+    def str_source(tag: FromContext[str]) -> str:
+        return tag
+
+    @Flow.model
+    def consumer(x: int, bonus: FromContext[int]) -> int:
+        return x + bonus
+
+    model = consumer(x=str_source())
+    # str_source returns "42" (a str); consumer expects x: int; should be coerced
+    result = model.flow.compute(tag="42", bonus=10)
+    assert result.value == 52
+    assert isinstance(result.value, int)
+
+    # Also test that invalid coercion raises
+    with pytest.raises(TypeError, match="Regular parameter"):
+        model.flow.compute(tag="not_a_number", bonus=10)
+
+
+def test_regular_param_lazy_upstream_dependency_coerced():
+    """Lazy upstream model output should be coerced on first call."""
+
+    @Flow.model
+    def lazy_source(v: FromContext[int]) -> str:
+        return str(v)
+
+    @Flow.model
+    def consumer(x: Lazy[int], bonus: FromContext[int]) -> int:
+        return x() + bonus
+
+    model = consumer(x=lazy_source())
+    result = model.flow.compute(v=7, bonus=3)
+    assert result.value == 10
+    assert isinstance(result.value, int)
+
+
+def test_regular_param_plain_callable_model_projects_dependency_context():
+    class ValueContext(ContextBase):
+        value: int
+
+    class PlainSource(CallableModel):
+        @property
+        def context_type(self):
+            return ValueContext
+
+        @property
+        def result_type(self):
+            return GenericResult[int]
+
+        @Flow.call
+        def __call__(self, context: ValueContext) -> GenericResult[int]:
+            return GenericResult(value=context.value * 10)
+
+    @Flow.model
+    def root(x: int, bonus: FromContext[int]) -> int:
+        return x + bonus
+
+    model = root(x=PlainSource())
+    deps = model.__deps__(FlowContext(value=3, bonus=7))
+
+    assert len(deps) == 1
+    dep_model, dep_contexts = deps[0]
+    assert isinstance(dep_model, PlainSource)
+    assert dep_contexts == [ValueContext(value=3)]
+    assert model.flow.compute(FlowContext(value=3, bonus=7)).value == 37
+
+
 def test_bound_regular_param_name_can_collide_with_ambient_context():
     @Flow.model
     def source(a: FromContext[int]) -> int:
@@ -379,6 +452,25 @@ def test_auto_unwrap_only_affects_external_compute_results():
 
     model = add(left=source())
     assert model.flow.compute(FlowContext(value=4, bonus=3)) == 11
+
+
+def test_auto_wrap_validates_return_type():
+    @Flow.model
+    def bad(x: FromContext[int]) -> int:
+        return "oops"
+
+    with pytest.raises(TypeError, match="Return value"):
+        bad().flow.compute(x=1)
+
+
+def test_auto_wrap_coerces_compatible_return():
+    @Flow.model
+    def coerce(x: FromContext[int]) -> float:
+        return 3
+
+    result = coerce().flow.compute(x=1)
+    assert result.value == 3.0
+    assert isinstance(result.value, float)
 
 
 def test_model_base_allows_custom_callable_model_subclass():
@@ -613,6 +705,11 @@ def test_flow_transform_binding_serializes_import_path_and_bound_args():
     assert str(binding.path).endswith(".increment_b")
 
 
+def test_flow_transform_rejects_none_for_required_param():
+    with pytest.raises(TypeError, match="Transform argument"):
+        increment_b(amount=None)
+
+
 def test_flow_transform_rejects_nested_functions():
     with pytest.raises(TypeError, match="top-level named Python functions"):
 
@@ -745,6 +842,21 @@ def test_registry_integration_for_generated_models():
     assert retrieved(SimpleContext(value=4)).value == 12
 
 
+def test_any_annotation_preserves_literal_strings():
+    """A parameter typed Any should keep literal strings; registry should not steal them."""
+    registry = ModelRegistry.root().clear()
+    dep_model = basic_loader(source="warehouse", multiplier=1)
+    registry.add("my_key", dep_model)
+
+    @Flow.model
+    def uses_any(x: Any, y: FromContext[int]) -> int:
+        return y if isinstance(x, str) else 999
+
+    model = uses_any(x="my_key")
+    result = model.flow.compute(y=3)
+    assert result.value == 3, "literal string should not be replaced by registry entry for Any-typed param"
+
+
 def test_unexpected_type_adapter_errors_are_not_silently_swallowed():
     class BrokenSchema:
         @classmethod
@@ -753,6 +865,29 @@ def test_unexpected_type_adapter_errors_are_not_silently_swallowed():
 
     @Flow.model
     def bad(x: BrokenSchema, y: FromContext[int]) -> int:
+        del x, y
+        return 0
+
+    with pytest.raises(RuntimeError, match="boom"):
+        bad(x=object())
+
+
+def test_unexpected_type_validation_errors_are_not_rewritten():
+    from pydantic_core import core_schema
+
+    class BrokenValidation:
+        @classmethod
+        def __get_pydantic_core_schema__(cls, source, handler):
+            del source, handler
+
+            def validate(value):
+                del value
+                raise RuntimeError("boom")
+
+            return core_schema.no_info_plain_validator_function(validate)
+
+    @Flow.model
+    def bad(x: BrokenValidation, y: FromContext[int]) -> int:
         del x, y
         return 0
 
@@ -784,6 +919,8 @@ def test_internal_generated_model_helpers_and_config_properties():
     config = generated_cls.__flow_model_config__
     assert config.regular_param_names == ("a",)
     assert config.contextual_param_names == ("b",)
+    assert config._params_by_name["a"] is config.param("a")
+    assert config._params_by_name["b"] is config.param("b")
     assert config.param("a").name == "a"
     assert config.param("b").name == "b"
 
@@ -804,6 +941,34 @@ def test_internal_generated_model_helpers_and_config_properties():
             return []
 
     assert flow_model_module._resolve_generated_model_bases(DerivedGeneratedBase) == (DerivedGeneratedBase,)
+
+
+def test_type_adapter_caches_are_bounded_and_clearable(monkeypatch):
+    monkeypatch.setattr(flow_model_module, "_TYPE_ADAPTER_CACHE_MAXSIZE", 2)
+    flow_model_module.clear_flow_model_caches()
+
+    try:
+        for annotation in (int, str, float):
+            flow_model_module._type_adapter(annotation)
+
+        assert list(flow_model_module._HASHABLE_TYPE_ADAPTER_CACHE) == [str, float]
+
+        unhashable_annotations = (
+            Annotated[int, []],
+            Annotated[str, []],
+            Annotated[float, []],
+        )
+        for annotation in unhashable_annotations:
+            flow_model_module._type_adapter(annotation)
+
+        assert len(flow_model_module._UNHASHABLE_TYPE_ADAPTER_CACHE) == 2
+        assert [entry[0] for entry in flow_model_module._UNHASHABLE_TYPE_ADAPTER_CACHE.values()] == list(unhashable_annotations[-2:])
+
+        flow_model_module.clear_flow_model_caches()
+        assert not flow_model_module._HASHABLE_TYPE_ADAPTER_CACHE
+        assert not flow_model_module._UNHASHABLE_TYPE_ADAPTER_CACHE
+    finally:
+        flow_model_module.clear_flow_model_caches()
 
 
 def test_internal_type_helpers_and_plain_callable_flow_api_paths():
@@ -841,6 +1006,13 @@ def test_internal_type_helpers_and_plain_callable_flow_api_paths():
 
     with pytest.raises(TypeError, match="either one context object or contextual keyword arguments"):
         model.flow.compute(SimpleContext(value=1), value=2)
+
+
+def test_unhashable_annotations_still_validate():
+    annotation = Annotated[int, []]
+
+    assert flow_model_module._can_validate_type(annotation) is True
+    assert flow_model_module._coerce_value("value", "3", annotation, "Field") == 3
 
 
 def test_compute_accepts_context_object_for_from_context_models():
@@ -989,6 +1161,15 @@ def test_context_type_validates_parameterized_annotations():
 
     assert total().flow.compute(vals=["1", "2"]).value == 3
 
+    class IntDictContext(ContextBase):
+        vals: dict[str, int]
+
+    @Flow.model(context_type=IntDictContext)
+    def total_dict(vals: FromContext[dict[str, int]]) -> int:
+        return sum(vals.values())
+
+    assert total_dict().flow.compute(vals={"a": "1", "b": 2}).value == 3
+
     class StrListContext(ContextBase):
         vals: list[str]
 
@@ -997,6 +1178,31 @@ def test_context_type_validates_parameterized_annotations():
         @Flow.model(context_type=StrListContext)
         def bad(vals: FromContext[list[int]]) -> int:
             return sum(vals)
+
+
+@pytest.mark.parametrize(
+    ("func_annotation", "context_annotation", "expected"),
+    [
+        (int, int, True),
+        (int, str, False),
+        (int | None, int, True),
+        (list[int], list[str], False),
+        (list[int], list[int], True),
+        (int | str, int, True),
+        (Literal["a"], Literal["a"], True),
+        (Literal["a"], Literal["b"], False),
+        (Annotated[int, "meta"], int, True),
+        (dict[str, list[int]], dict[str, list[int]], True),
+        (dict[str, list[int]], dict[str, list[str]], False),
+        (Any, int, True),
+        (Any, str, True),
+        (int, Any, True),
+        (str, Any, True),
+        (Any, Any, True),
+    ],
+)
+def test_context_type_annotations_compatible_cases(func_annotation, context_annotation, expected):
+    assert flow_model_module._context_type_annotations_compatible(func_annotation, context_annotation) is expected
 
 
 def test_compute_forwards_options_with_custom_evaluator():
@@ -1016,6 +1222,11 @@ def test_compute_forwards_options_with_custom_evaluator():
     assert result1.value == 10
     assert result2.value == 10
     assert calls["count"] == 1
+
+
+def test_unset_flow_input_pickle_roundtrip_preserves_singleton():
+    restored = pickle.loads(pickle.dumps(flow_model_module._UNSET_FLOW_INPUT, protocol=5))
+    assert restored is flow_model_module._UNSET_FLOW_INPUT
 
 
 def test_compute_forwards_options_with_graph_evaluator():
@@ -1078,3 +1289,81 @@ def test_compute_forwards_options_for_plain_callable_model():
     assert result1.value == 15
     assert result2.value == 15
     assert calls["count"] == 1
+
+
+def test_generated_models_cross_process_pickle():
+    """Module-level @Flow.model instances are deserializable in a separate process."""
+    model = basic_loader(source="warehouse", multiplier=3)
+    data = pickle.dumps(model, protocol=5)
+    encoded = base64.b64encode(data).decode()
+    script = (
+        "import pickle, base64\n"
+        f"data = base64.b64decode('{encoded}')\n"
+        "model = pickle.loads(data)\n"
+        "from ccflow import FlowContext\n"
+        "result = model.flow.compute(value=4)\n"
+        "assert result.value == 12, f'Expected 12, got {result.value}'\n"
+    )
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, f"Cross-process unpickle failed:\n{result.stderr}"
+
+
+def test_generated_models_cross_process_cloudpickle():
+    """Module-level @Flow.model instances are deserializable via cloudpickle in a separate process."""
+    from ray.cloudpickle import dumps as rcpdumps
+
+    model = basic_loader(source="warehouse", multiplier=3)
+    data = rcpdumps(model, protocol=5)
+    encoded = base64.b64encode(data).decode()
+    script = (
+        "import base64\n"
+        "from ray.cloudpickle import loads as rcploads\n"
+        f"data = base64.b64decode('{encoded}')\n"
+        "model = rcploads(data)\n"
+        "from ccflow import FlowContext\n"
+        "result = model.flow.compute(value=4)\n"
+        "assert result.value == 12, f'Expected 12, got {result.value}'\n"
+    )
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, f"Cross-process cloudpickle failed:\n{result.stderr}"
+
+
+def test_model_base_fields_visible_in_bound_inputs():
+    """model_base fields that are explicitly set should appear in bound_inputs."""
+
+    class CustomFlowBase(CallableModel):
+        multiplier: int = 1
+
+        @Flow.call
+        def __call__(self, context: SimpleContext) -> GenericResult[int]:
+            return GenericResult(value=context.value)
+
+    @Flow.model(model_base=CustomFlowBase)
+    def add(a: int, b: FromContext[int]) -> int:
+        return a + b
+
+    model = add(a=10, multiplier=3)
+    assert model.flow.bound_inputs == {"a": 10, "multiplier": 3}
+
+    # Default-only model_base field is NOT in bound_inputs
+    model_default = add(a=10)
+    assert model_default.flow.bound_inputs == {"a": 10}
+
+
+def test_model_base_fields_rejected_by_compute():
+    """compute() should reject kwargs matching model_base field names."""
+
+    class CustomFlowBase(CallableModel):
+        multiplier: int = 1
+
+        @Flow.call
+        def __call__(self, context: SimpleContext) -> GenericResult[int]:
+            return GenericResult(value=context.value)
+
+    @Flow.model(model_base=CustomFlowBase)
+    def add(a: int, b: FromContext[int]) -> int:
+        return a + b
+
+    model = add(a=10, multiplier=3)
+    with pytest.raises(TypeError, match="does not accept model configuration override\\(s\\): multiplier"):
+        model.flow.compute(b=5, multiplier=99)

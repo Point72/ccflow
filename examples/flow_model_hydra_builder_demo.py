@@ -79,12 +79,22 @@ def comparison_window(start_date: date, end_date: date, comparison: ComparisonNa
     return previous_start, previous_end
 
 
+@Flow.transform
+def comparison_window_patch(
+    start_date: FromContext[date],
+    end_date: FromContext[date],
+    comparison: ComparisonName,
+) -> dict[str, object]:
+    previous_start, previous_end = comparison_window(start_date, end_date, comparison)
+    return {
+        "start_date": previous_start,
+        "end_date": previous_end,
+    }
+
+
 def comparison_input(model: CallableModel, comparison: ComparisonName) -> BoundModel:
     """Apply a named comparison policy to one dependency."""
-    return model.flow.with_inputs(
-        start_date=lambda ctx: comparison_window(ctx.start_date, ctx.end_date, comparison)[0],
-        end_date=lambda ctx: comparison_window(ctx.start_date, ctx.end_date, comparison)[1],
-    )
+    return model.flow.with_inputs(comparison_window_patch(comparison=comparison))
 
 
 def build_comparison(current: CallableModel, *, comparison: ComparisonName):

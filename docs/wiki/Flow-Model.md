@@ -1,6 +1,4 @@
-# Flow.model Design
-
-## Overview
+# Flow Model
 
 `@Flow.model` turns a plain Python function into a real `CallableModel`.
 
@@ -17,8 +15,12 @@ The goal is that a reader can look at one function signature and immediately
 see:
 
 1. which values come from runtime context,
-2. which values must be bound as regular configuration or dependencies,
-3. how to rewrite contextual inputs for one branch of the graph.
+1. which values must be bound as regular configuration or dependencies,
+1. how to rewrite contextual inputs for one branch of the graph.
+
+Generated models still plug into the existing evaluator, registry, cache,
+Hydra, and serialization machinery — `@Flow.model` does not create a new
+execution engine.
 
 ## Core Example
 
@@ -130,9 +132,9 @@ conversion into a regular bound parameter.
 Contextual precedence is:
 
 1. branch-local `.flow.with_inputs(...)` rewrites,
-2. incoming runtime context,
-3. contextual defaults stored on the model instance,
-4. function defaults.
+1. incoming runtime context,
+1. contextual defaults stored on the model instance,
+1. function defaults.
 
 ## `.flow.compute(...)`
 
@@ -276,11 +278,7 @@ def revenue_growth(current: float, previous: float, start_date: FromContext[date
     return {"window_end": end_date, "growth_pct": round((current - previous) / previous * 100, 2)}
 
 
-@Flow.transform
-def previous_start(start_date: FromContext[date], days: int) -> date:
-    return start_date - timedelta(days=days)
-
-
+# Patch transform — shifts multiple fields together, passed positionally:
 @Flow.transform
 def previous_window(start_date: FromContext[date], end_date: FromContext[date], days: int) -> dict[str, object]:
     return {
@@ -289,11 +287,21 @@ def previous_window(start_date: FromContext[date], end_date: FromContext[date], 
     }
 
 
+# Field transform — shifts one field, passed as a keyword:
+@Flow.transform
+def shift_end(end_date: FromContext[date], days: int) -> date:
+    return end_date - timedelta(days=days)
+
+
 current = load_revenue(region="us")
+
+# Patch transform: shift both dates back 30 days
 previous = current.flow.with_inputs(previous_window(days=30))
-comparison = current.flow.with_inputs(
+
+# Mix both forms: patch shifts start_date, keyword shifts end_date independently
+custom = current.flow.with_inputs(
     previous_window(days=30),
-    start_date=previous_start(days=7),
+    end_date=shift_end(days=7),  # keyword override replaces end_date from the patch
 )
 
 growth = revenue_growth(current=current, previous=previous)
@@ -301,12 +309,11 @@ result = growth(DateRangeContext(start_date=date(2024, 1, 1), end_date=date(2024
 ```
 
 In this example, `current` and `previous` share the same underlying
-`load_revenue` configuration but see different date windows at runtime. The
-`with_inputs()` call on `previous` shifts the dates back 30 days without
-affecting `current`. `comparison` demonstrates both rewrite forms:
-`previous_window(days=30)` is a patch transform (positional, returns a mapping),
-while `previous_start(days=7)` is a field transform (keyword, returns one
-value for `start_date`).
+`load_revenue` configuration but see different date windows at runtime.
+`previous` uses a patch transform to shift both dates back 30 days.
+`custom` demonstrates combining both forms: the patch sets both dates, then the
+keyword override replaces `end_date` with a different shift. Keyword overrides
+always apply last.
 
 Key rules:
 

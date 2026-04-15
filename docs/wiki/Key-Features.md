@@ -6,233 +6,125 @@
 - [Evaluators](#evaluators)
 - [Results](#results)
 
-`ccflow` (Composable Configuration Flow) is a collection of tools for workflow
-configuration, orchestration, and dependency injection. It is intended to stay
-flexible across ETL workflows, model training, report generation, and service
-configuration.
+`ccflow` (Composable Configuration Flow) is a collection of tools for workflow configuration, orchestration, and dependency injection.
+It is intended to be flexible enough to handle diverse use cases, including data retrieval, validation, transformation, and loading (i.e. ETL workflows), model training, microservice configuration, and automated report generation.
 
 ## Base Model
 
-`BaseModel` is the core pydantic-based model class used throughout `ccflow`.
-Models are regular data objects with validation, serialization, and registry
-support.
+Central to `ccflow` is the `BaseModel` class.
+`BaseModel` is the base class for models in the `ccflow` framework.
+A model is basically a data class (class with attributes).
+The naming was inspired by the open source library [Pydantic](https://docs.pydantic.dev/latest/) (`BaseModel` actually inherits from the Pydantic base model class).
 
 ## Callable Model
 
-`CallableModel` is a `BaseModel` that can be executed with a context
-(`ContextBase`) and produces a result (`ResultBase`).
+`CallableModel` is the base class for a special type of `BaseModel` which can be called.
+`CallableModel`'s are called with a context (something that derives from `ContextBase`) and returns a result (something that derives from `ResultBase`).
+As an example, you may have a `SQLReader` callable model that when called with a `DateRangeContext` returns a `ArrowResult` (wrapper around a Arrow table) with data in the date range defined by the context by querying some SQL database.
 
-### Flow.model Decorator
-
-`@Flow.model` is the plain-function front door to `CallableModel`.
-
-It generates a real `CallableModel` class with proper `__call__` and `__deps__`
-methods, so it still plugs into the normal evaluator, registry, cache, Hydra,
-and serialization machinery.
-
-If the function returns a plain value instead of a `ResultBase`, the generated
-model wraps it in `GenericResult`.
-
-`@Flow.transform` is the companion API for defining serializable contextual
-rewrites used by `.flow.with_inputs(*patches, **field_overrides)`. Transforms
-that return a mapping are **patch transforms** (passed positionally); transforms
-that return a single value are **field transforms** (passed by keyword).
-
-#### Primary Authoring Model
-
-`FromContext[T]` is the only marker for runtime/contextual inputs.
-
-```python
-from ccflow import Flow, FromContext
-
-
-@Flow.model
-def add(a: int, b: FromContext[int]) -> int:
-    return a + b
-
-
-model = add(a=10)
-assert model.flow.compute(b=5).value == 15
-
-prefilled = add(a=10, b=7)
-assert prefilled.flow.compute().value == 17
-```
-
-That means:
-
-- `a` is a regular parameter,
-- `b` is contextual,
-- `.flow.compute(...)` only accepts contextual inputs.
-
-`prefilled = add(a=10, b=7)` creates a different model instance with a stored
-contextual default for `b`. `compute()` does not mutate the model; it resolves
-the remaining contextual inputs for that execution.
-
-Regular parameters can be satisfied by:
-
-- literal values,
-- function defaults,
-- upstream `CallableModel`s.
-
-Contextual parameters can be satisfied by:
-
-- runtime context,
-- contextual defaults stored on the model instance,
-- function defaults.
-
-Contextual parameters cannot be bound to `CallableModel` values.
-
-#### Nominal Context Validation
-
-You can keep the `FromContext[...]` style while validating those fields against
-an existing context type:
-
-```python
-from datetime import date
-from ccflow import DateRangeContext, Flow, FromContext
-
-
-@Flow.model(context_type=DateRangeContext)
-def load_data(source: str, start_date: FromContext[date], end_date: FromContext[date]) -> float:
-    return 125.0
-```
-
-This validates/coerces the named `FromContext[...]` fields against
-`DateRangeContext`, but generated `@Flow.model` instances still report
-`FlowContext` as their runtime `context_type`.
-
-If the function genuinely needs the runtime context object itself inside the
-function body on each call, write a normal `CallableModel` subclass instead of
-using `@Flow.model`.
-
-#### Composing Dependencies
-
-Passing an upstream model as an ordinary argument is the main composition story.
-
-```python
-from datetime import date, timedelta
-from ccflow import DateRangeContext, Flow, FromContext
-
-
-@Flow.model
-def load_revenue(region: str, start_date: FromContext[date], end_date: FromContext[date]) -> float:
-    days = (end_date - start_date).days + 1
-    return 1000.0 + days * 10.0
-
-
-@Flow.model
-def revenue_growth(current: float, previous: float, start_date: FromContext[date], end_date: FromContext[date]) -> dict:
-    return {"window_end": end_date, "growth_pct": round((current - previous) / previous * 100, 2)}
-
-
-@Flow.transform
-def previous_window(start_date: FromContext[date], end_date: FromContext[date], days: int) -> dict[str, object]:
-    return {
-        "start_date": start_date - timedelta(days=days),
-        "end_date": end_date - timedelta(days=days),
-    }
-
-
-current = load_revenue(region="us")
-
-# Reuse the same model with a shifted date window for "previous":
-previous = current.flow.with_inputs(previous_window(days=30))
-
-growth = revenue_growth(current=current, previous=previous)
-
-# Execute — current sees Jan 2024, previous sees Dec 2023:
-ctx = DateRangeContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31))
-result = growth(ctx)
-```
-
-#### Deferred Execution Helpers
-
-`model.flow.compute(...)` accepts either contextual keyword arguments or one
-context object and returns the same result as `model(context)` (unless
-`auto_unwrap=True` is set, in which case auto-wrapped `GenericResult` values
-are unwrapped to plain values).
-
-`model.flow.with_inputs(*patches, **field_overrides)` rewrites contextual inputs
-on one dependency edge. Positional args are patch transforms that return a
-mapping of contextual field names. Keyword overrides accept either literal
-values or field transforms. The rewrite is branch-local and serializes as data,
-not raw callable state.
-
-Generated models also expose introspection helpers:
-
-```python
-model = add(a=10)
-model.flow.context_inputs   # {"b": int}        — the full contextual contract
-model.flow.unbound_inputs   # {"b": int}        — contextual fields still needed at runtime
-model.flow.bound_inputs     # {"a": 10}         — all construction-time values
-```
-
-#### Lazy Dependencies
-
-`Lazy[T]` is the lazy type-level marker for dependency parameters.
-
-```python
-from ccflow import Flow, FromContext, Lazy
-
-
-@Flow.model
-def load_value(value: FromContext[int]) -> int:
-    return value * 10
-
-
-@Flow.model
-def choose(current: int, deferred: Lazy[int], threshold: FromContext[int]) -> int:
-    if current > threshold:
-        return current
-    return deferred()
-```
-
-Use `Lazy[T]` when a dependency is expensive and the function should decide
-whether to execute it. Without `Lazy[T]`, all upstream `CallableModel`
-dependencies are evaluated eagerly before the function runs. With it, the
-dependency is wrapped in a zero-argument thunk that the function calls
-explicitly (or never calls, avoiding the cost entirely).
+`@Flow.model` is a plain-function API for defining `CallableModel`s with normal Python function signatures.
+It keeps the same evaluator, registry, cache, and result machinery while making contextual execution more ergonomic via helpers like `.flow.compute(...)` and `.flow.with_inputs(...)`.
+See [Flow Model](Flow-Model) for the full guide.
 
 ## Model Registry
 
-The model registry lets you register models by name and resolve them later,
-including from config-driven workflows.
-
-- root registry access: `ModelRegistry.root()`
-- add and remove models by name
-- reuse shared instances through registry references
+A `ModelRegistry` is a named collection of models.
+A `ModelRegistry` can be loaded from YAML configuration, which means you can define a collection of models using YAML.
+This is really powerful because this gives you a easy way to define a collection of Python objects via configuration.
 
 ## Models
 
-The `ccflow.models` package contains concrete model implementations that build
-on the framework primitives.
+Although you are free to define your own models (`BaseModel` implementations) to use in your flow graph,
+`ccflow` comes with some models that you can use off the shelf to solve common problems. `ccflow` comes with a range of models for reading data.
 
-Use these when you want reusable, prebuilt model classes instead of authoring
-your own `CallableModel` or `@Flow.model` stage.
+The following table summarizes the available models.
+
+> [!NOTE]
+>
+> Some models are still in the process of being open sourced.
 
 ## Publishers
 
-Publishers handle result publication and side-effectful output sinks.
+`ccflow` also comes with a range of models for writing data.
+These are referred to as publishers.
+You can "chain" publishers and callable models using `PublisherModel` to call a `CallableModel` and publish the results in one step.
+In fact, `ccflow` comes with several implementations of `PublisherModel` for common publishing use cases.
 
-They are useful when a workflow result needs to be written to an external
-system rather than only returned to the caller.
+The following table summarizes the "publisher" models.
+
+> [!NOTE]
+>
+> Some models are still in the process of being open sourced.
+
+| Name                         | Path                | Description                                                                                                                                                 |
+| :--------------------------- | :------------------ | :---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DictTemplateFilePublisher`  | `ccflow.publishers` | Publish data to a file after populating a Jinja template.                                                                                                   |
+| `GenericFilePublisher`       | `ccflow.publishers` | Publish data using a generic "dump" Callable. Uses `smart_open` under the hood so that local and cloud paths are supported.                                 |
+| `JSONPublisher`              | `ccflow.publishers` | Publish data to file in JSON format.                                                                                                                        |
+| `PandasFilePublisher`        | `ccflow.publishers` | Publish a pandas data frame to a file using an appropriate method on pd.DataFrame. For large-scale exporting (using parquet), see `PandasParquetPublisher`. |
+| `NarwhalsFilePublisher`      | `ccflow.publishers` | Publish a narwhals data frame to a file using an appropriate method on nw.DataFrame.                                                                        |
+| `PicklePublisher`            | `ccflow.publishers` | Publish data to a pickle file.                                                                                                                              |
+| `PydanticJSONPublisher`      | `ccflow.publishers` | Publish a pydantic model to a json file. See [Pydantic modeljson](https://docs.pydantic.dev/latest/concepts/serialization/#modelmodel_dump)                 |
+| `YAMLPublisher`              | `ccflow.publishers` | Publish data to file in YAML format.                                                                                                                        |
+| `CompositePublisher`         | `ccflow.publishers` | Highly configurable, publisher that decomposes a pydantic BaseModel or a dictionary into pieces and publishes each piece separately.                        |
+| `PrintPublisher`             | `ccflow.publishers` | Print data using python standard print.                                                                                                                     |
+| `LogPublisher`               | `ccflow.publishers` | Print data using python standard logging.                                                                                                                   |
+| `PrintJSONPublisher`         | `ccflow.publishers` | Print data in JSON format.                                                                                                                                  |
+| `PrintYAMLPublisher`         | `ccflow.publishers` | Print data in YAML format.                                                                                                                                  |
+| `PrintPydanticJSONPublisher` | `ccflow.publishers` | Print pydantic model as json. See https://docs.pydantic.dev/latest/concepts/serialization/#modelmodel_dump_json                                             |
+| `ArrowDatasetPublisher`      | *Coming Soon!*      |                                                                                                                                                             |
+| `PandasDeltaPublisher`       | *Coming Soon!*      |                                                                                                                                                             |
+| `EmailPublisher`             | *Coming Soon!*      |                                                                                                                                                             |
+| `MatplotlibFilePublisher`    | *Coming Soon!*      |                                                                                                                                                             |
+| `MLFlowArtifactPublisher`    | *Coming Soon!*      |                                                                                                                                                             |
+| `MLFlowPublisher`            | *Coming Soon!*      |                                                                                                                                                             |
+| `PandasParquetPublisher`     | *Coming Soon!*      |                                                                                                                                                             |
+| `PlotlyFilePublisher`        | *Coming Soon!*      |                                                                                                                                                             |
+| `XArrayPublisher`            | *Coming Soon!*      |                                                                                                                                                             |
 
 ## Evaluators
 
-Evaluators control how `CallableModel`s execute.
+`ccflow` comes with "evaluators" that allows you to evaluate (i.e. run) `CallableModel` s in different ways.
 
-Key point for `@Flow.model`: it does not create a new execution engine. It
-authors models that still run through the existing evaluator stack.
+The following table summarizes the "evaluator" models.
 
-Depending on your evaluator setup, you can add logging, caching, graph-aware
-execution, or custom execution policies.
+> [!NOTE]
+>
+> Some models are still in the process of being open sourced.
+
+| Name                                | Path                | Description                                                                                                                    |
+| :---------------------------------- | :------------------ | :----------------------------------------------------------------------------------------------------------------------------- |
+| `LazyEvaluator`                     | `ccflow.evaluators` | Evaluator that only actually runs the callable once an attribute of the result is queried (by hooking into `__getattribute__`) |
+| `LoggingEvaluator`                  | `ccflow.evaluators` | Evaluator that logs information about evaluating the callable.                                                                 |
+| `MemoryCacheEvaluator`              | `ccflow.evaluators` | Evaluator that caches results in memory.                                                                                       |
+| `MultiEvaluator`                    | `ccflow.evaluators` | An evaluator that combines multiple evaluators.                                                                                |
+| `GraphEvaluator`                    | `ccflow.evaluators` | Evaluator that evaluates the dependency graph of callable models in topologically sorted order.                                |
+| `ChunkedDateRangeEvaluator`         | *Coming Soon!*      |                                                                                                                                |
+| `ChunkedDateRangeResultsAggregator` | *Coming Soon!*      |                                                                                                                                |
+| `RayChunkedDateRangeEvaluator`      | *Coming Soon!*      |                                                                                                                                |
+| `DependencyTrackingEvaluator`       | *Coming Soon!*      |                                                                                                                                |
+| `DiskCacheEvaluator`                | *Coming Soon!*      |                                                                                                                                |
+| `ParquetCacheEvaluator`             | *Coming Soon!*      |                                                                                                                                |
+| `RayCacheEvaluator`                 | *Coming Soon!*      |                                                                                                                                |
+| `RayGraphEvaluator`                 | *Coming Soon!*      |                                                                                                                                |
+| `RayDelayedDistributedEvaluator`    | *Coming Soon!*      |                                                                                                                                |
+| `ParquetCacheEvaluator`             | *Coming Soon!*      |                                                                                                                                |
+| `RetryEvaluator`                    | *Coming Soon!*      |                                                                                                                                |
 
 ## Results
 
-`ResultBase` is the common base class for workflow results.
+A Result is an object that holds the results from a callable model. It provides the equivalent of a strongly typed dictionary where the keys and schema are known upfront.
 
-`GenericResult[T]` is the default wrapper used when:
+The following table summarizes the "result" models.
 
-- a model naturally wants one value payload, or
-- a `@Flow.model` function returns a plain Python value instead of a concrete
-  `ResultBase` subclass.
+| Name                      | Path                     | Description                                                                                                                                                                                                              |
+| :------------------------ | :----------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GenericResult`           | `ccflow.result`          | A generic result (holds anything).                                                                                                                                                                                       |
+| `DictResult`              | `ccflow.result`          | A generic dict (key/value) result.                                                                                                                                                                                       |
+| `ArrowResult`             | `ccflow.result.pyarrow`  | Holds an arrow table.                                                                                                                                                                                                    |
+| `ArrowDateRangeResult`    | `ccflow.result.pyarrow`  | Extension of `ArrowResult` for representing a table over a date range that can be divided by date, such that generation of any sub-range of dates gives the same results as the original table filtered for those dates. |
+| `NarwhalsResult`          | `ccflow.result.narwhals` | Holds a narwhals `DataFrame` or `LazyFrame`.                                                                                                                                                                             |
+| `NarwhalsDataFrameResult` | `ccflow.result.narwhals` | Holds a narwhals eager `DataFrame`.                                                                                                                                                                                      |
+| `NumpyResult`             | `ccflow.result.numpy`    | Holds a numpy array.                                                                                                                                                                                                     |
+| `PandasResult`            | `ccflow.result.pandas`   | Holds a pandas dataframe.                                                                                                                                                                                                |
+| `XArrayResult`            | `ccflow.result.xarray`   | Holds an xarray.                                                                                                                                                                                                         |
