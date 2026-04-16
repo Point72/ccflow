@@ -12,7 +12,14 @@ from pydantic import Field, PrivateAttr, field_validator
 from typing_extensions import override
 
 from ..base import BaseModel, make_lazy_result
-from ..callable import CallableModel, ContextBase, EvaluatorBase, ModelEvaluationContext, ResultType
+from ..callable import (
+    CallableModel,
+    ContextBase,
+    EvaluatorBase,
+    ModelEvaluationContext,
+    ResultType,
+    TransparentModelEvaluationContext,
+)
 
 __all__ = [
     "cache_key",
@@ -53,16 +60,25 @@ def combine_evaluators(first: Optional[EvaluatorBase], second: Optional[Evaluato
 
 
 class MultiEvaluator(EvaluatorBase):
-    """An evaluator that combines multiple evaluators."""
+    """An evaluator that combines multiple evaluators.
+
+    Each child evaluator is wrapped in a ModelEvaluationContext using its own
+    ``make_evaluation_context()`` method, so transparent children produce
+    ``TransparentModelEvaluationContext`` layers that can be skipped during
+    cache key computation.
+    """
 
     evaluators: List[EvaluatorBase] = Field(
         description="The list of evaluators to combine. The first evaluator in the list will be called first during evaluation."
     )
 
+    def is_transparent(self, context: ModelEvaluationContext) -> bool:
+        return all(e.is_transparent(context) for e in self.evaluators)
+
     @override
     def __call__(self, context: ModelEvaluationContext) -> ResultType:
         for evaluator in self.evaluators:
-            context = ModelEvaluationContext(model=evaluator, context=context, options=context.options)
+            context = evaluator.make_evaluation_context(context, options=context.options)
         return context()
 
 
@@ -70,6 +86,9 @@ class FallbackEvaluator(EvaluatorBase):
     """An evaluator that tries a list of evaluators in turn until one succeeds."""
 
     evaluators: List[EvaluatorBase] = Field(description="The list of evaluators to try (in order).")
+
+    def is_transparent(self, context: ModelEvaluationContext) -> bool:
+        return all(e.is_transparent(context) for e in self.evaluators)
 
     @override
     def __call__(self, context: ModelEvaluationContext) -> ResultType:
@@ -119,6 +138,9 @@ class LoggingEvaluator(EvaluatorBase):
     verbose: bool = Field(True, description="Whether to output the model definition as part of logging")
     log_result: bool = Field(False, description="Whether to log the result of the evaluation")
     format_config: FormatConfig = Field(FormatConfig(), description="Configuration for formatting the result of the evaluation if log_result=True")
+
+    def is_transparent(self, context: ModelEvaluationContext) -> bool:
+        return True
 
     @field_validator("log_level", mode="before")
     @classmethod
@@ -195,12 +217,30 @@ class LoggingEvaluator(EvaluatorBase):
 
 
 def cache_key(flow_obj: Union[ModelEvaluationContext, ContextBase, CallableModel]) -> bytes:
-    """Returns a key suitable for use in caching.
+    """Returns a key suitable for use in caching and dependency graph deduplication.
+
+    For ``ModelEvaluationContext`` inputs, strips ``TransparentModelEvaluationContext``
+    layers (evaluators that don't modify the return value) so that the key depends
+    only on the underlying model, context, fn, options, and any non-transparent
+    evaluators in the chain.
 
     Args:
         flow_obj: The object to be tokenized to form the cache key.
     """
-    if isinstance(flow_obj, (ModelEvaluationContext, ContextBase, CallableModel)):
+    if isinstance(flow_obj, ModelEvaluationContext):
+        fn = flow_obj.fn
+        non_transparent = []
+        while isinstance(flow_obj.context, ModelEvaluationContext):
+            fn = flow_obj.fn if flow_obj.fn != "__call__" else fn
+            if not isinstance(flow_obj, TransparentModelEvaluationContext):
+                non_transparent.append(flow_obj.model)
+            flow_obj = flow_obj.context
+        d = flow_obj.model_dump(mode="python")
+        d["fn"] = fn if fn != "__call__" else flow_obj.fn
+        if non_transparent:
+            d["_evaluators"] = [e.model_dump(mode="python") for e in non_transparent]
+        return dask.base.tokenize(d).encode("utf-8")
+    elif isinstance(flow_obj, (ContextBase, CallableModel)):
         return dask.base.tokenize(flow_obj.model_dump(mode="python")).encode("utf-8")
     else:
         raise TypeError(f"object of type {type(flow_obj)} cannot be serialized by this function!")
@@ -213,8 +253,14 @@ class MemoryCacheEvaluator(EvaluatorBase):
     _cache: Dict[bytes, ResultType] = PrivateAttr({})
     _ids: Dict[bytes, ModelEvaluationContext] = PrivateAttr({})
 
+    def is_transparent(self, context: ModelEvaluationContext) -> bool:
+        return True
+
     def key(self, context: ModelEvaluationContext):
-        """Function to convert a ModelEvaluationContext to a key"""
+        """Function to convert a ModelEvaluationContext to a cache key.
+
+        Delegates to ``cache_key()`` which strips transparent evaluator layers.
+        """
         return cache_key(context)
 
     @property
@@ -288,6 +334,9 @@ class GraphEvaluator(EvaluatorBase):
     """
 
     _is_evaluating: bool = PrivateAttr(False)
+
+    def is_transparent(self, context: ModelEvaluationContext) -> bool:
+        return True
 
     @override
     def __call__(self, context: ModelEvaluationContext) -> ResultType:
