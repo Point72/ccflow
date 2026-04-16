@@ -589,12 +589,20 @@ An evaluator is basically another form of callable model, with a few caveats
 The `ModelEvaluationContext` has fields for the model, the context, the function to evaluate (i.e. `__call__`), and the `FlowOptions`.
 It too, has a `__call__` method that will evaluate the function on the model with the provided context (but ignoring any options).
 
+Evaluators that do not modify the return value (e.g. logging, caching, timing) should override the `is_transparent` method to return `True`.
+This allows `cache_key()` to skip these layers when computing cache keys, so that wrapping a model with different transparent evaluators does not change its cache identity.
+Evaluators that transform the result should inherit from `EvaluatorBase` directly and leave `is_transparent` as the default (`False`).
+
 Below we illustrate how to write a really simple evaluator that just prints the options and delegates to the `ModelEvaluationContext` to get the normal result.
+Since it does not modify the return value, it overrides `is_transparent` to return `True`.
 
 ```python
 from ccflow import EvaluatorBase, ModelEvaluationContext, ResultType
 
 class MyEvaluator(EvaluatorBase):
+
+    def is_transparent(self, context: ModelEvaluationContext) -> bool:
+        return True
 
     def __call__(self, context: ModelEvaluationContext) -> ResultType:
         print("Custom evaluator with options:", context.options)

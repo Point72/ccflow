@@ -561,6 +561,7 @@ class ModelRegistry(BaseModel, collections.abc.Mapping):
         cfg: DictConfig,
         overwrite: bool = False,
         skip_exceptions: bool = False,
+        resolve_from: Optional["ModelRegistry"] = None,
     ) -> Self:
         """Load from OmegaConf DictConfig that follows hydra conventions.
 
@@ -568,9 +569,11 @@ class ModelRegistry(BaseModel, collections.abc.Mapping):
             cfg: An OmegaConf DictConfig
             overwrite: Whether to allow overwriting of names that already exist
             skip_exceptions: Whether to skip any exceptions that are thrown when validating and registering models
+            resolve_from: An optional registry to use as the root for resolving absolute paths. When provided,
+                absolute paths (starting with ``/``) resolve from this registry instead of from ``self``.
         """
         loader = _ModelRegistryLoader(overwrite=overwrite)
-        return loader.load_config(cfg, self, skip_exceptions=skip_exceptions)
+        return loader.load_config(cfg, self, skip_exceptions=skip_exceptions, resolve_from=resolve_from)
 
     def create_config_from_path(
         self,
@@ -670,7 +673,9 @@ class _ModelRegistryLoader:
 
         return models_to_register
 
-    def load_config(self, cfg: DictConfig, registry: ModelRegistry, skip_exceptions: bool = False) -> ModelRegistry:
+    def load_config(
+        self, cfg: DictConfig, registry: ModelRegistry, skip_exceptions: bool = False, resolve_from: Optional[ModelRegistry] = None
+    ) -> ModelRegistry:
         """Load from OmegaConf DictConfig that follows hydra conventions."""
         # Here we use hydra's 'instantiate' to instantiate models,
         # because it provides a standard way to resolve the class name
@@ -685,7 +690,11 @@ class _ModelRegistryLoader:
             from hydra.errors import InstantiationException
             from hydra.utils import instantiate
 
-        models_to_register = self._make_subregistries(cfg, [registry])
+        if resolve_from is not None and resolve_from is not registry:
+            initial_chain = [resolve_from, registry]
+        else:
+            initial_chain = [registry]
+        models_to_register = self._make_subregistries(cfg, initial_chain)
         while True:
             unresolved_models = []
             for registries, k, v, _ in models_to_register:

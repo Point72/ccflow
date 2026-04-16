@@ -9,9 +9,11 @@ from ccflow import (
     DateContext,
     DateRangeContext,
     Evaluator,
+    EvaluatorBase,
     FlowOptionsOverride,
     ModelEvaluationContext,
     NullContext,
+    TransparentModelEvaluationContext,
 )
 from ccflow.evaluators import (
     FallbackEvaluator,
@@ -257,6 +259,73 @@ class TestCacheKey(TestCase):
         assert cache_key(mec1) == cache_key(mec2)
         assert cache_key(mec3) != cache_key(mec1)
 
+    def test_transparent_mec_stripped(self):
+        """TransparentModelEvaluationContext layers are stripped from cache keys."""
+        m = MyDateCallable(offset=1)
+        ctx = DateContext(date=date(2022, 1, 1))
+        inner = ModelEvaluationContext(model=m, context=ctx)
+        wrapped = TransparentModelEvaluationContext(model=LoggingEvaluator(), context=inner)
+        assert cache_key(inner) == cache_key(wrapped)
+
+    def test_opaque_mec_preserved(self):
+        """Non-transparent MEC layers produce different cache keys."""
+
+        class OpaqueEval(EvaluatorBase):
+            def __call__(self, context: ModelEvaluationContext):
+                return context()
+
+        m = MyDateCallable(offset=1)
+        ctx = DateContext(date=date(2022, 1, 1))
+        inner = ModelEvaluationContext(model=m, context=ctx)
+        wrapped = ModelEvaluationContext(model=OpaqueEval(), context=inner)
+        assert cache_key(inner) != cache_key(wrapped)
+
+    def test_stacked_transparent_stripped(self):
+        """Multiple stacked TransparentMEC layers are all stripped."""
+        m = MyDateCallable(offset=1)
+        ctx = DateContext(date=date(2022, 1, 1))
+        inner = ModelEvaluationContext(model=m, context=ctx)
+        layer1 = TransparentModelEvaluationContext(model=LoggingEvaluator(), context=inner)
+        layer2 = TransparentModelEvaluationContext(model=MemoryCacheEvaluator(), context=layer1)
+        assert cache_key(inner) == cache_key(layer2)
+
+    def test_sandwich_transparent_between_opaque(self):
+        """Transparent layer sandwiched between opaque layers is stripped, opaques preserved."""
+
+        class OpaqueEval(EvaluatorBase):
+            tag: str = "default"
+
+            def __call__(self, context: ModelEvaluationContext):
+                return context()
+
+        m = MyDateCallable(offset=1)
+        ctx = DateContext(date=date(2022, 1, 1))
+        inner = ModelEvaluationContext(model=m, context=ctx)
+        opaque1 = ModelEvaluationContext(model=OpaqueEval(tag="inner"), context=inner)
+        transparent = TransparentModelEvaluationContext(model=LoggingEvaluator(), context=opaque1)
+        opaque2 = ModelEvaluationContext(model=OpaqueEval(tag="outer"), context=transparent)
+        # Both opaque evaluators should be in the key; the transparent one should not
+        assert cache_key(opaque2) != cache_key(inner)
+        # Same sandwich should give consistent keys
+        opaque2b = ModelEvaluationContext(
+            model=OpaqueEval(tag="outer"),
+            context=TransparentModelEvaluationContext(
+                model=LoggingEvaluator(), context=ModelEvaluationContext(model=OpaqueEval(tag="inner"), context=inner)
+            ),
+        )
+        assert cache_key(opaque2) == cache_key(opaque2b)
+
+    def test_fn_deps_preserved_through_transparent(self):
+        """fn='__deps__' is preserved when walking through transparent layers."""
+        m = MyDateCallable(offset=1)
+        ctx = DateContext(date=date(2022, 1, 1))
+        inner = ModelEvaluationContext(model=m, context=ctx, fn="__deps__")
+        wrapped = TransparentModelEvaluationContext(model=LoggingEvaluator(), context=inner)
+        # Both should produce the same key, and it should differ from __call__
+        assert cache_key(inner) == cache_key(wrapped)
+        call_inner = ModelEvaluationContext(model=m, context=ctx, fn="__call__")
+        assert cache_key(inner) != cache_key(call_inner)
+
 
 class TestMemoryCacheEvaluator(TestCase):
     def test_basic(self):
@@ -354,6 +423,74 @@ class TestMemoryCacheEvaluator(TestCase):
                 out2 = m1.current_time(DateContext(date=date(2022, 1, 1)))
                 self.assertGreater(out2, out1)
         self.assertEqual(len(captured.records), 2)
+
+    def test_cache_key_stable_across_evaluators(self):
+        """Cache keys should not change when wrapping with non-caching evaluators (e.g. LoggingEvaluator)."""
+        m1 = MyDateCallable(offset=1)
+        cache = MemoryCacheEvaluator()
+        ctx = DateContext(date=date(2022, 1, 1))
+
+        # First call: cache evaluator only
+        with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
+            out1 = m1(ctx)
+        self.assertEqual(len(cache.cache), 1)
+
+        # Second call: LoggingEvaluator + same cache evaluator
+        wrapped = combine_evaluators(LoggingEvaluator(), cache)
+        with FlowOptionsOverride(options={"evaluator": wrapped, "cacheable": True}):
+            out2 = m1(ctx)
+        # Should still be only 1 cache entry (same key, cache hit)
+        self.assertEqual(len(cache.cache), 1)
+        self.assertEqual(out1, out2)
+
+    def test_cache_key_differs_with_nontransparent_evaluator(self):
+        """Cache keys should differ when a non-transparent evaluator is in the chain."""
+
+        class OpaqueEvaluator(EvaluatorBase):
+            """A dummy evaluator that is NOT transparent."""
+
+            def __call__(self, context: ModelEvaluationContext):
+                return context()
+
+        m1 = MyDateCallable(offset=1)
+        cache = MemoryCacheEvaluator()
+        ctx = DateContext(date=date(2022, 1, 1))
+
+        # First call: cache evaluator only
+        with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
+            m1(ctx)
+        self.assertEqual(len(cache.cache), 1)
+
+        # Second call: OpaqueEvaluator + same cache evaluator
+        wrapped = combine_evaluators(OpaqueEvaluator(), cache)
+        with FlowOptionsOverride(options={"evaluator": wrapped, "cacheable": True}):
+            m1(ctx)
+        # OpaqueEvaluator is not transparent, so cache key should differ
+        self.assertEqual(len(cache.cache), 2)
+
+    def test_cache_key_differs_with_fallback_opaque_child(self):
+        """FallbackEvaluator with opaque child should produce different cache key."""
+
+        class OpaqueEvaluator(EvaluatorBase):
+            def __call__(self, context: ModelEvaluationContext):
+                return context()
+
+        m1 = MyDateCallable(offset=1)
+        cache = MemoryCacheEvaluator()
+        ctx = DateContext(date=date(2022, 1, 1))
+
+        # First call: cache evaluator only
+        with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
+            m1(ctx)
+        self.assertEqual(len(cache.cache), 1)
+
+        # Second call: FallbackEvaluator(OpaqueEvaluator) + cache
+        fallback = FallbackEvaluator(evaluators=[OpaqueEvaluator()])
+        wrapped = combine_evaluators(fallback, cache)
+        with FlowOptionsOverride(options={"evaluator": wrapped, "cacheable": True}):
+            m1(ctx)
+        # FallbackEvaluator is not transparent, so cache key should differ
+        self.assertEqual(len(cache.cache), 2)
 
 
 class TestGraphDeps(TestCase):

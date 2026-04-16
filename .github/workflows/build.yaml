@@ -26,9 +26,18 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-        python-version: ['3.10']
+        os:
+          - ubuntu-latest
+          - macos-latest
+        python-version:
+          - '3.11'
+        dependencies:
+          - ''
+          - '"pandas<2" "numpy<2" "xarray<2025.09.0" "dask<2024.7.0"'
+          - '"pandas<3"'
+          - '"pandas<4"'
 
     steps:
     - uses: actions/checkout@v6
@@ -39,6 +48,10 @@ jobs:
 
     - name: Install dependencies
       run: make develop
+
+    - name: Install dependency regression sets
+      run: uv pip install -U ${{ matrix.dependencies }}
+      if: matrix.dependencies != ''
 
     - name: Lint
       run: make lint
@@ -57,25 +70,33 @@ jobs:
       with:
         name: py-test-results-${{ matrix.os }}-${{ matrix.python-version }}-
         path: junit.xml
-      if: ${{ matrix.os == 'ubuntu-latest' }}
+      if: ${{ matrix.os == 'ubuntu-latest' && matrix.dependencies == '' }}
 
     - name: Publish Unit Test Results
       uses: EnricoMi/publish-unit-test-result-action@v2
       with:
         files: '**/junit.xml'
-      if: ${{ matrix.os == 'ubuntu-latest' }}
+      if: ${{ matrix.os == 'ubuntu-latest' && matrix.dependencies == '' }}
 
     - name: Upload coverage
-      uses: codecov/codecov-action@v5
+      uses: codecov/codecov-action@v6
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
-      if: matrix.os == 'ubuntu-latest'
+      if: ${{ matrix.os == 'ubuntu-latest' && matrix.dependencies == '' }}
 
     - name: Twine check
       run: make dist
+
+    - uses: actions-ext/python/test-wheel@main
+      with:
+        module: ccflow
+
+    - uses: actions-ext/python/test-sdist@main
+      with:
+        module: ccflow
 
     - uses: actions/upload-artifact@v7
       with:
         name: dist-${{matrix.os}}
         path: dist
-      if: matrix.os == 'ubuntu-latest'
+      if: ${{ matrix.os == 'ubuntu-latest' && matrix.dependencies == '' }}

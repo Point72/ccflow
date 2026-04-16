@@ -15,11 +15,6 @@ except ImportError:
     from hydra._internal.defaults_list import DefaultsList
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
-try:
-    import panel as pn
-except ImportError:
-    pn = None
-
 from ..base import ModelRegistry
 from ..callable import FlowOptions, FlowOptionsOverride
 
@@ -445,7 +440,9 @@ def get_args_parser_default_ui() -> argparse.ArgumentParser:
 
 
 def ui_launcher_default(cfg, **kwargs):
-    if pn is None:
+    try:
+        import panel as pn
+    except ImportError:
         raise ImportError("Panel is not installed. Please install panel to use the UI.")
     pn.extension()
     pn.extension("jsoneditor")
@@ -494,10 +491,11 @@ def cfg_explain_cli(
         pprint(merged_cfg, width=120, indent=2)
     elif ui_launcher is not None:
         ui_launcher(merged_cfg, **vars(args))
-    elif pn is not None:
-        ui_launcher_default(merged_cfg, **vars(args))
     else:
-        raise ValueError("Cannot launch UI, no ui_launcher provided and/or panel not installed. Use --no-gui to print the results.")
+        try:
+            ui_launcher_default(merged_cfg, **vars(args))
+        except ImportError:
+            raise ValueError("Cannot launch UI, no ui_launcher provided and/or panel not installed. Use --no-gui to print the results.")
 
 
 def _load_model_registry(cfg: DictConfig):
