@@ -79,7 +79,7 @@ def comparison_window(start_date: date, end_date: date, comparison: ComparisonNa
     return previous_start, previous_end
 
 
-@Flow.transform
+@Flow.context_transform
 def comparison_window_patch(
     start_date: FromContext[date],
     end_date: FromContext[date],
@@ -94,7 +94,7 @@ def comparison_window_patch(
 
 def comparison_input(model: CallableModel, comparison: ComparisonName) -> BoundModel:
     """Apply a named comparison policy to one dependency."""
-    return model.flow.with_inputs(comparison_window_patch(comparison=comparison))
+    return model.flow.with_context(comparison_window_patch(comparison=comparison))
 
 
 def build_comparison(current: CallableModel, *, comparison: ComparisonName):

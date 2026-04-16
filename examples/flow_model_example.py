@@ -5,7 +5,7 @@ Shows how to:
 
 1. define stages as plain Python functions,
 2. compose stages by passing upstream models as ordinary arguments,
-3. rewrite contextual inputs on one dependency edge with `.flow.with_inputs(...)`,
+3. rewrite contextual inputs on one dependency edge with `.flow.with_context(...)`,
 4. execute either as `model(context)` or `model.flow.compute(...)`.
 
 Run with:
@@ -50,7 +50,7 @@ def revenue_change(
     }
 
 
-@Flow.transform
+@Flow.context_transform
 def previous_window(start_date: FromContext[date], end_date: FromContext[date], days_back: int) -> dict[str, object]:
     """Shift both date fields together for a previous reporting window."""
     return {
@@ -62,7 +62,7 @@ def previous_window(start_date: FromContext[date], end_date: FromContext[date], 
 def build_week_over_week_pipeline(region: str):
     """Build one reusable comparison pipeline."""
     current = load_revenue(region=region)
-    previous = current.flow.with_inputs(previous_window(days_back=7))
+    previous = current.flow.with_context(previous_window(days_back=7))
     return revenue_change(
         current=current,
         previous=previous,

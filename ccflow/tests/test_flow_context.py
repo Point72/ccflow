@@ -22,12 +22,12 @@ class OffsetModel(CallableModel):
         return GenericResult(value=context.x + self.offset)
 
 
-@Flow.transform
+@Flow.context_transform
 def shift_start_date(start_date: FromContext[date], days: int) -> date:
     return start_date - timedelta(days=days)
 
 
-@Flow.transform
+@Flow.context_transform
 def shift_window(start_date: FromContext[date], end_date: FromContext[date], days: int) -> dict[str, object]:
     return {
         "start_date": start_date - timedelta(days=days),
@@ -35,17 +35,17 @@ def shift_window(start_date: FromContext[date], end_date: FromContext[date], day
     }
 
 
-@Flow.transform
+@Flow.context_transform
 def offset_value(value: FromContext[int], amount: int) -> int:
     return value + amount
 
 
-@Flow.transform
+@Flow.context_transform
 def offset_b(b: FromContext[int], amount: int) -> int:
     return b + amount
 
 
-@Flow.transform
+@Flow.context_transform
 def double_x(x: FromContext[int]) -> int:
     return x * 2
 
@@ -99,13 +99,13 @@ def test_flow_api_compute_accepts_single_context_or_kwargs_but_not_both():
         model.flow.compute(FlowContext(b=5), b=6)
 
 
-def test_bound_model_with_inputs_static_and_transform():
+def test_bound_model_with_context_static_and_transform():
     @Flow.model
     def load_window(start_date: FromContext[date], end_date: FromContext[date]) -> GenericResult[dict]:
         return GenericResult(value={"start": start_date, "end": end_date})
 
     model = load_window()
-    shifted = model.flow.with_inputs(
+    shifted = model.flow.with_context(
         shift_window(days=7),
         end_date=date(2024, 1, 31),
     )
@@ -114,7 +114,7 @@ def test_bound_model_with_inputs_static_and_transform():
     assert result.value == {"start": date(2024, 1, 1), "end": date(2024, 1, 31)}
 
 
-def test_bound_model_with_inputs_is_branch_local_and_chained():
+def test_bound_model_with_context_is_branch_local_and_chained():
     @Flow.model
     def source(value: FromContext[int]) -> int:
         return value
@@ -124,24 +124,24 @@ def test_bound_model_with_inputs_is_branch_local_and_chained():
         return left + right + value
 
     base = source()
-    left = base.flow.with_inputs(value=offset_value(amount=1))
-    right = base.flow.with_inputs(value=offset_value(amount=2)).flow.with_inputs(value=offset_value(amount=10))
+    left = base.flow.with_context(value=offset_value(amount=1))
+    right = base.flow.with_context(value=offset_value(amount=2)).flow.with_context(value=offset_value(amount=10))
     model = combine(left=left, right=right)
 
     assert model.flow.compute(value=5).value == (6 + 15 + 5)
 
 
-def test_chained_with_inputs_merges_patch_transforms():
+def test_chained_with_context_merges_patch_transforms():
     @Flow.model
     def load(start_date: FromContext[date], end_date: FromContext[date]) -> dict:
         return {"start": start_date, "end": end_date}
 
     base = load()
-    # First with_inputs applies a patch, second chains another patch on top
-    chained = base.flow.with_inputs(shift_window(days=7)).flow.with_inputs(shift_window(days=3))
+    # First with_context applies a patch, second chains another patch on top
+    chained = base.flow.with_context(shift_window(days=7)).flow.with_context(shift_window(days=3))
 
-    # Both patches should be present in the merged rewrite spec
-    assert len(chained.rewrite.patches) == 2
+    # Both patches should be present in the merged context spec.
+    assert len(chained.context_spec.patches) == 2
 
     # Patches evaluate against the original context, merge left-to-right.
     # patch1: start - 7, end - 7  =>  Jan 1, Jan 24
@@ -161,21 +161,21 @@ def test_compute_kwargs_can_supply_ambient_context_for_upstream_transforms():
 
     base = source()
     model = combine(
-        left=base.flow.with_inputs(value=offset_value(amount=1)),
-        right=base.flow.with_inputs(value=offset_value(amount=10)),
+        left=base.flow.with_context(value=offset_value(amount=1)),
+        right=base.flow.with_context(value=offset_value(amount=10)),
     )
 
     assert model.flow.context_inputs == {"bonus": int}
     assert model.flow.compute(value=5, bonus=100).value == (6 + 15 + 100)
 
 
-def test_bound_model_rejects_regular_field_rewrites():
+def test_bound_model_rejects_regular_field_context_overrides():
     @Flow.model
     def add(a: int, b: FromContext[int]) -> int:
         return a + b
 
     with pytest.raises(TypeError, match="only accepts contextual fields"):
-        add(a=1).flow.with_inputs(a=3)
+        add(a=1).flow.with_context(a=3)
 
 
 def test_bound_model_repr_matches_user_facing_api():
@@ -184,8 +184,8 @@ def test_bound_model_repr_matches_user_facing_api():
         return a + b
 
     model = add(a=1)
-    bound = model.flow.with_inputs(b=offset_b(amount=1))
-    assert repr(bound) == f"{model!r}.flow.with_inputs(b=offset_b(amount=1))"
+    bound = model.flow.with_context(b=offset_b(amount=1))
+    assert repr(bound) == f"{model!r}.flow.with_context(b=offset_b(amount=1))"
 
 
 def test_bound_model_serialization_roundtrip_preserves_static_transforms():
@@ -193,50 +193,50 @@ def test_bound_model_serialization_roundtrip_preserves_static_transforms():
     def add(a: int, b: FromContext[int]) -> int:
         return a + b
 
-    bound = add(a=10).flow.with_inputs(b=5)
+    bound = add(a=10).flow.with_context(b=5)
 
     dumped = bound.model_dump(mode="python")
-    assert dumped["rewrite"] == {"patches": [], "field_overrides": {"b": {"kind": "static_value", "value": 5}}}
+    assert dumped["context_spec"] == {"patches": [], "field_overrides": {"b": {"kind": "static_value", "value": 5}}}
 
     restored = type(bound).model_validate(dumped)
     assert restored.flow.compute().value == 15
     assert restored.model.flow.bound_inputs == {"a": 10}
 
 
-def test_bound_model_json_roundtrip_preserves_transform_bindings():
+def test_bound_model_json_roundtrip_preserves_context_transforms():
     @Flow.model
     def add(a: int, b: FromContext[int]) -> int:
         return a + b
 
-    bound = add(a=10).flow.with_inputs(b=offset_b(amount=1))
+    bound = add(a=10).flow.with_context(b=offset_b(amount=1))
     dumped = bound.model_dump(mode="json")
-    assert dumped["rewrite"]["field_overrides"]["b"]["binding"]["path"].endswith(".offset_b")
+    assert dumped["context_spec"]["field_overrides"]["b"]["binding"]["path"].endswith(".offset_b")
 
     restored = type(bound).model_validate(dumped)
     assert restored.flow.compute(b=4).value == 15
 
 
-def test_bound_model_cloudpickle_roundtrip_preserves_transform_bindings():
+def test_bound_model_cloudpickle_roundtrip_preserves_context_transforms():
     @Flow.model
     def add(a: int, b: FromContext[int]) -> int:
         return a + b
 
-    bound = add(a=10).flow.with_inputs(b=offset_b(amount=1))
+    bound = add(a=10).flow.with_context(b=offset_b(amount=1))
     restored = cloudpickle.loads(cloudpickle.dumps(bound))
     assert restored.flow.compute(b=4).value == 15
 
 
-def test_bound_model_plain_pickle_roundtrip_preserves_transform_bindings():
+def test_bound_model_plain_pickle_roundtrip_preserves_context_transforms():
     @Flow.model
     def add(a: int, b: FromContext[int]) -> int:
         return a + b
 
-    bound = add(a=10).flow.with_inputs(b=offset_b(amount=1))
+    bound = add(a=10).flow.with_context(b=offset_b(amount=1))
     restored = pickle.loads(pickle.dumps(bound, protocol=5))
     assert restored.flow.compute(b=4).value == 15
 
 
-def test_transformed_dag_cloudpickle_roundtrip_preserves_transform_bindings():
+def test_transformed_dag_cloudpickle_roundtrip_preserves_context_transforms():
     @Flow.model
     def source(value: FromContext[int]) -> int:
         return value
@@ -247,46 +247,46 @@ def test_transformed_dag_cloudpickle_roundtrip_preserves_transform_bindings():
 
     base = source()
     model = combine(
-        left=base.flow.with_inputs(value=offset_value(amount=1)),
-        right=base.flow.with_inputs(value=offset_value(amount=10)),
+        left=base.flow.with_context(value=offset_value(amount=1)),
+        right=base.flow.with_context(value=offset_value(amount=10)),
     )
     restored = cloudpickle.loads(cloudpickle.dumps(model))
 
     assert restored.flow.compute(value=5).value == (6 + 15 + 5)
 
 
-def test_bound_model_pydantic_roundtrip_preserves_transform_bindings():
-    """model_dump(mode='python') + model_validate must preserve serialized rewrite bindings."""
+def test_bound_model_pydantic_roundtrip_preserves_context_transforms():
+    """model_dump(mode='python') + model_validate must preserve serialized context bindings."""
 
     @Flow.model
     def add(a: int, b: FromContext[int]) -> int:
         return a + b
 
-    bound = add(a=10).flow.with_inputs(b=offset_b(amount=1))
+    bound = add(a=10).flow.with_context(b=offset_b(amount=1))
     assert bound.flow.compute(b=4).value == 15
 
     dumped = bound.model_dump(mode="python")
-    assert dumped["rewrite"]["field_overrides"]["b"]["binding"]["kind"] == "transform_binding"
+    assert dumped["context_spec"]["field_overrides"]["b"]["binding"]["kind"] == "context_transform"
 
     restored = type(bound).model_validate(dumped)
     assert restored.flow.compute(b=4).value == 15
 
 
-def test_bound_model_rewrite_dump_contains_patch_and_field_specs():
-    """model_dump(mode='json') should emit explicit tagged rewrite objects."""
+def test_bound_model_context_spec_dump_contains_patch_and_field_specs():
+    """model_dump(mode='json') should emit explicit tagged context-spec objects."""
 
     @Flow.model
     def load_window(start_date: FromContext[date], end_date: FromContext[date]) -> GenericResult[dict]:
         return GenericResult(value={"start": start_date, "end": end_date})
 
-    dumped = load_window().flow.with_inputs(shift_window(days=7), start_date=shift_start_date(days=1)).model_dump(mode="json")
-    assert dumped["rewrite"]["patches"][0]["kind"] == "transform_patch"
-    assert dumped["rewrite"]["field_overrides"]["start_date"]["kind"] == "transform_value"
+    dumped = load_window().flow.with_context(shift_window(days=7), start_date=shift_start_date(days=1)).model_dump(mode="json")
+    assert dumped["context_spec"]["patches"][0]["kind"] == "context_patch"
+    assert dumped["context_spec"]["field_overrides"]["start_date"]["kind"] == "context_value"
 
 
-def test_regular_callable_models_still_support_with_inputs():
+def test_regular_callable_models_still_support_with_context():
     model = OffsetModel(offset=10)
-    shifted = model.flow.with_inputs(x=double_x())
+    shifted = model.flow.with_context(x=double_x())
     assert shifted(NumberContext(x=5)).value == 20
 
 
@@ -319,7 +319,7 @@ def test_bound_model_restore_is_thread_safe():
     def add(a: int, b: FromContext[int]) -> int:
         return a + b
 
-    dumped = add(a=10).flow.with_inputs(b=5).model_dump(mode="python")
+    dumped = add(a=10).flow.with_context(b=5).model_dump(mode="python")
 
     def worker(_: int) -> int:
         restored = BoundModel.model_validate(dumped)

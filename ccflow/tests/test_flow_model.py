@@ -2,6 +2,7 @@
 
 import base64
 import graphlib
+import inspect
 import pickle
 import subprocess
 import sys
@@ -9,7 +10,7 @@ from datetime import date, timedelta
 from typing import Annotated, Any, Literal
 
 import pytest
-from pydantic import Field, model_validator
+from pydantic import Field, ValidationError, model_validator
 from ray.cloudpickle import dumps as rcpdumps, loads as rcploads
 
 import ccflow.flow_model as flow_model_module
@@ -26,7 +27,7 @@ from ccflow import (
     ModelRegistry,
 )
 from ccflow.callable import FlowOptions
-from ccflow.evaluators import GraphEvaluator, MemoryCacheEvaluator
+from ccflow.evaluators import GraphEvaluator, MemoryCacheEvaluator, get_dependency_graph
 
 
 class SimpleContext(ContextBase):
@@ -140,12 +141,12 @@ def contextual_processor(
     return GenericResult(value=f"{prefix}:{data['source']}:{data['start_date']} to {data['end_date']}")
 
 
-@Flow.transform
+@Flow.context_transform
 def increment_b(b: FromContext[int], amount: int) -> int:
     return b + amount
 
 
-@Flow.transform
+@Flow.context_transform
 def shift_integer_window(start_date: FromContext[int], end_date: FromContext[int], amount: int) -> dict[str, object]:
     return {
         "start_date": start_date + amount,
@@ -153,27 +154,32 @@ def shift_integer_window(start_date: FromContext[int], end_date: FromContext[int
     }
 
 
-@Flow.transform
+@Flow.context_transform
 def bump_start_date(start_date: FromContext[int], amount: int) -> int:
     return start_date + amount
 
 
-@Flow.transform
+@Flow.context_transform
 def annotated_start_patch(start_date: FromContext[int]) -> Annotated[dict[str, object], "meta"]:
     return {"start_date": start_date + 1}
 
 
-@Flow.transform
+@Flow.context_transform
 def optional_start_patch(start_date: FromContext[int]) -> dict[str, object] | None:
     return {"start_date": start_date + 2}
 
 
-@Flow.transform
+@Flow.context_transform
+def parity_bucket(raw: FromContext[int]) -> int:
+    return raw % 2
+
+
+@Flow.context_transform
 def static_bad() -> int:
     return 2
 
 
-@Flow.transform
+@Flow.context_transform
 def static_patch() -> dict[str, object]:
     return {"a": 2}
 
@@ -372,13 +378,13 @@ def test_context_type_validates_construction_time_contextual_defaults_early():
         identity(x=-1)
 
 
-def test_context_type_validates_static_with_inputs_overrides_early():
+def test_context_type_validates_static_with_context_overrides_early():
     @Flow.model(context_type=OrderedContext)
     def add(a: FromContext[int], b: FromContext[int]) -> int:
         return a + b
 
     with pytest.raises(ValueError, match="a must be <= b"):
-        add().flow.with_inputs(a=2, b=1)
+        add().flow.with_context(a=2, b=1)
 
 
 def test_context_type_validates_static_field_transform_overrides_early():
@@ -387,7 +393,7 @@ def test_context_type_validates_static_field_transform_overrides_early():
         return a + b
 
     with pytest.raises(ValueError, match="a must be <= b"):
-        add().flow.with_inputs(a=static_bad())
+        add().flow.with_context(a=static_bad())
 
 
 def test_context_type_validates_static_patch_transform_overrides_early():
@@ -396,7 +402,7 @@ def test_context_type_validates_static_patch_transform_overrides_early():
         return a + b
 
     with pytest.raises(ValueError, match="a must be <= b"):
-        add().flow.with_inputs(static_patch())
+        add().flow.with_context(static_patch())
 
 
 def test_context_named_parameters_are_just_regular_parameters():
@@ -418,8 +424,12 @@ def test_auto_unwrap_defaults_to_false_for_auto_wrapped_results():
     def add(a: int, b: FromContext[int]) -> int:
         return a + b
 
-    result = add(a=10).flow.compute(b=5)
-    assert isinstance(result, GenericResult)
+    model = add(a=10)
+    result = model.flow.compute(b=5)
+    assert model.result_type == GenericResult[int]
+    assert inspect.signature(type(model).__call__).return_annotation == GenericResult[int]
+    assert type(result) is GenericResult[int]
+    assert repr(result) == "GenericResult[int](value=15)"
     assert result.value == 15
 
 
@@ -428,8 +438,11 @@ def test_compute_does_not_unwrap_explicit_generic_result_returns():
     def load(value: FromContext[int]) -> GenericResult[int]:
         return GenericResult(value=value * 2)
 
-    result = load().flow.compute(value=3)
-    assert isinstance(result, GenericResult)
+    model = load()
+    result = model.flow.compute(value=3)
+    assert model.result_type == GenericResult[int]
+    assert type(result) is GenericResult[int]
+    assert repr(result) == "GenericResult[int](value=6)"
     assert result.value == 6
 
 
@@ -459,7 +472,7 @@ def test_auto_wrap_validates_return_type():
     def bad(x: FromContext[int]) -> int:
         return "oops"
 
-    with pytest.raises(TypeError, match="Return value"):
+    with pytest.raises(ValidationError, match=r"GenericResult\[int\]"):
         bad().flow.compute(x=1)
 
 
@@ -686,66 +699,66 @@ def test_dependency_graph_cloudpickle_roundtrip():
         assert restored_ec.fn == original_ec.fn
 
 
-def test_with_inputs_validates_static_override_types():
-    """Static value type mismatch should be caught when rewrite specs are normalized."""
+def test_with_context_validates_static_override_types():
+    """Static value type mismatch should be caught when context specs are normalized."""
 
     @Flow.model
     def add(a: int, b: FromContext[int]) -> int:
         return a + b
 
-    with pytest.raises(TypeError, match="with_inputs\\(\\)"):
-        add(a=1).flow.with_inputs(b="not_an_int")
+    with pytest.raises(TypeError, match="with_context\\(\\)"):
+        add(a=1).flow.with_context(b="not_an_int")
 
 
-def test_flow_transform_binding_serializes_import_path_and_bound_args():
+def test_context_transform_serializes_import_path_and_bound_args():
     binding = increment_b(amount=3)
-    assert isinstance(binding, flow_model_module.TransformBinding)
-    assert binding.kind == "transform_binding"
+    assert isinstance(binding, flow_model_module.ContextTransform)
+    assert binding.kind == "context_transform"
     assert binding.bound_args == {"amount": 3}
     assert str(binding.path).endswith(".increment_b")
 
 
-def test_flow_transform_rejects_none_for_required_param():
-    with pytest.raises(TypeError, match="Transform argument"):
+def test_context_transform_rejects_none_for_required_param():
+    with pytest.raises(TypeError, match="Context transform argument"):
         increment_b(amount=None)
 
 
-def test_flow_transform_rejects_nested_functions():
+def test_context_transform_rejects_nested_functions():
     with pytest.raises(TypeError, match="top-level named Python functions"):
 
-        @Flow.transform
+        @Flow.context_transform
         def nested(value: FromContext[int]) -> int:
             return value
 
 
-def test_with_inputs_rejects_raw_callables():
+def test_with_context_rejects_raw_callables():
     @Flow.model
     def add(a: int, b: FromContext[int]) -> int:
         return a + b
 
     with pytest.raises(TypeError, match="no longer accepts raw callables"):
-        add(a=1).flow.with_inputs(b=lambda ctx: ctx.b + 1)
+        add(a=1).flow.with_context(b=lambda ctx: ctx.b + 1)
 
 
-def test_with_inputs_rejects_wrong_transform_position():
+def test_with_context_rejects_wrong_transform_position():
     @Flow.model
     def load(start_date: FromContext[int], end_date: FromContext[int]) -> int:
         return start_date + end_date
 
-    with pytest.raises(TypeError, match="Field transforms must be passed by keyword"):
-        load().flow.with_inputs(increment_b(amount=1))
+    with pytest.raises(TypeError, match="Field context transforms must be passed by keyword"):
+        load().flow.with_context(increment_b(amount=1))
 
     with pytest.raises(TypeError, match="Patch transforms must be passed positionally"):
-        load().flow.with_inputs(start_date=shift_integer_window(amount=10))
+        load().flow.with_context(start_date=shift_integer_window(amount=10))
 
 
-def test_with_inputs_accepts_wrapped_mapping_patch_annotations():
+def test_with_context_accepts_wrapped_mapping_patch_annotations():
     @Flow.model
     def load(start_date: FromContext[int], end_date: FromContext[int]) -> int:
         return start_date * 1000 + end_date
 
-    annotated = load().flow.with_inputs(annotated_start_patch())
-    optional = load().flow.with_inputs(optional_start_patch())
+    annotated = load().flow.with_context(annotated_start_patch())
+    optional = load().flow.with_context(optional_start_patch())
 
     assert annotated.flow.compute(start_date=1, end_date=5).value == 2005
     assert optional.flow.compute(start_date=1, end_date=5).value == 3005
@@ -756,13 +769,13 @@ def test_patch_then_keyword_override_precedence():
     def load(start_date: FromContext[int], end_date: FromContext[int]) -> int:
         return start_date * 1000 + end_date
 
-    bound = load().flow.with_inputs(shift_integer_window(amount=10), start_date=100)
+    bound = load().flow.with_context(shift_integer_window(amount=10), start_date=100)
     result = bound(FlowContext(start_date=1, end_date=2))
     assert result.value == 100_012
 
     dumped = bound.model_dump(mode="json")
-    assert dumped["rewrite"]["patches"][0]["binding"]["bound_args"] == {"amount": 10}
-    assert dumped["rewrite"]["field_overrides"]["start_date"]["kind"] == "static_value"
+    assert dumped["context_spec"]["patches"][0]["binding"]["bound_args"] == {"amount": 10}
+    assert dumped["context_spec"]["field_overrides"]["start_date"]["kind"] == "static_value"
 
 
 def test_transforms_evaluate_against_original_runtime_context():
@@ -770,7 +783,7 @@ def test_transforms_evaluate_against_original_runtime_context():
     def load(start_date: FromContext[int], end_date: FromContext[int]) -> int:
         return start_date * 1000 + end_date
 
-    bound = load().flow.with_inputs(
+    bound = load().flow.with_context(
         shift_integer_window(amount=10),
         start_date=bump_start_date(amount=100),
     )
@@ -976,7 +989,7 @@ def test_internal_type_helpers_and_plain_callable_flow_api_paths():
     assert flow_model_module._concrete_context_type(int) is None
     assert flow_model_module._type_accepts_str(Annotated[str, flow_model_module._FromContextMarker()]) is True
     assert flow_model_module._type_accepts_str(int | None) is False
-    assert flow_model_module._transform_repr(increment_b(amount=1)) == "increment_b(amount=1)"
+    assert flow_model_module._context_transform_repr(increment_b(amount=1)) == "increment_b(amount=1)"
     assert flow_model_module._bound_field_names(object()) == set()
 
     class PlainModel(CallableModel):
@@ -1130,7 +1143,7 @@ def test_unresolved_forward_refs_do_not_silently_strip_from_context():
 from __future__ import annotations
 from ccflow import Flow, FromContext
 
-@Flow.transform
+@Flow.context_transform
 def transform(a: MissingType, b: FromContext[int]) -> int:
     return b
 """,
@@ -1259,7 +1272,7 @@ def test_compute_forwards_options_through_bound_model():
         return a + b
 
     cache = MemoryCacheEvaluator()
-    bound = add(a=10).flow.with_inputs(b=5)
+    bound = add(a=10).flow.with_context(b=5)
 
     result1 = bound.flow.compute(_options=FlowOptions(evaluator=cache, cacheable=True))
     result2 = bound.flow.compute(_options=FlowOptions(evaluator=cache, cacheable=True))
@@ -1289,6 +1302,122 @@ def test_compute_forwards_options_for_plain_callable_model():
     assert result1.value == 15
     assert result2.value == 15
     assert calls["count"] == 1
+
+
+def test_generated_model_cache_ignores_unused_flow_context_fields():
+    calls = {"source": 0, "root": 0}
+
+    @Flow.model
+    def source(value: FromContext[int]) -> int:
+        calls["source"] += 1
+        return value * 10
+
+    @Flow.model
+    def root(x: int, bonus: FromContext[int]) -> int:
+        calls["root"] += 1
+        return x + bonus
+
+    cache = MemoryCacheEvaluator()
+    model = root(x=source())
+
+    with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
+        assert model(FlowContext(value=3, bonus=7, unused="one")).value == 37
+        assert model(FlowContext(value=3, bonus=7, unused="two")).value == 37
+
+    assert calls == {"source": 1, "root": 1}
+    assert len(cache.cache) == 2
+
+
+def test_generated_model_diamond_cache_reuses_shared_source_and_ignores_unused_fields():
+    calls = {"source": 0, "left": 0, "right": 0, "root": 0}
+
+    @Flow.model
+    def source(value: FromContext[int]) -> int:
+        calls["source"] += 1
+        return value + 10
+
+    @Flow.model
+    def left(x: int) -> int:
+        calls["left"] += 1
+        return x * 2
+
+    @Flow.model
+    def right(x: int) -> int:
+        calls["right"] += 1
+        return x * 5
+
+    @Flow.model
+    def root(left_value: int, right_value: int, bonus: FromContext[int]) -> int:
+        calls["root"] += 1
+        return left_value + right_value + bonus
+
+    shared = source()
+    model = root(left_value=left(x=shared), right_value=right(x=shared))
+    cache = MemoryCacheEvaluator()
+
+    with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
+        assert model(FlowContext(value=3, bonus=7, unused="one")).value == 98
+        assert model(FlowContext(value=3, bonus=7, unused="two")).value == 98
+
+    assert calls == {"source": 1, "left": 1, "right": 1, "root": 1}
+    assert len(cache.cache) == 4
+
+
+def test_generated_dependency_graph_identity_ignores_unused_flow_context_fields():
+    @Flow.model
+    def source(value: FromContext[int]) -> int:
+        return value * 10
+
+    @Flow.model
+    def root(x: int, bonus: FromContext[int]) -> int:
+        return x + bonus
+
+    model = root(x=source())
+    graph1 = get_dependency_graph(model.__call__.get_evaluation_context(model, FlowContext(value=3, bonus=7, unused="one")))
+    graph2 = get_dependency_graph(model.__call__.get_evaluation_context(model, FlowContext(value=3, bonus=7, unused="two")))
+
+    assert graph1.root_id == graph2.root_id
+    assert set(graph1.graph.keys()) == set(graph2.graph.keys())
+    assert set(graph1.ids.keys()) == set(graph2.ids.keys())
+
+
+def test_bound_model_cache_follows_rewritten_context_not_ambient_source_fields():
+    calls = {"count": 0}
+
+    @Flow.model
+    def add(a: int, b: FromContext[int]) -> int:
+        calls["count"] += 1
+        return a + b
+
+    cache = MemoryCacheEvaluator()
+    bound = add(a=10).flow.with_context(b=parity_bucket())
+
+    with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
+        assert bound(FlowContext(raw=1)).value == 11
+        assert bound(FlowContext(raw=3)).value == 11
+
+    assert calls["count"] == 1
+    assert len(cache.cache) == 1
+
+
+def test_plain_callable_model_cache_remains_structural_for_flow_context():
+    calls = {"count": 0}
+
+    class Counter(CallableModel):
+        @Flow.call
+        def __call__(self, context: FlowContext) -> GenericResult[int]:
+            calls["count"] += 1
+            return GenericResult(value=context.value)
+
+    cache = MemoryCacheEvaluator()
+    model = Counter()
+
+    with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
+        assert model(FlowContext(value=10, unused="one")).value == 10
+        assert model(FlowContext(value=10, unused="two")).value == 10
+
+    assert calls["count"] == 2
+    assert len(cache.cache) == 2
 
 
 def test_generated_models_cross_process_pickle():

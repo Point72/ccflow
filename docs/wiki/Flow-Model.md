@@ -6,9 +6,9 @@ The design is intentionally narrow:
 
 - ordinary unmarked parameters are regular bound inputs,
 - `FromContext[T]` marks the only runtime/contextual inputs,
-- `@Flow.transform` defines reusable contextual rewrites,
+- `@Flow.context_transform` defines reusable contextual rewrites,
 - `.flow.compute(...)` is the execution entry point for the full DAG,
-- `.flow.with_inputs(*patches, **field_overrides)` rewires contextual inputs on one dependency edge,
+- `.flow.with_context(*patches, **field_overrides)` rewires contextual inputs on one dependency edge,
 - upstream `CallableModel`s can still be passed as ordinary arguments.
 
 The goal is that a reader can look at one function signature and immediately
@@ -72,7 +72,7 @@ foo().flow.compute(a=11, b=12)
 
 `a` is not contextual, so it must be bound at construction time (`foo(a=11)`).
 By contrast, extra ambient fields that are only needed by upstream
-`with_inputs(...)` rewrites are allowed in `compute(**kwargs)` because
+`with_context(...)` rewrites are allowed in `compute(**kwargs)` because
 `@Flow.model` generated models use `FlowContext` (an open bag) as their
 runtime context type.
 
@@ -131,7 +131,7 @@ conversion into a regular bound parameter.
 
 Contextual precedence is:
 
-1. branch-local `.flow.with_inputs(...)` rewrites,
+1. branch-local `.flow.with_context(...)` rewrites,
 1. incoming runtime context,
 1. contextual defaults stored on the model instance,
 1. function defaults.
@@ -187,15 +187,15 @@ def add(left: int, right: int, bonus: FromContext[int]) -> int:
     return left + right + bonus
 
 
-@Flow.transform
+@Flow.context_transform
 def add_offset(value: FromContext[int], amount: int) -> int:
     return value + amount
 
 
 base = source()
 model = add(
-    left=base.flow.with_inputs(value=add_offset(amount=1)),
-    right=base.flow.with_inputs(value=add_offset(amount=10)),
+    left=base.flow.with_context(value=add_offset(amount=1)),
+    right=base.flow.with_context(value=add_offset(amount=10)),
 )
 
 assert model.flow.context_inputs == {"bonus": int}
@@ -248,17 +248,17 @@ result = add(a=10).flow.compute(b=5)
 assert result == 15
 ```
 
-## `@Flow.transform` and `.flow.with_inputs(...)`
+## `@Flow.context_transform` and `.flow.with_context(...)`
 
-`@Flow.transform` defines reusable, serializable contextual rewrites using the
+`@Flow.context_transform` defines reusable, serializable contextual rewrites using the
 same `FromContext[...]` language as `@Flow.model`. A transform's return type
-determines how it can be used in `with_inputs()`:
+determines how it can be used in `with_context()`:
 
 - **Patch transforms** return a `Mapping` (e.g. `dict[str, object]`) of
   contextual field names to replacement values. They are passed as **positional
-  arguments** to `with_inputs()`.
+  arguments** to `with_context()`.
 - **Field transforms** return a single scalar value. They are passed as
-  **keyword arguments** to `with_inputs()`, keyed by the contextual field they
+  **keyword arguments** to `with_context()`, keyed by the contextual field they
   replace.
 
 ```python
@@ -279,7 +279,7 @@ def revenue_growth(current: float, previous: float, start_date: FromContext[date
 
 
 # Patch transform — shifts multiple fields together, passed positionally:
-@Flow.transform
+@Flow.context_transform
 def previous_window(start_date: FromContext[date], end_date: FromContext[date], days: int) -> dict[str, object]:
     return {
         "start_date": start_date - timedelta(days=days),
@@ -288,7 +288,7 @@ def previous_window(start_date: FromContext[date], end_date: FromContext[date], 
 
 
 # Field transform — shifts one field, passed as a keyword:
-@Flow.transform
+@Flow.context_transform
 def shift_end(end_date: FromContext[date], days: int) -> date:
     return end_date - timedelta(days=days)
 
@@ -296,10 +296,10 @@ def shift_end(end_date: FromContext[date], days: int) -> date:
 current = load_revenue(region="us")
 
 # Patch transform: shift both dates back 30 days
-previous = current.flow.with_inputs(previous_window(days=30))
+previous = current.flow.with_context(previous_window(days=30))
 
 # Mix both forms: patch shifts start_date, keyword shifts end_date independently
-custom = current.flow.with_inputs(
+custom = current.flow.with_context(
     previous_window(days=30),
     end_date=shift_end(days=7),  # keyword override replaces end_date from the patch
 )
@@ -317,10 +317,10 @@ always apply last.
 
 Key rules:
 
-- `with_inputs()` only targets contextual fields,
+- `with_context()` only targets contextual fields,
 - positional arguments must be patch transforms,
 - keyword overrides may be literals or field transforms,
-- raw anonymous callables are rejected; use named `@Flow.transform` helpers,
+- raw anonymous callables are rejected; use named `@Flow.context_transform` helpers,
 - transforms are branch-local — they only affect the wrapped dependency, not
   the entire pipeline,
 - patch results merge left-to-right, then keyword overrides apply last,
@@ -438,9 +438,9 @@ Use a hand-written class-based `CallableModel` when:
 That field is a regular parameter. Bind it at construction time. Only
 `FromContext[...]` fields belong in `compute()`.
 
-**`with_inputs()` rejects a field**
+**`with_context()` rejects a field**
 
-`with_inputs()` only rewrites contextual inputs. If you are trying to attach one
+`with_context()` only rewrites contextual inputs. If you are trying to attach one
 stage to another, pass the upstream model as a regular argument at construction
 time.
 

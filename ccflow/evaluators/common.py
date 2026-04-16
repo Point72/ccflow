@@ -8,11 +8,18 @@ from types import MappingProxyType
 from typing import Any, Callable, Dict, List, Optional, Set, Union
 
 import dask.base
-from pydantic import Field, PrivateAttr, field_validator
+from pydantic import Field, PrivateAttr, ValidationError, field_validator
 from typing_extensions import override
 
 from ..base import BaseModel, make_lazy_result
-from ..callable import CallableModel, ContextBase, EvaluatorBase, ModelEvaluationContext, ResultType
+from ..callable import (
+    CallableModel,
+    ContextBase,
+    EvaluatorBase,
+    ModelEvaluationContext,
+    ResultType,
+    TransparentModelEvaluationContext,
+)
 
 __all__ = [
     "cache_key",
@@ -28,6 +35,13 @@ __all__ = [
 ]
 
 log = logging.getLogger(__name__)
+
+
+class _EvaluationIdentityFallback(Exception):
+    """Internal signal to stay on the structural evaluation-key path."""
+
+
+_EXPECTED_IDENTITY_FAILURES = (TypeError, ValueError, ValidationError)
 
 
 def combine_evaluators(first: Optional[EvaluatorBase], second: Optional[EvaluatorBase]) -> EvaluatorBase:
@@ -53,16 +67,25 @@ def combine_evaluators(first: Optional[EvaluatorBase], second: Optional[Evaluato
 
 
 class MultiEvaluator(EvaluatorBase):
-    """An evaluator that combines multiple evaluators."""
+    """An evaluator that combines multiple evaluators.
+
+    Each child evaluator is wrapped in a ModelEvaluationContext using its own
+    ``make_evaluation_context()`` method, so transparent children produce
+    ``TransparentModelEvaluationContext`` layers that can be skipped during
+    cache key computation.
+    """
 
     evaluators: List[EvaluatorBase] = Field(
         description="The list of evaluators to combine. The first evaluator in the list will be called first during evaluation."
     )
 
+    def is_transparent(self, context: ModelEvaluationContext) -> bool:
+        return all(e.is_transparent(context) for e in self.evaluators)
+
     @override
     def __call__(self, context: ModelEvaluationContext) -> ResultType:
         for evaluator in self.evaluators:
-            context = ModelEvaluationContext(model=evaluator, context=context, options=context.options)
+            context = evaluator.make_evaluation_context(context, options=context.options)
         return context()
 
 
@@ -70,6 +93,9 @@ class FallbackEvaluator(EvaluatorBase):
     """An evaluator that tries a list of evaluators in turn until one succeeds."""
 
     evaluators: List[EvaluatorBase] = Field(description="The list of evaluators to try (in order).")
+
+    def is_transparent(self, context: ModelEvaluationContext) -> bool:
+        return all(e.is_transparent(context) for e in self.evaluators)
 
     @override
     def __call__(self, context: ModelEvaluationContext) -> ResultType:
@@ -119,6 +145,9 @@ class LoggingEvaluator(EvaluatorBase):
     verbose: bool = Field(True, description="Whether to output the model definition as part of logging")
     log_result: bool = Field(False, description="Whether to log the result of the evaluation")
     format_config: FormatConfig = Field(FormatConfig(), description="Configuration for formatting the result of the evaluation if log_result=True")
+
+    def is_transparent(self, context: ModelEvaluationContext) -> bool:
+        return True
 
     @field_validator("log_level", mode="before")
     @classmethod
@@ -194,13 +223,105 @@ class LoggingEvaluator(EvaluatorBase):
             return f"{msg_str}{pformat(result_dict, **self.format_config.pformat_config)}"
 
 
+def _unwrap_evaluation_context(flow_obj: ModelEvaluationContext) -> tuple[ModelEvaluationContext, str, List[CallableModel]]:
+    fn = flow_obj.fn
+    non_transparent = []
+    while isinstance(flow_obj.context, ModelEvaluationContext):
+        fn = flow_obj.fn if flow_obj.fn != "__call__" else fn
+        if not isinstance(flow_obj, TransparentModelEvaluationContext):
+            non_transparent.append(flow_obj.model)
+        flow_obj = flow_obj.context
+    return flow_obj, fn if fn != "__call__" else flow_obj.fn, non_transparent
+
+
+def _structural_evaluation_key(flow_obj: ModelEvaluationContext) -> bytes:
+    flow_obj, fn, non_transparent = _unwrap_evaluation_context(flow_obj)
+    d = flow_obj.model_dump(mode="python")
+    d["fn"] = fn
+    if non_transparent:
+        d["_evaluators"] = [e.model_dump(mode="python") for e in non_transparent]
+    return dask.base.tokenize(d).encode("utf-8")
+
+
+class _EvaluationKeyBuilder:
+    def __init__(self) -> None:
+        self._memo: Dict[tuple[int, str], bytes] = {}
+        self._active: set[tuple[int, str]] = set()
+
+    def build(self, context: ModelEvaluationContext) -> bytes:
+        try:
+            return self._build(context)
+        except _EvaluationIdentityFallback:
+            return _structural_evaluation_key(context)
+
+    def _build(self, context: ModelEvaluationContext) -> bytes:
+        inner, fn, non_transparent = _unwrap_evaluation_context(context)
+        if fn != "__call__":
+            raise _EvaluationIdentityFallback("Only __call__ evaluations support narrowed identity.")
+        if non_transparent:
+            raise _EvaluationIdentityFallback("Non-transparent evaluator layers stay on the structural key path.")
+        if inner.options.get("validate_result", True) is False:
+            raise _EvaluationIdentityFallback("validate_result=False stays on the structural key path.")
+        return self._key_for_model(inner.model, inner.context)
+
+    def _key_for_model(self, model: CallableModel, context: Any) -> bytes:
+        memo_token = self._memo_token(model, context)
+        cached = self._memo.get(memo_token)
+        if cached is not None:
+            return cached
+        if memo_token in self._active:
+            raise _EvaluationIdentityFallback("Recursive cycle detected while deriving evaluation identity.")
+
+        self._active.add(memo_token)
+        try:
+            payload = self._identity_payload(model, context)
+            if payload is None:
+                raise _EvaluationIdentityFallback("Model did not provide a narrowed identity payload.")
+            key = dask.base.tokenize(("ccflow_evaluation_identity_v1", payload)).encode("utf-8")
+            self._memo[memo_token] = key
+            return key
+        finally:
+            self._active.discard(memo_token)
+
+    def _identity_payload(self, model: CallableModel, context: Any) -> Optional[Any]:
+        try:
+            return model._evaluation_identity_payload(context, self._child_evaluation_key)
+        except _EXPECTED_IDENTITY_FAILURES as exc:
+            raise _EvaluationIdentityFallback(str(exc)) from exc
+
+    def _child_evaluation_key(self, model: CallableModel, context: Any) -> bytes:
+        try:
+            evaluation = model.__call__.get_evaluation_context(model, context)
+        except _EXPECTED_IDENTITY_FAILURES as exc:
+            raise _EvaluationIdentityFallback(str(exc)) from exc
+        return self.build(evaluation)
+
+    def _memo_token(self, model: CallableModel, context: Any) -> tuple[int, str]:
+        if hasattr(context, "model_dump"):
+            context_value = context.model_dump(mode="python")
+        else:
+            context_value = context
+        return (id(model), dask.base.tokenize((type(context), context_value)))
+
+
+def _evaluation_key(flow_obj: ModelEvaluationContext) -> bytes:
+    return _EvaluationKeyBuilder().build(flow_obj)
+
+
 def cache_key(flow_obj: Union[ModelEvaluationContext, ContextBase, CallableModel]) -> bytes:
-    """Returns a key suitable for use in caching.
+    """Returns a structural key suitable for caching and dependency graph deduplication.
+
+    For ``ModelEvaluationContext`` inputs, strips ``TransparentModelEvaluationContext``
+    layers (evaluators that don't modify the return value) so that the key depends
+    only on the underlying model, context, fn, options, and any non-transparent
+    evaluators in the chain.
 
     Args:
         flow_obj: The object to be tokenized to form the cache key.
     """
-    if isinstance(flow_obj, (ModelEvaluationContext, ContextBase, CallableModel)):
+    if isinstance(flow_obj, ModelEvaluationContext):
+        return _structural_evaluation_key(flow_obj)
+    elif isinstance(flow_obj, (ContextBase, CallableModel)):
         return dask.base.tokenize(flow_obj.model_dump(mode="python")).encode("utf-8")
     else:
         raise TypeError(f"object of type {type(flow_obj)} cannot be serialized by this function!")
@@ -213,9 +334,17 @@ class MemoryCacheEvaluator(EvaluatorBase):
     _cache: Dict[bytes, ResultType] = PrivateAttr({})
     _ids: Dict[bytes, ModelEvaluationContext] = PrivateAttr({})
 
+    def is_transparent(self, context: ModelEvaluationContext) -> bool:
+        return True
+
     def key(self, context: ModelEvaluationContext):
-        """Function to convert a ModelEvaluationContext to a key"""
-        return cache_key(context)
+        """Function to convert a ModelEvaluationContext to a cache key.
+
+        Delegates to the shared evaluation-key builder, which narrows generated
+        ``@Flow.model`` identities when safe and otherwise falls back to
+        ``cache_key()`` semantics.
+        """
+        return _evaluation_key(context)
 
     @property
     def cache(self):
@@ -252,7 +381,7 @@ class CallableModelGraph(BaseModel):
 
 
 def _build_dependency_graph(evaluation_context: ModelEvaluationContext, graph: CallableModelGraph, parent_key: Optional[bytes] = None):
-    key = cache_key(evaluation_context)
+    key = _evaluation_key(evaluation_context)
     if parent_key:
         graph.graph[parent_key].add(key)
     if key not in graph.ids:
@@ -275,7 +404,7 @@ def get_dependency_graph(evaluation_context: ModelEvaluationContext) -> Callable
     Args:
         evaluation_context: The model and context to build the graph for.
     """
-    root_key = cache_key(evaluation_context)
+    root_key = _evaluation_key(evaluation_context)
     graph = CallableModelGraph(ids={}, graph={}, root_id=root_key)
     _build_dependency_graph(evaluation_context, graph)
     return graph
@@ -288,6 +417,9 @@ class GraphEvaluator(EvaluatorBase):
     """
 
     _is_evaluating: bool = PrivateAttr(False)
+
+    def is_transparent(self, context: ModelEvaluationContext) -> bool:
+        return True
 
     @override
     def __call__(self, context: ModelEvaluationContext) -> ResultType:
