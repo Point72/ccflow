@@ -224,9 +224,14 @@ def cache_key(flow_obj: Union[ModelEvaluationContext, ContextBase, CallableModel
     only on the underlying model, context, fn, options, and any non-transparent
     evaluators in the chain.
 
+    When the underlying model has callable methods, a behavior token (SHA-256 of
+    method bytecode) is included so that code changes invalidate the cache.
+
     Args:
         flow_obj: The object to be tokenized to form the cache key.
     """
+    from ..utils.tokenize import compute_behavior_token
+
     if isinstance(flow_obj, ModelEvaluationContext):
         fn = flow_obj.fn
         non_transparent = []
@@ -238,10 +243,24 @@ def cache_key(flow_obj: Union[ModelEvaluationContext, ContextBase, CallableModel
         d = flow_obj.model_dump(mode="python")
         d["fn"] = fn if fn != "__call__" else flow_obj.fn
         if non_transparent:
-            d["_evaluators"] = [e.model_dump(mode="python") for e in non_transparent]
+            evaluator_data = []
+            for e in non_transparent:
+                ed = e.model_dump(mode="python")
+                eb = compute_behavior_token(type(e))
+                if eb is not None:
+                    ed["_behavior"] = eb
+                evaluator_data.append(ed)
+            d["_evaluators"] = evaluator_data
+        behavior = compute_behavior_token(type(flow_obj.model))
+        if behavior is not None:
+            d["_behavior"] = behavior
         return dask.base.tokenize(d).encode("utf-8")
     elif isinstance(flow_obj, (ContextBase, CallableModel)):
-        return dask.base.tokenize(flow_obj.model_dump(mode="python")).encode("utf-8")
+        d = flow_obj.model_dump(mode="python")
+        behavior = compute_behavior_token(type(flow_obj))
+        if behavior is not None:
+            d["_behavior"] = behavior
+        return dask.base.tokenize(d).encode("utf-8")
     else:
         raise TypeError(f"object of type {type(flow_obj)} cannot be serialized by this function!")
 
