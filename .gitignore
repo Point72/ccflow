@@ -151,7 +151,7 @@ multirun/
 ROADMAP.md
 AGENTS.md
 .github/hooks/sdlc.json
-<<<<<<< before updating
+.superpowers
 
 # Examples
 raw.html
@@ -159,6 +159,3 @@ extracted.csv
 etl.db
 lobsters.html
 lobsters.csv
-=======
-.superpowers
->>>>>>> after updating
