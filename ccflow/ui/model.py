@@ -117,8 +117,6 @@ class ModelConfigViewer(param.Parameterized):
     def __panel__(self):
         return self._layout
 
-    # ------------------------------------------------------------
-
     def _render_dependencies(self, model):
         deps = model.get_registry_dependencies()
         if not deps:
@@ -222,8 +220,6 @@ class ModelViewer(param.Parameterized):
     def __panel__(self):
         return self._layout
 
-    # ------------------------------------------------------------
-
     def _on_model_change(self, event):
         model = event.new
         self._tabs.clear()
@@ -234,15 +230,15 @@ class ModelViewer(param.Parameterized):
             self._json_container.visible = False
             return
 
-        # ---------------- Config tab ----------------
+        # Config tab
         self._config_viewer.model = model
         self._tabs.append(("Summary", self._config_viewer))
 
-        # ---------------- Model Type tab ----------------
+        # Model Type tab
         self._type_viewer.model_type = type(model)
         self._tabs.append(("Model Type", self._type_viewer))
 
-        # ---------------- CallableModel extras ----------------
+        # CallableModel extras
         if isinstance(model, ccflow.CallableModel):
             self._context_type_viewer.model_type = model.context_type
             self._tabs.append(("Context Type", self._context_type_viewer))
