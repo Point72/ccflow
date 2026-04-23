@@ -120,6 +120,38 @@ class TestComputeBehaviorToken:
 
         assert compute_behavior_token(A) != compute_behavior_token(B)
 
+    def test_defaults_matter(self):
+        class A:
+            def f(self, x=1):
+                return x
+
+        class B:
+            def f(self, x=2):
+                return x
+
+        assert compute_behavior_token(A) != compute_behavior_token(B)
+
+    def test_kwdefaults_matter(self):
+        class A:
+            def f(self, *, x=1):
+                return x
+
+        class B:
+            def f(self, *, x=2):
+                return x
+
+        assert compute_behavior_token(A) != compute_behavior_token(B)
+
+    def test_closure_values_matter(self):
+        def make_model(value):
+            class M:
+                def f(self):
+                    return value
+
+            return M
+
+        assert compute_behavior_token(make_model(1)) != compute_behavior_token(make_model(2))
+
 
 # ---------------------------------------------------------------------------
 # Method collection
@@ -262,6 +294,36 @@ class TestDeps:
 
         assert compute_behavior_token(A) != compute_behavior_token(B)
 
+    def test_subclass_deps_extend_inherited_deps(self):
+        def base_a():
+            return 1
+
+        def base_b():
+            return 2
+
+        def sub_dep():
+            return 3
+
+        class BaseA:
+            __ccflow_tokenizer_deps__ = [base_a]
+
+            def f(self):
+                return 1
+
+        class BaseB:
+            __ccflow_tokenizer_deps__ = [base_b]
+
+            def f(self):
+                return 1
+
+        class SubA(BaseA):
+            __ccflow_tokenizer_deps__ = [sub_dep]
+
+        class SubB(BaseB):
+            __ccflow_tokenizer_deps__ = [sub_dep]
+
+        assert compute_behavior_token(SubA) != compute_behavior_token(SubB)
+
 
 # ---------------------------------------------------------------------------
 # Integration with cache_key()
@@ -328,6 +390,27 @@ class TestCacheKeyIntegration:
 
         key = cache_key(MyContext(value=1))
         assert isinstance(key, bytes)
+
+    def test_helper_default_arg_changes_key(self):
+        from ccflow import Flow
+
+        class A(CallableModel):
+            @Flow.call
+            def __call__(self, context: NullContext) -> GenericResult:
+                return GenericResult(value=self.helper())
+
+            def helper(self, x=1):
+                return x
+
+        class B(CallableModel):
+            @Flow.call
+            def __call__(self, context: NullContext) -> GenericResult:
+                return GenericResult(value=self.helper())
+
+            def helper(self, x=2):
+                return x
+
+        assert cache_key(A()) != cache_key(B())
 
     def test_opaque_evaluator_behavior_changes_key(self):
         from ccflow import Flow
