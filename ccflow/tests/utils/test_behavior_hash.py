@@ -1,10 +1,25 @@
-"""Tests for behavior hashing (compute_behavior_token)."""
+"""Tests for tokenize helpers used by cache_key()."""
 
-from ccflow.callable import CallableModel, ContextBase
+from ccflow.callable import CallableModel, ContextBase, EvaluatorBase, ModelEvaluationContext
 from ccflow.context import NullContext
 from ccflow.evaluators.common import cache_key
 from ccflow.result import GenericResult
-from ccflow.utils.tokenize import compute_behavior_token
+from ccflow.utils.tokenize import compute_behavior_token, compute_data_token
+
+# ---------------------------------------------------------------------------
+# Data token
+# ---------------------------------------------------------------------------
+
+
+class TestComputeDataToken:
+    def test_deterministic(self):
+        value = {"a": [1, 2], "b": ("x", 3)}
+
+        assert compute_data_token(value) == compute_data_token(value)
+
+    def test_different_values_different_tokens(self):
+        assert compute_data_token({"x": 1}) != compute_data_token({"x": 2})
+
 
 # ---------------------------------------------------------------------------
 # Basic behavior
@@ -313,6 +328,32 @@ class TestCacheKeyIntegration:
 
         key = cache_key(MyContext(value=1))
         assert isinstance(key, bytes)
+
+    def test_opaque_evaluator_behavior_changes_key(self):
+        from ccflow import Flow
+
+        class MyModel(CallableModel):
+            @Flow.call
+            def __call__(self, context: NullContext) -> GenericResult:
+                return GenericResult(value=1)
+
+        class OpaqueA(EvaluatorBase):
+            tag: str = "same"
+
+            def __call__(self, context: ModelEvaluationContext):
+                return context()
+
+        class OpaqueB(EvaluatorBase):
+            tag: str = "same"
+
+            def __call__(self, context: ModelEvaluationContext):
+                result = context()
+                return result
+
+        inner = ModelEvaluationContext(model=MyModel(), context=NullContext())
+        key1 = cache_key(ModelEvaluationContext(model=OpaqueA(), context=inner))
+        key2 = cache_key(ModelEvaluationContext(model=OpaqueB(), context=inner))
+        assert key1 != key2
 
 
 # ---------------------------------------------------------------------------

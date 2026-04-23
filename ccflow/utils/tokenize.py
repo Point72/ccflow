@@ -2,24 +2,33 @@
 """Tokenization utilities for ccflow models.
 
 Re-exports ``normalize_token`` and ``tokenize`` from dask for data hashing.
-Adds behavior hashing: deterministic SHA-256 fingerprints of class method
-bytecode, useful for cache-key invalidation when callable logic changes.
+Adds thin wrappers around dask-based data hashing and ccflow-specific
+behavior hashing, useful for cache-key invalidation when callable logic
+changes.
 """
 
 import hashlib
 import inspect
 import logging
-from typing import Callable, List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 
 from dask.base import normalize_token, tokenize
 
 __all__ = [
+    "compute_data_token",
     "normalize_token",
     "tokenize",
     "compute_behavior_token",
 ]
 
 logger = logging.getLogger(__name__)
+
+
+def compute_data_token(value: Any) -> str:
+    """Compute a deterministic data token using dask's tokenization."""
+
+    return tokenize(value)
+
 
 # Methods that are never behavior-relevant (pydantic/python internals)
 _SKIPPED_METHODS = frozenset(
