@@ -1,4 +1,4 @@
-"""Tests for tokenize helpers used by cache_key()."""
+"""Tests for tokenize helpers used by cache keys."""
 
 import pytest
 

@@ -528,6 +528,46 @@ with FlowOptionsOverride(options={"cacheable":True, "evaluator": evaluator}):
 #> GenericResult[int](value=1)
 ```
 
+#### How cache keys are built
+
+`MemoryCacheEvaluator` uses `ccflow.evaluators.cache_key()`, which now delegates to `ccflow.utils.compute_cache_token()`.
+
+At a high level, the cache key combines:
+
+- a **data token** for the serialized model/context payload
+- a **behavior token** for each callable/evaluator class that can affect the result
+
+For a direct `CallableModel` call, the cache key depends on:
+
+- `model.model_dump(mode="python")`
+- `compute_behavior_token(type(model))`
+
+For a `ModelEvaluationContext`, the cache key depends on:
+
+- the underlying context payload plus the function name being evaluated (`__call__` vs `__deps__`)
+- the behavior token of the underlying model class
+- the data and behavior tokens of any **non-transparent** evaluators in the chain
+
+Transparent evaluators are skipped, so wrapping a model with logging or other pass-through evaluators does not change its cache identity.
+
+`compute_behavior_token()` hashes the class's Python-defined methods and also consults `__ccflow_tokenizer_deps__` for behavior that lives outside the class body. This is useful when the callable depends on module-level helpers or shared helper classes that should also invalidate the cache key when they change.
+
+```python
+def helper(x):
+    return x + 1
+
+
+class SharedLogic:
+    def transform(self, x):
+        return x * 2
+
+
+class MyModel(CallableModel):
+    __ccflow_tokenizer_deps__ = [helper, SharedLogic]
+```
+
+Entries in `__ccflow_tokenizer_deps__` may be functions or classes. Class dependencies are tokenized recursively via `compute_behavior_token()`. Recursive class dependency graphs are rejected with a `TypeError`.
+
 ### Graph Evaluation
 
 Dependencies between tasks/steps in a workflow is one of the defining characteristics of a workflow orchestration framework. Earlier we covered how dependencies defined (via composition) between configuration objects.

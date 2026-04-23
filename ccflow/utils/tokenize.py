@@ -22,6 +22,17 @@ __all__ = (
 )
 
 
+def _sha256_hexdigest(*parts: bytes | str) -> str:
+    """Return a SHA-256 hex digest for one or more byte/string parts."""
+
+    hasher = hashlib.sha256()
+    for part in parts:
+        if isinstance(part, str):
+            part = part.encode("utf-8")
+        hasher.update(part)
+    return hasher.hexdigest()
+
+
 def compute_data_token(value: Any) -> str:
     """Compute a deterministic data token using dask's tokenization."""
 
@@ -133,14 +144,15 @@ def _hash_function_bytecode(func: Callable) -> Optional[str]:
     if unwrapped is None:
         return None
     code = unwrapped.__code__
-    h = hashlib.sha256(code.co_code)
     # Include constants (skip first if it's the docstring)
     consts = code.co_consts
     if consts and isinstance(consts[0], str):
         consts = consts[1:]
-    h.update(repr(consts).encode("utf-8"))
-    h.update(compute_data_token(_function_state(unwrapped)).encode("utf-8"))
-    return h.hexdigest()
+    return _sha256_hexdigest(
+        code.co_code,
+        repr(consts),
+        compute_data_token(_function_state(unwrapped)),
+    )
 
 
 def _dependency_info(dep: object, *, _visited: Tuple[type, ...]) -> Optional[Tuple[Tuple[str, str, str, str], str, str]]:
@@ -273,7 +285,7 @@ def compute_behavior_token(cls: type, *, _visited: Tuple[type, ...] = ()) -> Opt
     if not method_hashes:
         return None
 
-    token = hashlib.sha256(repr(method_hashes).encode("utf-8")).hexdigest()
+    token = _sha256_hexdigest(repr(method_hashes))
 
     try:
         cls.__ccflow_tokenizer_cache__ = token
