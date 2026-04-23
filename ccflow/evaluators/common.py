@@ -58,22 +58,6 @@ def combine_evaluators(first: Optional[EvaluatorBase], second: Optional[Evaluato
         return MultiEvaluator(evaluators=[first, second])
 
 
-def _model_tokens(model: BaseModel, *, include_data: bool = True) -> List[str]:
-    from ..utils.tokenize import compute_behavior_token, compute_data_token
-
-    tokens = [compute_data_token(model.model_dump(mode="python"))] if include_data else []
-    behavior = compute_behavior_token(type(model))
-    if behavior is not None:
-        tokens.append(behavior)
-    return tokens
-
-
-def _combine_tokens(tokens: List[str]) -> bytes:
-    from ..utils.tokenize import compute_data_token
-
-    return compute_data_token(tuple(tokens)).encode("utf-8")
-
-
 def _flatten_cache_key_context(flow_obj: ModelEvaluationContext) -> tuple[ModelEvaluationContext, str, List[EvaluatorBase]]:
     fn = flow_obj.fn
     non_transparent: List[EvaluatorBase] = []
@@ -256,17 +240,22 @@ def cache_key(flow_obj: Union[ModelEvaluationContext, ContextBase, CallableModel
     Args:
         flow_obj: The object to be tokenized to form the cache key.
     """
-    from ..utils.tokenize import compute_data_token
+    from ..utils.tokenize import compute_cache_token
 
     if isinstance(flow_obj, ModelEvaluationContext):
         flow_obj, fn, non_transparent = _flatten_cache_key_context(flow_obj)
-        tokens = [compute_data_token({**flow_obj.model_dump(mode="python"), "fn": fn})]
-        tokens.extend(_model_tokens(flow_obj.model, include_data=False))
-        for evaluator in non_transparent:
-            tokens.extend(_model_tokens(evaluator))
-        return _combine_tokens(tokens)
+        return compute_cache_token(
+            data_values=[
+                {**flow_obj.model_dump(mode="python"), "fn": fn},
+                *(evaluator.model_dump(mode="python") for evaluator in non_transparent),
+            ],
+            behavior_classes=[type(flow_obj.model), *(type(evaluator) for evaluator in non_transparent)],
+        ).encode("utf-8")
     elif isinstance(flow_obj, (ContextBase, CallableModel)):
-        return _combine_tokens(_model_tokens(flow_obj))
+        return compute_cache_token(
+            data_values=[flow_obj.model_dump(mode="python")],
+            behavior_classes=[type(flow_obj)],
+        ).encode("utf-8")
     else:
         raise TypeError(f"object of type {type(flow_obj)} cannot be serialized by this function!")
 

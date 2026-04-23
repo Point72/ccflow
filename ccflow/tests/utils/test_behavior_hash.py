@@ -1,10 +1,12 @@
 """Tests for tokenize helpers used by cache_key()."""
 
+import pytest
+
 from ccflow.callable import CallableModel, ContextBase, EvaluatorBase, ModelEvaluationContext
 from ccflow.context import NullContext
 from ccflow.evaluators.common import cache_key
 from ccflow.result import GenericResult
-from ccflow.utils.tokenize import compute_behavior_token, compute_data_token
+from ccflow.utils.tokenize import compute_behavior_token, compute_cache_token, compute_data_token
 
 # ---------------------------------------------------------------------------
 # Data token
@@ -19,6 +21,39 @@ class TestComputeDataToken:
 
     def test_different_values_different_tokens(self):
         assert compute_data_token({"x": 1}) != compute_data_token({"x": 2})
+
+
+class TestComputeCacheToken:
+    def test_deterministic(self):
+        class Helper:
+            def f(self):
+                return 1
+
+        token1 = compute_cache_token(data_values=[{"x": 1}], behavior_classes=[Helper])
+        token2 = compute_cache_token(data_values=[{"x": 1}], behavior_classes=[Helper])
+        assert token1 == token2
+
+    def test_data_changes_token(self):
+        class Helper:
+            def f(self):
+                return 1
+
+        token1 = compute_cache_token(data_values=[{"x": 1}], behavior_classes=[Helper])
+        token2 = compute_cache_token(data_values=[{"x": 2}], behavior_classes=[Helper])
+        assert token1 != token2
+
+    def test_behavior_changes_token(self):
+        class HelperA:
+            def f(self):
+                return 1
+
+        class HelperB:
+            def f(self):
+                return 2
+
+        token1 = compute_cache_token(data_values=[{"x": 1}], behavior_classes=[HelperA])
+        token2 = compute_cache_token(data_values=[{"x": 1}], behavior_classes=[HelperB])
+        assert token1 != token2
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +112,7 @@ class TestComputeBehaviorToken:
                 return 1
 
         token = compute_behavior_token(M)
-        assert M.__behavior_token_cache__ == token
+        assert M.__ccflow_tokenizer_cache__ == token
         # Second call returns cached value
         assert compute_behavior_token(M) is token
 
@@ -294,6 +329,29 @@ class TestDeps:
 
         assert compute_behavior_token(A) != compute_behavior_token(B)
 
+    def test_class_dep_included(self):
+        class HelperA:
+            def f(self):
+                return 1
+
+        class HelperB:
+            def f(self):
+                return 2
+
+        class A:
+            __ccflow_tokenizer_deps__ = [HelperA]
+
+            def f(self):
+                return 1
+
+        class B:
+            __ccflow_tokenizer_deps__ = [HelperB]
+
+            def f(self):
+                return 1
+
+        assert compute_behavior_token(A) != compute_behavior_token(B)
+
     def test_subclass_deps_extend_inherited_deps(self):
         def base_a():
             return 1
@@ -323,6 +381,21 @@ class TestDeps:
             __ccflow_tokenizer_deps__ = [sub_dep]
 
         assert compute_behavior_token(SubA) != compute_behavior_token(SubB)
+
+    def test_recursive_class_deps_raise(self):
+        class A:
+            def f(self):
+                return 1
+
+        class B:
+            def g(self):
+                return 2
+
+        A.__ccflow_tokenizer_deps__ = [B]
+        B.__ccflow_tokenizer_deps__ = [A]
+
+        with pytest.raises(TypeError, match="Recursive __ccflow_tokenizer_deps__ class dependency"):
+            compute_behavior_token(A)
 
 
 # ---------------------------------------------------------------------------
@@ -409,6 +482,33 @@ class TestCacheKeyIntegration:
 
             def helper(self, x=2):
                 return x
+
+        assert cache_key(A()) != cache_key(B())
+
+    def test_class_dep_changes_key(self):
+        from ccflow import Flow
+
+        class HelperA:
+            def f(self):
+                return 1
+
+        class HelperB:
+            def f(self):
+                return 2
+
+        class A(CallableModel):
+            __ccflow_tokenizer_deps__ = [HelperA]
+
+            @Flow.call
+            def __call__(self, context: NullContext) -> GenericResult:
+                return GenericResult(value=1)
+
+        class B(CallableModel):
+            __ccflow_tokenizer_deps__ = [HelperB]
+
+            @Flow.call
+            def __call__(self, context: NullContext) -> GenericResult:
+                return GenericResult(value=1)
 
         assert cache_key(A()) != cache_key(B())
 
@@ -512,7 +612,7 @@ class TestInheritedMethods:
         assert compute_behavior_token(Sub) != compute_behavior_token(Base)
 
     def test_subclass_cache_independent(self):
-        """Parent and subclass don't share __behavior_token_cache__."""
+        """Parent and subclass don't share __ccflow_tokenizer_cache__."""
 
         class Base:
             def f(self):

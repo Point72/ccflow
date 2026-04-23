@@ -2,32 +2,46 @@
 """Tokenization utilities for ccflow models.
 
 Re-exports ``normalize_token`` and ``tokenize`` from dask for data hashing.
-Adds thin wrappers around dask-based data hashing and ccflow-specific
-behavior hashing, useful for cache-key invalidation when callable logic
-changes.
+Adds helpers for dask-based data hashing, ccflow-specific behavior hashing,
+and combined cache-token hashing, useful for cache-key invalidation when
+callable logic changes.
 """
 
 import hashlib
 import inspect
-import logging
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, Callable, Iterable, List, Optional, Tuple
 
 from dask.base import normalize_token, tokenize
 
-__all__ = [
+__all__ = (
+    "compute_behavior_token",
+    "compute_cache_token",
     "compute_data_token",
     "normalize_token",
     "tokenize",
-    "compute_behavior_token",
-]
-
-logger = logging.getLogger(__name__)
+)
 
 
 def compute_data_token(value: Any) -> str:
     """Compute a deterministic data token using dask's tokenization."""
 
     return tokenize(value)
+
+
+def compute_cache_token(*, data_values: Iterable[Any] = (), behavior_classes: Iterable[type] = ()) -> str:
+    """Compute a cache token by combining data and behavior tokens.
+
+    Args:
+        data_values: Values whose serialized data should affect the cache key.
+        behavior_classes: Classes whose behavior tokens should affect the cache key.
+    """
+
+    tokens = [compute_data_token(value) for value in data_values]
+    for cls in behavior_classes:
+        behavior = compute_behavior_token(cls)
+        if behavior is not None:
+            tokens.append(behavior)
+    return compute_data_token(tuple(tokens))
 
 
 # Methods that are never behavior-relevant (pydantic/python internals)
@@ -129,27 +143,37 @@ def _hash_function_bytecode(func: Callable) -> Optional[str]:
     return h.hexdigest()
 
 
-def _dependency_sort_key(func: Callable) -> Tuple[str, str, str]:
-    """Return a deterministic identity for dependency sorting/deduping."""
+def _dependency_info(dep: object, *, _visited: Tuple[type, ...]) -> Optional[Tuple[Tuple[str, str, str, str], str, str]]:
+    """Return deterministic identity, name, and token for a dependency entry."""
 
-    unwrapped = _unwrap_function(func) or func
+    if isinstance(dep, type):
+        module = getattr(dep, "__module__", "")
+        qualname = getattr(dep, "__qualname__", getattr(dep, "__name__", repr(dep)))
+        behavior = compute_behavior_token(dep, _visited=_visited)
+        if behavior is None:
+            return None
+        return ("class", module, qualname, behavior), f"__dep_class__:{qualname}", behavior
+
+    unwrapped = _unwrap_function(dep)
+    if unwrapped is None:
+        return None
     module = getattr(unwrapped, "__module__", "")
     qualname = getattr(unwrapped, "__qualname__", getattr(unwrapped, "__name__", repr(unwrapped)))
-    behavior = _hash_function_bytecode(unwrapped) or ""
-    return module, qualname, behavior
+    behavior = _hash_function_bytecode(unwrapped)
+    if behavior is None:
+        return None
+    return ("callable", module, qualname, behavior), f"__dep__:{qualname}", behavior
 
 
 def _collect_methods(cls: type) -> List[Tuple[str, Callable]]:
-    """Collect callable methods from *cls* (walking MRO) plus ``__ccflow_tokenizer_deps__``.
+    """Collect callable methods from *cls* (walking MRO).
 
     Methods are collected with MRO override semantics: for each method name,
     the first definition found in the MRO wins. This means a subclass's
     ``__call__`` overrides the base class's even if the subclass doesn't
     redefine every method.
 
-    Own methods are sorted alphabetically. Dependencies are merged across the
-    MRO, deduplicated, and sorted deterministically so that declaration order
-    does not affect the hash.
+    Own methods are sorted alphabetically.
 
     Internal framework attributes (``__ccflow_*``) and pydantic/python
     boilerplate methods are skipped.
@@ -173,45 +197,55 @@ def _collect_methods(cls: type) -> List[Tuple[str, Callable]]:
 
     methods.sort(key=lambda pair: pair[0])
 
-    # Collect __ccflow_tokenizer_deps__ from the full MRO. Subclasses may add
-    # deps without losing inherited ones.
+    return methods
+
+
+def _collect_dependency_hashes(cls: type, *, _visited: Tuple[type, ...]) -> List[Tuple[str, str]]:
+    """Collect hashed ``__ccflow_tokenizer_deps__`` entries from the full MRO.
+
+    Dependencies are merged across the MRO, deduplicated, and sorted
+    deterministically so that declaration order does not affect the hash.
+
+    Dependency entries may be either:
+    - function-like objects hashable via ``_hash_function_bytecode()``
+    - classes, in which case ``compute_behavior_token(dep_class)`` is included
+    """
     deps = []
     seen_dep_keys = set()
     for klass in cls.__mro__:
         extra_deps = klass.__dict__.get("__ccflow_tokenizer_deps__")
         if extra_deps is None:
             continue
-        for func in extra_deps:
-            unwrapped = _unwrap_function(func) or func
-            if not callable(unwrapped):
+        for dep in extra_deps:
+            dep_info = _dependency_info(dep, _visited=_visited)
+            if dep_info is None:
                 continue
-            dep_key = _dependency_sort_key(func)
+            dep_key, dep_name, dep_token = dep_info
             if dep_key in seen_dep_keys:
                 continue
             seen_dep_keys.add(dep_key)
-            deps.append((dep_key, func))
+            deps.append((dep_key, dep_name, dep_token))
 
-    deps.sort(key=lambda pair: pair[0])
-    methods.extend((f"__dep__:{dep_key[1]}", func) for dep_key, func in deps)
-
-    return methods
+    deps.sort(key=lambda item: item[0])
+    return [(dep_name, dep_token) for _, dep_name, dep_token in deps]
 
 
-def compute_behavior_token(cls: type) -> Optional[str]:
+def compute_behavior_token(cls: type, *, _visited: Tuple[type, ...] = ()) -> Optional[str]:
     """Compute a SHA-256 behavior token for *cls* based on its method bytecode.
 
     The token captures behavior-relevant state for every method in *cls*'s MRO
     (with standard override semantics): bytecode, constants (minus docstrings),
     defaults, keyword-only defaults, and closure cell contents. It also
-    includes any standalone functions listed in ``cls.__ccflow_tokenizer_deps__``.
+    includes any functions or classes listed in ``cls.__ccflow_tokenizer_deps__``.
 
     Decorator chains (e.g. ``@Flow.call``) are automatically unwrapped so
     that the hash reflects the user's implementation, not the wrapper.
 
     ``__ccflow_tokenizer_deps__`` values are merged across the full MRO, so
-    subclasses can add dependencies without dropping inherited ones.
+    subclasses can add dependencies without dropping inherited ones. Class
+    entries contribute their own ``compute_behavior_token()`` recursively.
 
-    Results are cached on the class in ``cls.__behavior_token_cache__``.
+    Results are cached on the class in ``cls.__ccflow_tokenizer_cache__``.
     The cache is stored directly on the class (not inherited), so subclass
     tokens are independent of parent tokens.
 
@@ -223,13 +257,18 @@ def compute_behavior_token(cls: type) -> Optional[str]:
         has been computed will **not** invalidate the cached token. Redefining
         the class (e.g. in Jupyter) creates a new class object and works fine.
     """
+    if cls in _visited:
+        raise TypeError(f"Recursive __ccflow_tokenizer_deps__ class dependency detected for {cls.__module__}.{cls.__qualname__}")
+
     # Check cache on cls itself (not inherited)
-    cache = cls.__dict__.get("__behavior_token_cache__")
+    cache = cls.__dict__.get("__ccflow_tokenizer_cache__")
     if cache is not None:
         return cache
 
+    visited = _visited + (cls,)
     methods = _collect_methods(cls)
     method_hashes = [(name, h) for name, func in methods if (h := _hash_function_bytecode(func)) is not None]
+    method_hashes.extend(_collect_dependency_hashes(cls, _visited=visited))
 
     if not method_hashes:
         return None
@@ -237,7 +276,7 @@ def compute_behavior_token(cls: type) -> Optional[str]:
     token = hashlib.sha256(repr(method_hashes).encode("utf-8")).hexdigest()
 
     try:
-        cls.__behavior_token_cache__ = token
+        cls.__ccflow_tokenizer_cache__ = token
     except (TypeError, AttributeError):
         pass  # e.g. C extension types that don't allow attribute setting
 
