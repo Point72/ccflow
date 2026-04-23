@@ -591,7 +591,10 @@ class ModelRegistry(BaseModel, collections.abc.Mapping):
         Returns:
             The instance of the model registry, with the configs loaded.
         """
-        import hydra  # Heavy import, only import if used.
+        try:
+            import lerna as hydra
+        except ImportError:
+            import hydra  # Heavy import, only import if used.
 
         overrides = overrides or []
         path = pathlib.Path(path).absolute()  # Hydra requires absolute paths
@@ -680,8 +683,12 @@ class _ModelRegistryLoader:
         # This also allows for nested attributes on the model itself to
         # be constructed, even if they are not themselves of BaseModel type,
         # or if they are of a specific subclass of the parent.
-        from hydra.errors import InstantiationException
-        from hydra.utils import instantiate
+        try:
+            from lerna.errors import InstantiationException
+            from lerna.utils import instantiate
+        except ImportError:
+            from hydra.errors import InstantiationException
+            from hydra.utils import instantiate
 
         if resolve_from is not None and resolve_from is not registry:
             initial_chain = [resolve_from, registry]
