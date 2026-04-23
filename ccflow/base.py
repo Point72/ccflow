@@ -64,17 +64,34 @@ class _RegistryMixin:
         """Return the set of registrations that has happened for this model"""
         return self._registrations.copy()
 
-    def get_registered_names(self) -> List[str]:
-        """Return the set of names for this model in the root registry."""
+    def get_registered_names(self, include_orphaned: bool = False) -> List[str]:
+        """Return the set of names for this model in the root registry.
+
+        Args:
+            include_orphaned: If True, also return names for models whose parent
+                sub-registry has been orphaned (replaced via add(..., overwrite=True)).
+                An orphaned registry is no longer reachable from root but retains its
+                original .name. Default is False, which preserves legacy behavior:
+                models in orphaned sub-registries return [].
+
+        Note: when include_orphaned=True, the returned path is reconstructed from the
+        orphaned registry's .name and is not guaranteed to resolve via a live root lookup.
+        The invariant that (reg, name) in model._registrations implies
+        reg._models[name] is model does not hold for orphaned registries.
+        """
         if self._registrations:
             full_names = []
             for registry, name in self._registrations:
-                registry_names = registry.get_registered_names()
+                registry_names = registry.get_registered_names(include_orphaned=include_orphaned)
                 for registry_name in registry_names:
                     full_names.append(REGISTRY_SEPARATOR.join([registry_name, name]))
             return full_names
         elif self is ModelRegistry.root():
             return [""]
+        elif include_orphaned and isinstance(self, ModelRegistry) and self._was_registered and self.name:
+            # Orphaned sub-registry: de-registered from its parent but .name is still valid.
+            # Reconstruct path as if registered directly under root.
+            return [f"{REGISTRY_SEPARATOR}{self.name}"]
         return []
 
     def get_registry_dependencies(self, types: Optional[Tuple["ModelType"]] = None) -> List[List[str]]:
@@ -194,6 +211,7 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
 
     # We want to track under what names a model has been registered
     _registrations: List[Tuple["ModelRegistry", str]] = PrivateAttr(default_factory=list)
+    _was_registered: bool = PrivateAttr(default=False)
 
     model_config = ConfigDict(
         # Note that validate_assignment only partially works: https://github.com/pydantic/pydantic/issues/7105
@@ -488,6 +506,7 @@ class ModelRegistry(BaseModel, collections.abc.Mapping):
             self._models[name]._registrations.remove((self, name))
         # Add the registered name to the new model
         model._registrations.append((self, name))
+        model._was_registered = True
 
         self._models[name] = model
         log.debug("Added '%s' to registry '%s': %s", name, self._debug_name, model)

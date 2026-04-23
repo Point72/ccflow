@@ -306,6 +306,53 @@ class TestRegistry(TestCase):
         r3.add("foo2", r["foo2"])
         self.assertListEqual(m3.get_registry_dependencies(), [["/foo2"], ["/subreg/bar"]])
 
+    def test_orphaned_subregistry_resolves_name(self):
+        """Models in an orphaned sub-registry still resolve names at any nesting depth.
+
+        When a sub-registry is replaced via add(..., overwrite=True), models registered
+        in the old sub-registry (and sub-sub-registries beneath it) must still be able
+        to resolve their registered names. Only the topmost orphaned registry hits the
+        new branch; deeper registries have intact _registrations chains pointing to it.
+        """
+        r = ModelRegistry.root()
+        old_foo = ModelRegistry(name="foo")
+        bar = ModelRegistry(name="bar")
+        m = MyTestModel(a="x", b=0.0)
+
+        r.add("foo", old_foo)
+        old_foo.add("bar", bar)
+        bar.add("model_name", m)
+
+        self.assertListEqual(m.get_registered_names(), ["/foo/bar/model_name"])
+
+        new_foo = ModelRegistry(name="foo")
+        r.add("foo", new_foo, overwrite=True)
+
+        self.assertListEqual(old_foo._registrations, [])
+        self.assertTrue(old_foo._was_registered)
+        self.assertListEqual(m.get_registered_names(include_orphaned=True), ["/foo/bar/model_name"])
+
+    def test_orphaned_subregistry_default_returns_empty(self):
+        """Default behavior (include_orphaned=False) preserves legacy: orphaned models return []."""
+        r = ModelRegistry.root()
+        old_foo = ModelRegistry(name="foo")
+        m = MyTestModel(a="x", b=0.0)
+
+        r.add("foo", old_foo)
+        old_foo.add("model_name", m)
+
+        self.assertListEqual(m.get_registered_names(), ["/foo/model_name"])
+
+        new_foo = ModelRegistry(name="foo")
+        r.add("foo", new_foo, overwrite=True)
+
+        # Default include_orphaned=False → legacy behavior: returns []
+        self.assertListEqual(m.get_registered_names(), [])
+        # Explicit False → same
+        self.assertListEqual(m.get_registered_names(include_orphaned=False), [])
+        # Explicit True → reconstructs path
+        self.assertListEqual(m.get_registered_names(include_orphaned=True), ["/foo/model_name"])
+
 
 class TestRegistryLoading(TestCase):
     def setUp(self) -> None:
