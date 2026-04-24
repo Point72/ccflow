@@ -1,0 +1,73 @@
+# Flow.model configurations for Hydra integration tests.
+
+flow_loader:
+    _target_: ccflow.tests.test_flow_model.basic_loader
+    source: test_source
+    multiplier: 5
+
+flow_processor:
+    _target_: ccflow.tests.test_flow_model.string_processor
+    prefix: "value="
+    suffix: "!"
+
+flow_source:
+    _target_: ccflow.tests.test_flow_model.data_source
+    base_value: 100
+
+flow_transformer:
+    _target_: ccflow.tests.test_flow_model.data_transformer
+    source: flow_source
+    factor: 3
+
+flow_stage1:
+    _target_: ccflow.tests.test_flow_model.pipeline_stage1
+    initial: 10
+
+flow_stage2:
+    _target_: ccflow.tests.test_flow_model.pipeline_stage2
+    stage1_output: flow_stage1
+    multiplier: 2
+
+flow_stage3:
+    _target_: ccflow.tests.test_flow_model.pipeline_stage3
+    stage2_output: flow_stage2
+    offset: 50
+
+diamond_source:
+    _target_: ccflow.tests.test_flow_model.data_source
+    base_value: 10
+
+diamond_branch_a:
+    _target_: ccflow.tests.test_flow_model.data_transformer
+    source: diamond_source
+    factor: 2
+
+diamond_branch_b:
+    _target_: ccflow.tests.test_flow_model.data_transformer
+    source: diamond_source
+    factor: 5
+
+diamond_aggregator:
+    _target_: ccflow.tests.test_flow_model.data_aggregator
+    input_a: diamond_branch_a
+    input_b: diamond_branch_b
+    operation: add
+
+flow_date_loader:
+    _target_: ccflow.tests.test_flow_model.date_range_loader_previous_day
+    source: market_data
+    include_weekends: false
+
+flow_date_processor:
+    _target_: ccflow.tests.test_flow_model.date_range_processor
+    raw_data: flow_date_loader
+    normalize: true
+
+contextual_loader_model:
+    _target_: ccflow.tests.test_flow_model.contextual_loader
+    source: data_source
+
+contextual_processor_model:
+    _target_: ccflow.tests.test_flow_model.contextual_processor
+    data: contextual_loader_model
+    prefix: output

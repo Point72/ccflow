@@ -1,5 +1,5 @@
 from pickle import dumps as pdumps, loads as ploads
-from typing import Generic, List, Optional, Tuple, Type, TypeVar, Union
+from typing import Annotated, Generic, List, Optional, Tuple, Type, TypeVar, Union
 from unittest import TestCase
 
 import ray
@@ -21,6 +21,7 @@ from ccflow import (
     ResultType,
     WrapperModel,
 )
+from ccflow.callable import ModelEvaluationContext
 from ccflow.local_persistence import LOCAL_ARTIFACTS_MODULE_NAME
 
 
@@ -417,6 +418,31 @@ class TestCallableModel(TestCase):
         self.assertEqual(m(context=context), target)
         self.assertEqual(m().y, "default")
 
+    def test_optional_context_model_evaluation_context(self):
+        """ModelEvaluationContext should work with optional-context callables."""
+        m = MyCallableOptionalContext()
+        # With a concrete context dict
+        mec = ModelEvaluationContext(model=m, context={"a": "bar"})
+        result = mec()
+        self.assertEqual(result.y, "bar")
+        # With None context
+        mec_none = ModelEvaluationContext(model=m, context=None)
+        result_none = mec_none()
+        self.assertEqual(result_none.y, "default")
+
+    def test_optional_context_flow_compute(self):
+        """flow.compute() should work with optional-context callables."""
+        m = MyCallableOptionalContext()
+        # With no arguments (should pass None through optional path)
+        result = m.flow.compute()
+        self.assertEqual(result.y, "default")
+        # With explicit None
+        result = m.flow.compute(None)
+        self.assertEqual(result.y, "default")
+        # With a concrete context
+        result = m.flow.compute(MyContext(a="from_compute"))
+        self.assertEqual(result.y, "from_compute")
+
     def test_inheritance(self):
         m = MyCallableChild(i=5)
         self.assertEqual(m(MyContext(a="foo")), MyResult(x=5, y="foo"))
@@ -462,6 +488,7 @@ class TestCallableModel(TestCase):
         error = "__call__ method must take a single argument, named 'context'"
         self.assertRaisesRegex(ValueError, error, BadModelMissingContextArg)
 
+        # BadModelDoubleContextArg also fails with the same error since extra params aren't allowed
         error = "__call__ method must take a single argument, named 'context'"
         self.assertRaisesRegex(ValueError, error, BadModelDoubleContextArg)
 
@@ -783,3 +810,430 @@ class TestCallableModelDeps(TestCase):
                 @Flow.deps
                 def foo(self, context):
                     return []
+
+
+# =============================================================================
+# Tests for Flow.call(auto_context=True)
+# =============================================================================
+
+
+class TestAutoContext(TestCase):
+    """Tests for @Flow.call(auto_context=True)."""
+
+    def test_basic_usage_with_kwargs(self):
+        """Test basic auto_context usage with keyword arguments."""
+
+        class AutoContextCallable(CallableModel):
+            @Flow.call(auto_context=True)
+            def __call__(self, *, x: int, y: str = "default") -> GenericResult:
+                return GenericResult(value=f"{x}-{y}")
+
+        model = AutoContextCallable()
+
+        # Call with kwargs
+        result = model(x=42, y="hello")
+        self.assertEqual(result.value, "42-hello")
+
+        # Call with default
+        result = model(x=10)
+        self.assertEqual(result.value, "10-default")
+
+    def test_auto_context_attribute(self):
+        """Test that __auto_context__ attribute is set."""
+
+        class AutoContextCallable(CallableModel):
+            @Flow.call(auto_context=True)
+            def __call__(self, *, a: int, b: str) -> GenericResult:
+                return GenericResult(value=f"{a}-{b}")
+
+        # The __call__ method should have __auto_context__
+        call_method = AutoContextCallable.__call__
+        self.assertTrue(hasattr(call_method, "__wrapped__"))
+        # Access the inner function's __auto_context__
+        inner = call_method.__wrapped__
+        self.assertTrue(hasattr(inner, "__auto_context__"))
+
+        auto_ctx = inner.__auto_context__
+        self.assertTrue(issubclass(auto_ctx, ContextBase))
+        self.assertIn("a", auto_ctx.model_fields)
+        self.assertIn("b", auto_ctx.model_fields)
+
+    def test_auto_context_is_registered(self):
+        """Test that the auto context is registered for serialization."""
+
+        class AutoContextCallable(CallableModel):
+            @Flow.call(auto_context=True)
+            def __call__(self, *, value: int) -> GenericResult:
+                return GenericResult(value=value)
+
+        inner = AutoContextCallable.__call__.__wrapped__
+        auto_ctx = inner.__auto_context__
+
+        # Should have __ccflow_import_path__ set
+        self.assertTrue(hasattr(auto_ctx, "__ccflow_import_path__"))
+        self.assertTrue(auto_ctx.__ccflow_import_path__.startswith(LOCAL_ARTIFACTS_MODULE_NAME))
+
+    def test_call_with_context_object(self):
+        """Test calling with a context object instead of kwargs."""
+
+        class AutoContextCallable(CallableModel):
+            @Flow.call(auto_context=True)
+            def __call__(self, *, x: int, y: str = "default") -> GenericResult:
+                return GenericResult(value=f"{x}-{y}")
+
+        model = AutoContextCallable()
+
+        # Get the auto context class
+        auto_ctx = AutoContextCallable.__call__.__wrapped__.__auto_context__
+
+        # Create a context object
+        ctx = auto_ctx(x=99, y="context")
+        result = model(ctx)
+        self.assertEqual(result.value, "99-context")
+
+    def test_with_parent_context(self):
+        """Test auto_context with a parent context class."""
+
+        class ParentContext(ContextBase):
+            base_value: str = "base"
+
+        class AutoContextCallable(CallableModel):
+            @Flow.call(auto_context=ParentContext)
+            def __call__(self, *, x: int, base_value: str) -> GenericResult:
+                return GenericResult(value=f"{x}-{base_value}")
+
+        # Get auto context
+        auto_ctx = AutoContextCallable.__call__.__wrapped__.__auto_context__
+
+        # Should inherit from ParentContext
+        self.assertTrue(issubclass(auto_ctx, ParentContext))
+
+        # Should have both fields
+        self.assertIn("base_value", auto_ctx.model_fields)
+        self.assertIn("x", auto_ctx.model_fields)
+
+        # Create context with parent field
+        ctx = auto_ctx(x=42, base_value="custom")
+        self.assertEqual(ctx.base_value, "custom")
+        self.assertEqual(ctx.x, 42)
+
+    def test_parent_fields_must_be_in_signature(self):
+        """Test that parent context fields must be included in function signature."""
+
+        class ParentContext(ContextBase):
+            required_field: str
+
+        with self.assertRaises(TypeError) as cm:
+
+            class AutoContextCallable(CallableModel):
+                @Flow.call(auto_context=ParentContext)
+                def __call__(self, *, x: int) -> GenericResult:
+                    return GenericResult(value=x)
+
+        self.assertIn("required_field", str(cm.exception))
+
+    def test_parent_field_type_incompatibility_rejected(self):
+        """auto_context with parent rejects incompatible field type overrides."""
+
+        class ParentContext(ContextBase):
+            base: int
+
+        with self.assertRaises(TypeError) as cm:
+
+            class BadCallable(CallableModel):
+                @Flow.call(auto_context=ParentContext)
+                def __call__(self, *, base: str) -> GenericResult:
+                    return GenericResult(value=base)
+
+        self.assertIn("incompatible", str(cm.exception))
+        self.assertIn("base", str(cm.exception))
+
+    def test_parent_field_same_type_accepted(self):
+        """auto_context with parent accepts matching field types."""
+
+        class ParentContext(ContextBase):
+            base: int
+
+        class MatchingCallable(CallableModel):
+            @Flow.call(auto_context=ParentContext)
+            def __call__(self, *, base: int, extra: str = "x") -> GenericResult:
+                return GenericResult(value=f"{base}-{extra}")
+
+        auto_ctx = MatchingCallable.__call__.__wrapped__.__auto_context__
+        self.assertTrue(issubclass(auto_ctx, ParentContext))
+
+    def test_parent_field_generic_annotations_accepted(self):
+        """auto_context with parent accepts generic annotations like list[int], dict[str, int]."""
+        from typing import Dict
+
+        class ParentContext(ContextBase):
+            vals: list[int]
+            mapping: Dict[str, int] = {}
+
+        class GenericCallable(CallableModel):
+            @Flow.call(auto_context=ParentContext)
+            def __call__(self, *, vals: list[int], mapping: Dict[str, int] = {}) -> GenericResult:
+                return GenericResult(value=sum(vals) + sum(mapping.values()))
+
+        auto_ctx = GenericCallable.__call__.__wrapped__.__auto_context__
+        self.assertTrue(issubclass(auto_ctx, ParentContext))
+
+        model = GenericCallable()
+        result = model(vals=[1, 2, 3], mapping={"a": 10})
+        self.assertEqual(result.value, 16)
+
+    def test_cloudpickle_roundtrip(self):
+        """Test cloudpickle roundtrip for auto_context callable."""
+
+        class AutoContextCallable(CallableModel):
+            multiplier: int = 2
+
+            @Flow.call(auto_context=True)
+            def __call__(self, *, x: int) -> GenericResult:
+                return GenericResult(value=x * self.multiplier)
+
+        model = AutoContextCallable(multiplier=3)
+
+        # Test roundtrip
+        restored = rcploads(rcpdumps(model))
+
+        result = restored(x=10)
+        self.assertEqual(result.value, 30)
+
+    def test_ray_task_execution(self):
+        """Test auto_context callable in Ray task."""
+
+        class AutoContextCallable(CallableModel):
+            factor: int = 2
+
+            @Flow.call(auto_context=True)
+            def __call__(self, *, x: int, y: int = 1) -> GenericResult:
+                return GenericResult(value=(x + y) * self.factor)
+
+        @ray.remote
+        def run_callable(model, **kwargs):
+            return model(**kwargs).value
+
+        model = AutoContextCallable(factor=5)
+
+        with ray.init(num_cpus=1):
+            result = ray.get(run_callable.remote(model, x=10, y=2))
+
+        self.assertEqual(result, 60)  # (10 + 2) * 5
+
+    def test_context_type_property_works(self):
+        """Test that type_ property works on the auto context."""
+
+        class AutoContextCallable(CallableModel):
+            @Flow.call(auto_context=True)
+            def __call__(self, *, x: int) -> GenericResult:
+                return GenericResult(value=x)
+
+        auto_ctx = AutoContextCallable.__call__.__wrapped__.__auto_context__
+        ctx = auto_ctx(x=42)
+
+        # type_ should work and be importable
+        type_path = str(ctx.type_)
+        self.assertIn("_Local_", type_path)
+        self.assertEqual(ctx.type_.object, auto_ctx)
+
+    def test_complex_field_types(self):
+        """Test auto_context with complex field types."""
+        from typing import List, Optional
+
+        class AutoContextCallable(CallableModel):
+            @Flow.call(auto_context=True)
+            def __call__(
+                self,
+                *,
+                items: List[int],
+                name: Optional[str] = None,
+                count: int = 0,
+            ) -> GenericResult:
+                total = sum(items) + count
+                return GenericResult(value=f"{name}:{total}" if name else str(total))
+
+        model = AutoContextCallable()
+
+        result = model(items=[1, 2, 3], name="test", count=10)
+        self.assertEqual(result.value, "test:16")
+
+        result = model(items=[5, 5])
+        self.assertEqual(result.value, "10")
+
+    def test_with_flow_options(self):
+        """Test auto_context with FlowOptions parameters."""
+
+        class AutoContextCallable(CallableModel):
+            @Flow.call(auto_context=True, validate_result=False)
+            def __call__(self, *, x: int) -> GenericResult:
+                return GenericResult(value=x)
+
+        model = AutoContextCallable()
+        result = model(x=42)
+        self.assertEqual(result.value, 42)
+
+    def test_error_without_auto_context(self):
+        """Test that using kwargs signature without auto_context raises an error."""
+
+        class BadCallable(CallableModel):
+            @Flow.call  # Missing auto_context=True!
+            def __call__(self, *, x: int, y: str = "default") -> GenericResult:
+                return GenericResult(value=f"{x}-{y}")
+
+        # Error happens at instantiation time when _check_signature validates
+        with self.assertRaises(ValueError) as cm:
+            BadCallable()
+
+        # Should fail because __call__ must take a single argument named 'context'
+        error_msg = str(cm.exception)
+        self.assertIn("__call__", error_msg)
+        self.assertIn("context", error_msg)
+
+    def test_invalid_auto_context_value(self):
+        """Test that invalid auto_context values raise TypeError with helpful message."""
+        with self.assertRaises(TypeError) as cm:
+
+            @Flow.call(auto_context="invalid")
+            def bad_func(self, *, x: int) -> GenericResult:
+                return GenericResult(value=x)
+
+        error_msg = str(cm.exception)
+        self.assertIn("auto_context must be False, True, or a ContextBase subclass", error_msg)
+
+    def test_auto_context_rejects_var_args(self):
+        """auto_context should reject *args early with a clear error."""
+        with self.assertRaises(TypeError) as cm:
+
+            class AutoContextCallable(CallableModel):
+                @Flow.call(auto_context=True)
+                def __call__(self, *args: int) -> GenericResult:
+                    return GenericResult(value=len(args))
+
+        self.assertIn("variadic positional", str(cm.exception))
+
+    def test_auto_context_rejects_var_kwargs(self):
+        """auto_context should reject **kwargs early with a clear error."""
+        with self.assertRaises(TypeError) as cm:
+
+            class AutoContextCallable(CallableModel):
+                @Flow.call(auto_context=True)
+                def __call__(self, **kwargs: int) -> GenericResult:
+                    return GenericResult(value=len(kwargs))
+
+        self.assertIn("variadic keyword", str(cm.exception))
+
+    def test_auto_context_requires_return_annotation(self):
+        """auto_context should reject missing return annotations immediately."""
+        with self.assertRaises(TypeError) as cm:
+
+            class AutoContextCallable(CallableModel):
+                @Flow.call(auto_context=True)
+                def __call__(self, *, value: int):
+                    return GenericResult(value=value)
+
+        self.assertIn("must have a return type annotation", str(cm.exception))
+
+    def test_auto_context_rejects_missing_annotation(self):
+        """auto_context should reject params without type annotations."""
+        with self.assertRaises(TypeError) as cm:
+
+            class AutoContextCallable(CallableModel):
+                @Flow.call(auto_context=True)
+                def __call__(self, *, value) -> GenericResult:
+                    return GenericResult(value=value)
+
+        self.assertIn("must have a type annotation", str(cm.exception))
+
+
+class TestDeclaredTypeMatches(TestCase):
+    """Tests for _declared_type_matches helper in callable.py."""
+
+    def test_typevar_always_matches(self):
+        from ccflow.callable import _declared_type_matches
+
+        T = TypeVar("T")
+        self.assertTrue(_declared_type_matches(int, T))
+
+    def test_union_expected_no_type_args(self):
+        """Union with no concrete type args should return False."""
+        from ccflow.callable import _declared_type_matches
+
+        # Union[None] after filtering out NoneType has no concrete args
+        self.assertFalse(_declared_type_matches(int, Union[None]))
+
+    def test_union_expected_with_actual_type(self):
+        """Concrete type matching Union expected."""
+        from ccflow.callable import _declared_type_matches
+
+        self.assertTrue(_declared_type_matches(int, Union[int, str]))
+        self.assertFalse(_declared_type_matches(float, Union[int, str]))
+
+    def test_union_both_sides(self):
+        """Both actual and expected are Unions."""
+        from ccflow.callable import _declared_type_matches
+
+        self.assertTrue(_declared_type_matches(Union[int, str], Union[int, str]))
+        self.assertTrue(_declared_type_matches(Union[str, int], Union[int, str]))  # order independent
+        self.assertFalse(_declared_type_matches(Union[int, float], Union[int, str]))
+
+    def test_non_type_actual(self):
+        """Non-type actual should return False."""
+        from ccflow.callable import _declared_type_matches
+
+        self.assertFalse(_declared_type_matches("not_a_type", int))
+
+    def test_non_type_expected(self):
+        """Non-type expected should return False."""
+        from ccflow.callable import _declared_type_matches
+
+        self.assertFalse(_declared_type_matches(int, "not_a_type"))
+
+    def test_annotated_types_are_unwrapped(self):
+        """Annotated wrappers should not affect generic type matching."""
+        from ccflow.callable import _declared_type_matches
+
+        self.assertTrue(_declared_type_matches(Annotated[int, "actual"], Annotated[int, "expected"]))
+        self.assertTrue(_declared_type_matches(int, Annotated[int, "expected"]))
+
+
+class TestCallableModelGenericValidation(TestCase):
+    """Tests for CallableModelGeneric type validation paths."""
+
+    def test_context_type_mismatch_raises(self):
+        """Generic type validation should reject context type mismatch."""
+
+        class ContextA(ContextBase):
+            a: int
+
+        class ContextB(ContextBase):
+            b: int
+
+        class ModelA(CallableModel):
+            @Flow.call
+            def __call__(self, context: ContextA) -> GenericResult[int]:
+                return GenericResult(value=context.a)
+
+        with self.assertRaises(ValidationError):
+            # Expect ContextB but model has ContextA
+            CallableModelGenericType[ContextB, GenericResult[int]].model_validate(ModelA())
+
+    def test_result_type_mismatch_raises(self):
+        """Generic type validation should reject result type mismatch."""
+
+        class MyContext(ContextBase):
+            x: int
+
+        class ResultA(ResultBase):
+            a: int
+
+        class ResultB(ResultBase):
+            b: int
+
+        class ModelA(CallableModel):
+            @Flow.call
+            def __call__(self, context: MyContext) -> ResultA:
+                return ResultA(a=context.x)
+
+        with self.assertRaises(ValidationError):
+            CallableModelGenericType[MyContext, ResultB].model_validate(ModelA())

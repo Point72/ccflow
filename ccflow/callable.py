@@ -12,10 +12,28 @@ which all need to be defined together so that pydantic (especially V1) can resol
 """
 
 import abc
+import inspect
 import logging
 from functools import lru_cache, wraps
 from inspect import Signature, isclass, signature
-from typing import Any, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar, Union, get_args, get_origin
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    Callable,
+    ClassVar,
+    Dict,
+    Generic,
+    List,
+    Optional,
+    Tuple,
+    Type,
+    TypeVar,
+    Union,
+    cast,
+    get_args,
+    get_origin,
+)
 
 from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field, InstanceOf, PrivateAttr, TypeAdapter, field_validator, model_validator
 from typing_extensions import override
@@ -27,7 +45,11 @@ from .base import (
     ResultBase,
     ResultType,
 )
+from .local_persistence import create_ccflow_model
 from .validators import str_to_log_level
+
+if TYPE_CHECKING:
+    from .flow_model import FlowAPI
 
 __all__ = (
     "GraphDepType",
@@ -59,6 +81,25 @@ log = logging.getLogger(__name__)
 @lru_cache
 def _cached_signature(fn):
     return signature(fn)
+
+
+def _declared_type_matches(actual: Any, expected: Any) -> bool:
+    while get_origin(actual) is Annotated:
+        actual = get_args(actual)[0]
+    while get_origin(expected) is Annotated:
+        expected = get_args(expected)[0]
+    if isinstance(expected, TypeVar):
+        return True
+    if get_origin(expected) is Union:
+        expected_args = tuple(arg for arg in get_args(expected) if isinstance(arg, type))
+        if not expected_args:
+            return False
+        if get_origin(actual) is Union:
+            actual_args = tuple(arg for arg in get_args(actual) if isinstance(arg, type))
+            return set(actual_args) == set(expected_args)
+        return isinstance(actual, type) and any(issubclass(actual, arg) for arg in expected_args)
+
+    return isinstance(actual, type) and isinstance(expected, type) and issubclass(actual, expected)
 
 
 class MetaData(BaseModel):
@@ -127,7 +168,7 @@ class _CallableModel(BaseModel, abc.ABC):
     @model_validator(mode="after")
     def _check_signature(self):
         sig_call = _cached_signature(self.__class__.__call__)
-        if len(sig_call.parameters) != 2 or "context" not in sig_call.parameters:  # ("self", "context")
+        if len(sig_call.parameters) != 2 or "context" not in sig_call.parameters:
             raise ValueError("__call__ method must take a single argument, named 'context'")
 
         sig_deps = _cached_signature(self.__class__.__deps__)
@@ -174,6 +215,19 @@ class _CallableModel(BaseModel, abc.ABC):
 
         Implementations should be decorated with Flow.call.
         """
+
+    def _evaluation_identity_payload(
+        self,
+        context: Any,
+        child_evaluation_key: Callable[[Any, Any], bytes],
+    ) -> Optional[Any]:
+        """Return a narrower identity payload for cache/graph keys when available.
+
+        Returning ``None`` keeps the model on the existing structural key path.
+        This is intentionally narrow and internal: only models whose effective
+        invocation can be described declaratively should override it.
+        """
+        return None
 
 
 CallableModelType = TypeVar("CallableModelType", bound=_CallableModel)
@@ -269,14 +323,19 @@ class FlowOptions(BaseModel):
         def wrapper(model, context=Signature.empty, *, _options: Optional[FlowOptions] = None, **kwargs):
             if not isinstance(model, CallableModel):
                 raise TypeError(f"Can only decorate methods on CallableModels (not {type(model)}) with the flow decorator.")
-            if (not isclass(model.context_type) or not issubclass(model.context_type, ContextBase)) and not (
-                get_origin(model.context_type) is Union and type(None) in get_args(model.context_type)
+
+            method_context_type = getattr(fn, "__auto_context__", model.context_type)
+            method_result_type = getattr(fn, "__result_type__", model.result_type)
+
+            if (not isclass(method_context_type) or not issubclass(method_context_type, ContextBase)) and not (
+                get_origin(method_context_type) is Union and type(None) in get_args(method_context_type)
             ):
-                raise TypeError(f"Context type {model.context_type} must be a subclass of ContextBase")
-            if (not isclass(model.result_type) or not issubclass(model.result_type, ResultBase)) and not (
-                get_origin(model.result_type) is Union and all(isclass(t) and issubclass(t, ResultBase) for t in get_args(model.result_type))
+                raise TypeError(f"Context type {method_context_type} must be a subclass of ContextBase")
+            if (not isclass(method_result_type) or not issubclass(method_result_type, ResultBase)) and not (
+                get_origin(method_result_type) is Union and all(isclass(t) and issubclass(t, ResultBase) for t in get_args(method_result_type))
             ):
-                raise TypeError(f"Result type {model.result_type} must be a subclass of ResultBase")
+                raise TypeError(f"Result type {method_result_type} must be a subclass of ResultBase")
+
             if self._deps and fn.__name__ != "__deps__":
                 raise ValueError("Can only apply Flow.deps decorator to __deps__")
             if context is Signature.empty:
@@ -286,18 +345,19 @@ class FlowOptions(BaseModel):
                         context = kwargs
                     else:
                         raise TypeError(
-                            f"{fn.__name__}() missing 1 required positional argument: 'context' of type {model.context_type}, or kwargs to construct it"
+                            f"{fn.__name__}() missing 1 required positional argument: 'context' of type {method_context_type}, or kwargs to construct it"
                         )
             elif kwargs:  # Kwargs passed in as well as context. Not allowed
                 raise TypeError(f"{fn.__name__}() was passed a context and got an unexpected keyword argument '{next(iter(kwargs.keys()))}'")
 
             # Type coercion on input. We do this here (rather than relying on ModelEvaluationContext) as it produces a nicer traceback/error message
-            if not isinstance(context, model.context_type):
-                if get_origin(model.context_type) is Union and type(None) in get_args(model.context_type):
-                    model_context_type = [t for t in get_args(model.context_type) if t is not type(None)][0]
-                else:
-                    model_context_type = model.context_type
-                context = model_context_type.model_validate(context)
+            if get_origin(method_context_type) is Union and type(None) in get_args(method_context_type):
+                if context is not None:
+                    method_context_type = [t for t in get_args(method_context_type) if t is not type(None)][0]
+                    if not isinstance(context, method_context_type):
+                        context = method_context_type.model_validate(context)
+            elif not isinstance(context, method_context_type):
+                context = method_context_type.model_validate(context)
 
             if fn != getattr(model.__class__, fn.__name__).__wrapped__:
                 # This happens when super().__call__ is used when implementing a CallableModel that derives from another one.
@@ -311,9 +371,16 @@ class FlowOptions(BaseModel):
             return result
 
         wrap = wraps(fn)(wrapper)
-        wrap.get_evaluator = self.get_evaluator
-        wrap.get_options = self.get_options
-        wrap.get_evaluation_context = get_evaluation_context
+        wrap_any = cast(Any, wrap)
+        wrap_any.get_evaluator = self.get_evaluator
+        wrap_any.get_options = self.get_options
+        wrap_any.get_evaluation_context = get_evaluation_context
+
+        if hasattr(fn, "__auto_context__"):
+            wrap_any.__auto_context__ = fn.__auto_context__
+        if hasattr(fn, "__result_type__"):
+            wrap_any.__result_type__ = fn.__result_type__
+
         return wrap
 
 
@@ -392,7 +459,52 @@ class FlowOptionsOverride(BaseModel):
 class Flow(PydanticBaseModel):
     @staticmethod
     def call(*args, **kwargs):
-        """Decorator for methods on callable models"""
+        """Decorator for methods on callable models.
+
+        Args:
+            auto_context: Controls automatic context class generation from the function
+                signature. Accepts three types of values:
+                - False (default): No auto-generation, use traditional context parameter
+                - True: Auto-generate context class with no parent
+                - ContextBase subclass: Auto-generate context class inheriting from this parent
+            **kwargs: Additional FlowOptions parameters (log_level, verbose, validate_result,
+                cacheable, evaluator, volatile).
+
+        Basic Example:
+            class MyModel(CallableModel):
+                @Flow.call
+                def __call__(self, context: MyContext) -> MyResult:
+                    return MyResult(value=context.x)
+
+        Auto Context Example:
+            class MyModel(CallableModel):
+                @Flow.call(auto_context=True)
+                def __call__(self, *, x: int, y: str = "default") -> MyResult:
+                    return MyResult(value=f"{x}-{y}")
+
+            model = MyModel()
+            model(x=42)  # Call with kwargs directly
+
+        With Parent Context:
+            class MyModel(CallableModel):
+                @Flow.call(auto_context=DateContext)
+                def __call__(self, *, date: date, extra: int = 0) -> MyResult:
+                    return MyResult(value=date.day + extra)
+
+            # The generated context inherits from DateContext, so it's compatible
+            # with infrastructure expecting DateContext instances.
+
+        """
+        auto_context = kwargs.pop("auto_context", False)
+        if auto_context is False:
+            context_parent = None
+        elif auto_context is True:
+            context_parent = ContextBase
+        elif isclass(auto_context) and issubclass(auto_context, ContextBase):
+            context_parent = auto_context
+        else:
+            raise TypeError(f"auto_context must be False, True, or a ContextBase subclass, got {auto_context!r}")
+
         if len(args) == 1 and callable(args[0]):
             # No arguments to decorator, this is the decorator
             fn = args[0]
@@ -401,6 +513,14 @@ class Flow(PydanticBaseModel):
         else:
             # Arguments to decorator, this is just returning the decorator
             # Note that the code below is executed only once
+            if context_parent is not None:
+                # Return a decorator that first applies auto_context, then FlowOptions
+                def auto_context_decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+                    wrapped = _apply_auto_context(fn, parent=context_parent)
+                    # FlowOptions.__call__ already applies wraps, so we just return its result
+                    return FlowOptions(**kwargs)(wrapped)
+
+                return auto_context_decorator
             return FlowOptions(**kwargs)
 
     @staticmethod
@@ -417,6 +537,76 @@ class Flow(PydanticBaseModel):
             # Arguments to decorator, this is just returning the decorator
             # Note that the code below is executed only once
             return FlowOptionsDeps(**kwargs)
+
+    @staticmethod
+    def model(*args, **kwargs):
+        """Decorator that generates a CallableModel class from a plain Python function.
+
+        This is syntactic sugar over CallableModel. The decorator generates a real
+        CallableModel class with proper __call__ and __deps__ methods, so all existing
+        features (caching, evaluation, registry, serialization) work unchanged.
+
+        Args:
+            context_type: Optional ContextBase subclass used only to validate/coerce
+                `FromContext[...]` inputs against an existing nominal context shape
+            auto_unwrap: When True, `.flow.compute(...)` unwraps auto-wrapped
+                `GenericResult(value=...)` outputs back to the annotated return type.
+                Explicit `ResultBase` returns are left unchanged. Default: False.
+            model_base: Optional custom `CallableModel` subclass to use as an
+                additional base for the generated model class.
+            cacheable: Enable caching of results (default: False)
+            volatile: Mark as volatile (default: False)
+            log_level: Logging verbosity (default: logging.DEBUG)
+            validate_result: Validate return type (default: True)
+            verbose: Verbose logging output (default: True)
+            evaluator: Custom evaluator (default: None)
+
+        Primary authoring model:
+            Mark runtime/contextual inputs explicitly with `FromContext[...]`.
+            Ordinary unmarked parameters are regular bound inputs and are never
+            read implicitly from the runtime context.
+
+            @Flow.model
+            def load_prices(
+                source: str,
+                start_date: FromContext[date],
+                end_date: FromContext[date],
+            ) -> GenericResult[pl.DataFrame]:
+                return GenericResult(value=query_db(source, start_date, end_date))
+
+
+        Dependencies:
+            Any ordinary parameter can be bound either to a literal value or
+            to another CallableModel. When a CallableModel is supplied, the
+            generated model treats it as an upstream dependency and resolves it
+            with the current context before calling the underlying function.
+
+            `FromContext[...]` parameters are different: they may be satisfied by
+            runtime context, construction-time contextual defaults, or function
+            defaults, but not by CallableModel values.
+
+        Usage:
+            # Create model instances
+            loader = load_prices(source="prod_db")
+            returns = compute_returns(prices=loader)
+
+            # Execute
+            ctx = DateRangeContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31))
+            result = returns(ctx)
+
+        Returns:
+            A factory function that creates CallableModel instances
+        """
+        from .flow_model import flow_model
+
+        return flow_model(*args, **kwargs)
+
+    @staticmethod
+    def context_transform(*args, **kwargs):
+        """Decorator that turns a top-level function into a serializable with_context() transform factory."""
+        from .flow_model import flow_context_transform
+
+        return flow_context_transform(*args, **kwargs)
 
 
 # *****************************************************************************
@@ -452,13 +642,24 @@ class ModelEvaluationContext(
     # TODO: Make the instance check compatible with the generic types instead of the base type
 
     @model_validator(mode="wrap")
-    def _context_validator(cls, values, handler, info):
+    @classmethod
+    def _context_validator(cls, values: Any, handler: Any, info: Any):
         """Override _context_validator from parent"""
 
         # Validate the context with the model, if possible
-        model = values.get("model")
-        if model and isinstance(model, CallableModel) and not isinstance(values.get("context"), model.context_type):
-            values["context"] = model.context_type.model_validate(values.get("context"))
+        if isinstance(values, dict):
+            model = values.get("model")
+            if model and isinstance(model, CallableModel) and not isinstance(values.get("context"), model.context_type):
+                ctx_type = model.context_type
+                ctx_value = values.get("context")
+                # Handle Optional[ContextType] — if context is None, keep it; otherwise validate through the inner type
+                if get_origin(ctx_type) is Union and type(None) in get_args(ctx_type):
+                    if ctx_value is not None:
+                        inner_type = [t for t in get_args(ctx_type) if t is not type(None)][0]
+                        if not isinstance(ctx_value, inner_type):
+                            values["context"] = inner_type.model_validate(ctx_value)
+                else:
+                    values["context"] = ctx_type.model_validate(ctx_value)
 
         # Apply standard pydantic validation
         context = handler(values)
@@ -486,9 +687,9 @@ class ModelEvaluationContext(
                         raise TypeError(f"Model result_type {result_type} is not a subclass of ResultBase")
                     result = result_type.model_validate(result)
 
-            return result
+            return cast(ResultType, result)
         else:
-            return fn(self.context)
+            return cast(ResultType, fn(self.context))
 
 
 class EvaluatorBase(_CallableModel, abc.ABC):
@@ -613,7 +814,7 @@ class CallableModel(_CallableModel):
         if not isclass(type_to_check) or not issubclass(type_to_check, ContextBase):
             raise TypeError(f"Context type declared in signature of __call__ must be a subclass of ContextBase. Received {type_to_check}.")
 
-        return typ
+        return cast(Type[ContextType], typ)
 
     @property
     def result_type(self) -> Type[ResultType]:
@@ -656,7 +857,7 @@ class CallableModel(_CallableModel):
         # Ensure subclass of ResultBase
         if not isclass(typ) or not issubclass(typ, ResultBase):
             raise TypeError(f"Return type declared in signature of __call__ must be a subclass of ResultBase (i.e. GenericResult). Received {typ}.")
-        return typ
+        return cast(Type[ResultType], typ)
 
     @Flow.deps
     def __deps__(
@@ -672,6 +873,13 @@ class CallableModel(_CallableModel):
         """
         return []
 
+    @property
+    def flow(self) -> "FlowAPI":
+        """Access flow helpers for execution, context transforms, and introspection."""
+        from .flow_model import FlowAPI
+
+        return FlowAPI(self)
+
 
 class WrapperModel(CallableModel, Generic[CallableModelType], abc.ABC):
     """Abstract class that represents a wrapper around an underlying model, with the same context and return types.
@@ -684,12 +892,12 @@ class WrapperModel(CallableModel, Generic[CallableModelType], abc.ABC):
     @property
     def context_type(self) -> Type[ContextType]:
         """Return the context type of the underlying model."""
-        return self.model.context_type
+        return cast(CallableModel, self.model).context_type
 
     @property
     def result_type(self) -> Type[ResultType]:
         """Return the result type of the underlying model."""
-        return self.model.result_type
+        return cast(CallableModel, self.model).result_type
 
 
 class CallableModelGeneric(CallableModel, Generic[ContextType, ResultType]):
@@ -761,34 +969,120 @@ class CallableModelGeneric(CallableModel, Generic[ContextType, ResultType]):
 
             if new_context_type is not None:
                 # Set on class
-                cls._context_generic_type = new_context_type
+                setattr(cls, "_context_generic_type", new_context_type)
 
             if new_result_type is not None:
                 # Set on class
-                cls._result_generic_type = new_result_type
+                setattr(cls, "_result_generic_type", new_result_type)
 
     @model_validator(mode="wrap")
-    def _validate_callable_model_generic_type(cls, m, handler, info):
+    @classmethod
+    def _validate_callable_model_generic_type(cls, m: Any, handler: Any, info: Any):
         from ccflow.base import resolve_str
 
         if isinstance(m, str):
             m = resolve_str(m)
 
-        if isinstance(m, dict):
-            m = handler(m)
-        elif isinstance(m, cls):
-            m = handler(m)
+        validated_cls = cast(Any, cls)
+        if isinstance(m, (dict, CallableModel)):
+            if isinstance(m, dict):
+                m = handler(m)
+            elif isinstance(m, validated_cls):
+                m = handler(m)
 
         # Raise ValueError (not TypeError) as per https://docs.pydantic.dev/latest/errors/errors/
         if not isinstance(m, CallableModel):
             raise ValueError(f"{m} is not a CallableModel: {type(m)}")
 
         subtypes = cls.__pydantic_generic_metadata__["args"]
-        if subtypes:
-            TypeAdapter(Type[subtypes[0]]).validate_python(m.context_type)
-            TypeAdapter(Type[subtypes[1]]).validate_python(m.result_type)
+        if len(subtypes) >= 1 and not _declared_type_matches(m.context_type, subtypes[0]):
+            raise ValueError(f"{m} context_type {m.context_type} does not match {subtypes[0]}")
+        if len(subtypes) >= 2 and not _declared_type_matches(m.result_type, subtypes[1]):
+            raise ValueError(f"{m} result_type {m.result_type} does not match {subtypes[1]}")
 
         return m
 
 
 CallableModelGenericType = CallableModelGeneric
+
+
+# *****************************************************************************
+# Auto Context (internal helper for Flow.call(auto_context=True))
+# *****************************************************************************
+
+
+def _apply_auto_context(func: Callable[..., Any], *, parent: Optional[Type[ContextBase]] = None) -> Callable[..., Any]:
+    """Internal function that creates an auto context class from function parameters.
+
+    This function extracts the parameters from a function signature and creates
+    a ContextBase subclass whose fields correspond to those parameters.
+    The decorated function is then wrapped to accept the context object and
+    unpack it into keyword arguments.
+
+    Used internally by Flow.call(auto_context=...).
+
+    Example:
+        class MyCallable(CallableModel):
+            @Flow.call(auto_context=True)
+            def __call__(self, *, x: int, y: str = "default") -> GenericResult:
+                return GenericResult(value=f"{x}-{y}")
+
+        model = MyCallable()
+        model(x=42, y="hello")  # Works with kwargs
+    """
+    from .flow_model import _callable_qualname, _resolved_flow_signature
+
+    sig = _resolved_flow_signature(
+        func,
+        skip_self=True,
+        require_return_annotation=True,
+        annotation_error_suffix=" when auto_context=True",
+        return_error_suffix=" when auto_context=True",
+        function_name=_callable_qualname(func),
+    )
+    base_class = parent or ContextBase
+
+    # Validate parent fields are in function signature
+    if parent is not None:
+        parent_fields = set(parent.model_fields.keys()) - set(ContextBase.model_fields.keys())
+        sig_params = set(sig.parameters)
+        missing = parent_fields - sig_params
+        if missing:
+            raise TypeError(f"Parent context fields {missing} must be included in function signature")
+
+        # Validate parent field type compatibility
+        from .flow_model import _context_type_annotations_compatible
+
+        for fname in parent_fields:
+            parent_annotation = parent.model_fields[fname].annotation
+            func_annotation = sig.parameters[fname].annotation
+            if func_annotation is inspect.Parameter.empty:
+                continue
+            if not _context_type_annotations_compatible(func_annotation, parent_annotation):
+                raise TypeError(
+                    f"auto_context field '{fname}' has annotation {func_annotation!r} which is incompatible "
+                    f"with parent field annotation {parent_annotation!r}"
+                )
+
+    fields = {name: (param.annotation, ... if param.default is inspect.Parameter.empty else param.default) for name, param in sig.parameters.items()}
+
+    # Create auto context class
+    auto_context_class = create_ccflow_model(f"{_callable_qualname(func)}_AutoContext", __base__=base_class, **fields)
+
+    @wraps(func)
+    def wrapper(self, context):
+        fn_kwargs = {name: getattr(context, name) for name in fields}
+        return func(self, **fn_kwargs)
+
+    # Must set __signature__ so CallableModel validation sees 'context' parameter
+    wrapper_any = cast(Any, wrapper)
+    wrapper_any.__signature__ = inspect.Signature(
+        parameters=[
+            inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+            inspect.Parameter("context", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=auto_context_class),
+        ],
+        return_annotation=sig.return_annotation,
+    )
+    wrapper_any.__auto_context__ = auto_context_class
+    wrapper_any.__result_type__ = sig.return_annotation
+    return wrapper
