@@ -47,7 +47,7 @@ class RegistryBrowser(param.Parameterized):
     def __panel__(self):
         return self._layout
 
-    # ---------------- Tree construction ----------------
+    # Tree construction
 
     def _build_tree(self, registry, index_prefix=()):
         import ccflow
@@ -86,7 +86,7 @@ class RegistryBrowser(param.Parameterized):
     def _expanded_from_index_path(index_path):
         return [index_path[:i] for i in range(1, len(index_path))]
 
-    # ---------------- Callbacks ----------------
+    # Callbacks
 
     def _on_search_select(self, event):
         path = event.new
@@ -109,7 +109,7 @@ class ModelRegistryViewer(param.Parameterized):
     into a scrollable two-panel layout.
     """
 
-    # ---------------- Layout parameters ----------------
+    # Layout parameters
     browser_width = param.Integer(
         default=400,
         bounds=(200, None),
@@ -156,7 +156,7 @@ class ModelRegistryViewer(param.Parameterized):
     def __panel__(self):
         return self._layout
 
-    # ---------------- Internal helpers ----------------
+    # Internal helpers
 
     def _make_browser_column(self):
         return pn.Column(

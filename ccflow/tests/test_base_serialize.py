@@ -259,12 +259,13 @@ class TestBaseModelSerialization(unittest.TestCase):
         # (as it would normally in pydantic because of https://github.com/pydantic/pydantic/issues/11603)
         # This is generated on Linux/Python 3.11 - might need to have version specific values if it changes.
         target = (
-            b"\x80\x04\x95\xdf\x00\x00\x00\x00\x00\x00\x00\x8c ccflow.tests.test_base_seri"
+            b"\x80\x04\x95\xf3\x00\x00\x00\x00\x00\x00\x00\x8c ccflow.tests.test_base_seri"
             b"alize\x94\x8c\x13MultiAttributeModel\x94\x93\x94)\x81\x94}\x94(\x8c\x08__"
             b"dict__\x94}\x94(\x8c\x01z\x94K\x01\x8c\x01y\x94\x8c\x04test\x94\x8c"
             b"\x01x\x94G@\t\x1e\xb8Q\xeb\x85\x1f\x8c\x01w\x94\x88u\x8c\x12__pydantic_extra"
             b"__\x94N\x8c\x17__pydantic_fields_set__\x94]\x94(h\x0bh\nh\x08h\x07e\x8c\x14"
-            b"__pydantic_private__\x94}\x94\x8c\x0e_registrations\x94]\x94sub."
+            b"__pydantic_private__\x94}\x94(\x8c\x0e_registrations\x94]\x94\x8c\x0f"
+            b"_was_registered\x94\x89uub."
         )
         self.assertEqual(serialized, target)
         deserialized = pickle.loads(serialized)
