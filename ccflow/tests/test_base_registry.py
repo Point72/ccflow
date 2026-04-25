@@ -1,6 +1,7 @@
 import collections.abc
 import json
 import os
+import pickle
 import sys
 from typing import Dict, List
 from unittest import TestCase
@@ -352,6 +353,37 @@ class TestRegistry(TestCase):
         self.assertListEqual(m.get_registered_names(include_orphaned=False), [])
         # Explicit True → reconstructs path
         self.assertListEqual(m.get_registered_names(include_orphaned=True), ["/foo/model_name"])
+
+    def test_get_registered_names_survives_pickling(self):
+        """Registered names must round-trip through pickle.
+
+        When a model is pickled (e.g., to be sent to a Ray worker) and then
+        unpickled in a fresh process context, get_registered_names() must still
+        return the correct full path.  The bug: the deserialized RootModelRegistry
+        is a new object and fails the ``self is ModelRegistry.root()`` identity
+        check, causing the chain traversal to bottom out with [] instead of [""].
+        """
+        r = ModelRegistry.root()
+        foo = ModelRegistry(name="foo")
+        bar = ModelRegistry(name="bar")
+        m = MyTestModel(a="x", b=0.0)
+
+        r.add("foo", foo)
+        foo.add("bar", bar)
+        bar.add("baz", m)
+
+        self.assertListEqual(m.get_registered_names(), ["/foo/bar/baz"])
+
+        # Simulate what happens when a model is sent to a Ray worker: it is
+        # pickled and unpickled in the same process but as a standalone blob,
+        # severing the live registry identity chain.
+        restored = pickle.loads(pickle.dumps(m))
+
+        self.assertListEqual(
+            restored.get_registered_names(),
+            ["/foo/bar/baz"],
+            "get_registered_names() must return the correct path after pickling",
+        )
 
 
 class TestRegistryLoading(TestCase):

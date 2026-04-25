@@ -86,8 +86,6 @@ class _RegistryMixin:
                 for registry_name in registry_names:
                     full_names.append(REGISTRY_SEPARATOR.join([registry_name, name]))
             return full_names
-        elif self is ModelRegistry.root():
-            return [""]
         elif include_orphaned and isinstance(self, ModelRegistry) and self._was_registered and self.name:
             # Orphaned sub-registry: de-registered from its parent but .name is still valid.
             # Reconstruct path as if registered directly under root.
@@ -662,6 +660,17 @@ class RootModelRegistry(ModelRegistry):
     def _debug_name(self) -> str:
         """Returns the "full name" of the registry. Since registries can have multiple names"""
         return "RootModelRegistry"
+
+    def get_registered_names(self, include_orphaned: bool = False) -> List[str]:
+        """The root registry is always the empty-prefix anchor of every path.
+
+        Overrides the base implementation so that a deserialized copy of the
+        root (e.g. after being pickled into a Ray worker) still returns [""]
+        rather than [] — the base class falls through to [] because the
+        identity check ``self is ModelRegistry.root()`` fails for a deserialized
+        instance.
+        """
+        return [""]
 
 
 _REGISTRY_ROOT = RootModelRegistry.model_construct()
