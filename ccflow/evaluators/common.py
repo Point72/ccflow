@@ -19,6 +19,7 @@ from ..callable import (
     ModelEvaluationContext,
     ResultType,
     TransparentModelEvaluationContext,
+    WrapperModel,
 )
 
 __all__ = [
@@ -225,25 +226,38 @@ class LoggingEvaluator(EvaluatorBase):
 
 def _unwrap_evaluation_context(flow_obj: ModelEvaluationContext) -> tuple[ModelEvaluationContext, str, List[CallableModel]]:
     fn = flow_obj.fn
-    non_transparent = []
+    outer_to_inner_evaluators = []
     while isinstance(flow_obj.context, ModelEvaluationContext):
         fn = flow_obj.fn if flow_obj.fn != "__call__" else fn
         if not isinstance(flow_obj, TransparentModelEvaluationContext):
-            non_transparent.append(flow_obj.model)
+            outer_to_inner_evaluators.append(flow_obj.model)
         flow_obj = flow_obj.context
-    return flow_obj, fn if fn != "__call__" else flow_obj.fn, non_transparent
+    return flow_obj, fn if fn != "__call__" else flow_obj.fn, outer_to_inner_evaluators
+
+
+def _evaluator_identity_payload(outer_to_inner_evaluators: List[CallableModel]) -> List[Dict[str, Any]]:
+    return [evaluator.model_dump(mode="python") for evaluator in outer_to_inner_evaluators]
 
 
 def _structural_evaluation_key(flow_obj: ModelEvaluationContext) -> bytes:
-    flow_obj, fn, non_transparent = _unwrap_evaluation_context(flow_obj)
+    flow_obj, fn, outer_to_inner_evaluators = _unwrap_evaluation_context(flow_obj)
     d = flow_obj.model_dump(mode="python")
     d["fn"] = fn
-    if non_transparent:
-        d["_evaluators"] = [e.model_dump(mode="python") for e in non_transparent]
+    if outer_to_inner_evaluators:
+        d["_evaluators"] = _evaluator_identity_payload(outer_to_inner_evaluators)
     return dask.base.tokenize(d).encode("utf-8")
 
 
 class _EvaluationKeyBuilder:
+    """Build effective evaluation identities for cache and dependency graph keys.
+
+    Transparent evaluator layers are ignored. Non-transparent evaluator layers
+    are included as wrappers around the model's effective key, so they can
+    distinguish behavior without forcing generated models back to full ambient
+    context identity. Anything that cannot be represented clearly falls back to
+    the structural key.
+    """
+
     def __init__(self) -> None:
         self._memo: Dict[tuple[int, str], bytes] = {}
         self._active: set[tuple[int, str]] = set()
@@ -255,14 +269,20 @@ class _EvaluationKeyBuilder:
             return _structural_evaluation_key(context)
 
     def _build(self, context: ModelEvaluationContext) -> bytes:
-        inner, fn, non_transparent = _unwrap_evaluation_context(context)
+        inner, fn, outer_to_inner_evaluators = _unwrap_evaluation_context(context)
         if fn != "__call__":
-            raise _EvaluationIdentityFallback("Only __call__ evaluations support narrowed identity.")
-        if non_transparent:
-            raise _EvaluationIdentityFallback("Non-transparent evaluator layers stay on the structural key path.")
-        if inner.options.get("validate_result", True) is False:
-            raise _EvaluationIdentityFallback("validate_result=False stays on the structural key path.")
-        return self._key_for_model(inner.model, inner.context)
+            raise _EvaluationIdentityFallback("Only __call__ evaluations support effective evaluation identity.")
+        key = self._key_for_model(inner.model, inner.context)
+        if outer_to_inner_evaluators:
+            return dask.base.tokenize(
+                (
+                    "ccflow_evaluation_identity_v1",
+                    "non_transparent_evaluators",
+                    _evaluator_identity_payload(outer_to_inner_evaluators),
+                    key,
+                )
+            ).encode("utf-8")
+        return key
 
     def _key_for_model(self, model: CallableModel, context: Any) -> bytes:
         memo_token = self._memo_token(model, context)
@@ -276,7 +296,7 @@ class _EvaluationKeyBuilder:
         try:
             payload = self._identity_payload(model, context)
             if payload is None:
-                raise _EvaluationIdentityFallback("Model did not provide a narrowed identity payload.")
+                raise _EvaluationIdentityFallback("Model did not provide an effective evaluation identity payload.")
             key = dask.base.tokenize(("ccflow_evaluation_identity_v1", payload)).encode("utf-8")
             self._memo[memo_token] = key
             return key
@@ -380,22 +400,50 @@ class CallableModelGraph(BaseModel):
     root_id: bytes
 
 
-def _build_dependency_graph(evaluation_context: ModelEvaluationContext, graph: CallableModelGraph, parent_key: Optional[bytes] = None):
+def _is_wrapper_to_wrapped_edge(parent_model: Optional[CallableModel], current_model: CallableModel) -> bool:
+    return isinstance(parent_model, WrapperModel) and parent_model.model is current_model
+
+
+def _build_dependency_graph(
+    evaluation_context: ModelEvaluationContext,
+    graph: CallableModelGraph,
+    parent_key: Optional[bytes] = None,
+    parent_model: Optional[CallableModel] = None,
+    visited_nodes: Optional[Set[tuple[bytes, int]]] = None,
+):
+    if visited_nodes is None:
+        visited_nodes = set()
+
     key = _evaluation_key(evaluation_context)
-    if parent_key:
+    unwrapped_evaluation_context, _, _ = _unwrap_evaluation_context(evaluation_context)
+    current_model = unwrapped_evaluation_context.model
+    is_same_evaluation_key = parent_key == key
+    # Bound/wrapper models can intentionally collapse to their wrapped model's
+    # effective evaluation identity. Suppress only those wrapper-to-wrapped self-loops.
+    if parent_key and (not is_same_evaluation_key or not _is_wrapper_to_wrapped_edge(parent_model, current_model)):
         graph.graph[parent_key].add(key)
     if key not in graph.ids:
         graph.ids[key] = evaluation_context
     if key not in graph.graph:
         graph.graph[key] = set()
-        # Note that __deps__ will be evaluated using whatever evaluator is configured for the model,
-        # which could include logging, caching, etc.
-        deps = evaluation_context.model.__deps__(evaluation_context.context)
-        # Sequential evaluation of dependencies of dependencies (could have other implementations)
-        for model, contexts in deps:
-            for context in contexts:
-                sub_evaluation_context = model.__call__.get_evaluation_context(model, context)
-                _build_dependency_graph(sub_evaluation_context, graph, parent_key=key)
+    node = (key, id(current_model))
+    if node in visited_nodes:
+        return
+    visited_nodes.add(node)
+    # Note that __deps__ will be evaluated using whatever evaluator is configured for the model,
+    # which could include logging, caching, etc.
+    deps = evaluation_context.model.__deps__(evaluation_context.context)
+    # Recursively walk dependency contexts depth-first to build the complete graph.
+    for model, contexts in deps:
+        for context in contexts:
+            sub_evaluation_context = model.__call__.get_evaluation_context(model, context)
+            _build_dependency_graph(
+                sub_evaluation_context,
+                graph,
+                parent_key=key,
+                parent_model=current_model,
+                visited_nodes=visited_nodes,
+            )
 
 
 def get_dependency_graph(evaluation_context: ModelEvaluationContext) -> CallableModelGraph:

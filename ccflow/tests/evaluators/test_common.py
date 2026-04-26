@@ -315,6 +315,30 @@ class TestCacheKey(TestCase):
         )
         assert cache_key(opaque2) == cache_key(opaque2b)
 
+    def test_opaque_mec_order_preserved(self):
+        """Non-transparent evaluator wrapper order is identity-significant."""
+
+        class OpaqueEval(EvaluatorBase):
+            tag: str
+
+            def __call__(self, context: ModelEvaluationContext):
+                return context()
+
+        m = MyDateCallable(offset=1)
+        ctx = DateContext(date=date(2022, 1, 1))
+        inner = ModelEvaluationContext(model=m, context=ctx)
+
+        inner_then_outer = ModelEvaluationContext(
+            model=OpaqueEval(tag="outer"),
+            context=ModelEvaluationContext(model=OpaqueEval(tag="inner"), context=inner),
+        )
+        outer_then_inner = ModelEvaluationContext(
+            model=OpaqueEval(tag="inner"),
+            context=ModelEvaluationContext(model=OpaqueEval(tag="outer"), context=inner),
+        )
+
+        assert cache_key(inner_then_outer) != cache_key(outer_then_inner)
+
     def test_fn_deps_preserved_through_transparent(self):
         """fn='__deps__' is preserved when walking through transparent layers."""
         m = MyDateCallable(offset=1)

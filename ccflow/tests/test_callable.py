@@ -1,5 +1,5 @@
 from pickle import dumps as pdumps, loads as ploads
-from typing import Annotated, Generic, List, Optional, Tuple, Type, TypeVar, Union
+from typing import Annotated, Generic, List, Literal, Optional, Tuple, Type, TypeVar, Union
 from unittest import TestCase
 
 import ray
@@ -14,6 +14,7 @@ from ccflow import (
     Flow,
     GenericResult,
     GraphDepList,
+    Lazy,
     MetaData,
     ModelRegistry,
     NullContext,
@@ -59,6 +60,13 @@ class MyCallable(CallableModel):
 class MyCallableOptionalContext(CallableModel):
     @Flow.call
     def __call__(self, context: Optional[MyContext] = None) -> MyResult:
+        context = context or MyContext(a="default")
+        return MyResult(x=1, y=context.a)
+
+
+class MyCallablePep604OptionalContext(CallableModel):
+    @Flow.call
+    def __call__(self, context: MyContext | None = None) -> MyResult:
         context = context or MyContext(a="default")
         return MyResult(x=1, y=context.a)
 
@@ -418,6 +426,23 @@ class TestCallableModel(TestCase):
         self.assertEqual(m(context=context), target)
         self.assertEqual(m().y, "default")
 
+    def test_declared_optional_context_requires_optional_call_signature(self):
+        class OptionalContextMismatch(CallableModel):
+            @property
+            def context_type(self):
+                return MyContext | None
+
+            @property
+            def result_type(self):
+                return MyResult
+
+            @Flow.call
+            def __call__(self, context: MyContext) -> MyResult:
+                return MyResult(x=1, y=context.a)
+
+        with self.assertRaisesRegex(ValueError, "must match the type of the context accepted by __call__"):
+            OptionalContextMismatch()
+
     def test_optional_context_model_evaluation_context(self):
         """ModelEvaluationContext should work with optional-context callables."""
         m = MyCallableOptionalContext()
@@ -442,6 +467,14 @@ class TestCallableModel(TestCase):
         # With a concrete context
         result = m.flow.compute(MyContext(a="from_compute"))
         self.assertEqual(result.y, "from_compute")
+
+    def test_pep604_optional_context_flow_compute(self):
+        """flow.compute() should work with PEP 604 optional-context callables."""
+        m = MyCallablePep604OptionalContext()
+        self.assertEqual(m.context_type, MyContext | None)
+        self.assertEqual(m.flow.compute().y, "default")
+        self.assertEqual(m.flow.compute(None).y, "default")
+        self.assertEqual(m.flow.compute(MyContext(a="from_compute")).y, "from_compute")
 
     def test_inheritance(self):
         m = MyCallableChild(i=5)
@@ -838,6 +871,28 @@ class TestAutoContext(TestCase):
         result = model(x=10)
         self.assertEqual(result.value, "10-default")
 
+    def test_no_arg_call_uses_generated_context_defaults(self):
+        """No-arg auto_context calls should use defaults from the generated context."""
+
+        class AutoContextCallable(CallableModel):
+            @Flow.call(auto_context=True)
+            def __call__(self, *, x: int = 1, y: str = "a") -> GenericResult:
+                return GenericResult(value=f"{x}-{y}")
+
+        result = AutoContextCallable()()
+        self.assertEqual(result.value, "1-a")
+
+    def test_no_arg_call_still_rejects_required_generated_context_fields(self):
+        """No-arg auto_context calls should still reject required context fields."""
+
+        class AutoContextCallable(CallableModel):
+            @Flow.call(auto_context=True)
+            def __call__(self, *, x: int, y: str = "a") -> GenericResult:
+                return GenericResult(value=f"{x}-{y}")
+
+        with self.assertRaisesRegex(TypeError, "missing 1 required positional argument: 'context'"):
+            AutoContextCallable()()
+
     def test_auto_context_attribute(self):
         """Test that __auto_context__ attribute is set."""
 
@@ -962,6 +1017,34 @@ class TestAutoContext(TestCase):
         auto_ctx = MatchingCallable.__call__.__wrapped__.__auto_context__
         self.assertTrue(issubclass(auto_ctx, ParentContext))
 
+    def test_parent_literal_field_can_satisfy_broader_auto_context_annotation(self):
+        """auto_context accepts function fields that can consume every parent literal value."""
+
+        class ParentContext(ContextBase):
+            base: Literal["a"]
+
+        class MatchingCallable(CallableModel):
+            @Flow.call(auto_context=ParentContext)
+            def __call__(self, *, base: str) -> GenericResult:
+                return GenericResult(value=base)
+
+        self.assertEqual(MatchingCallable().flow.compute(base="a").value, "a")
+        with self.assertRaises(ValidationError):
+            MatchingCallable().flow.compute(base="b")
+
+    def test_parent_field_defaults_remain_authoritative_for_auto_context(self):
+        """Function defaults must not overwrite inherited parent context defaults."""
+
+        class ParentContext(ContextBase):
+            base: Literal["a"] = "a"
+
+        class MatchingCallable(CallableModel):
+            @Flow.call(auto_context=ParentContext)
+            def __call__(self, *, base: str = "b") -> GenericResult:
+                return GenericResult(value=base)
+
+        self.assertEqual(MatchingCallable().flow.compute().value, "a")
+
     def test_parent_field_generic_annotations_accepted(self):
         """auto_context with parent accepts generic annotations like list[int], dict[str, int]."""
         from typing import Dict
@@ -1073,6 +1156,50 @@ class TestAutoContext(TestCase):
         result = model(x=42)
         self.assertEqual(result.value, 42)
 
+    def test_postponed_annotations_are_resolved(self):
+        """auto_context should resolve postponed annotations before generating the context."""
+        namespace = {}
+        exec(
+            """
+from __future__ import annotations
+
+from ccflow import CallableModel, Flow, GenericResult
+
+
+class AutoContextCallable(CallableModel):
+    @Flow.call(auto_context=True)
+    def __call__(self, *, x: int) -> GenericResult[int]:
+        return GenericResult(value=x)
+
+
+result = AutoContextCallable().flow.compute(x=1)
+""",
+            namespace,
+            namespace,
+        )
+
+        self.assertEqual(namespace["result"].value, 1)
+
+    def test_postponed_annotations_unresolved_names_stay_loud(self):
+        """auto_context should reject unresolved postponed annotations at decoration time."""
+        namespace = {}
+        with self.assertRaises(NameError):
+            exec(
+                """
+from __future__ import annotations
+
+from ccflow import CallableModel, Flow, GenericResult
+
+
+class AutoContextCallable(CallableModel):
+    @Flow.call(auto_context=True)
+    def __call__(self, *, x: MissingType) -> GenericResult[int]:
+        return GenericResult(value=x)
+""",
+                namespace,
+                namespace,
+            )
+
     def test_error_without_auto_context(self):
         """Test that using kwargs signature without auto_context raises an error."""
 
@@ -1145,6 +1272,24 @@ class TestAutoContext(TestCase):
 
         self.assertIn("must have a type annotation", str(cm.exception))
 
+    def test_auto_context_rejects_lazy_annotation(self):
+        """auto_context should reject Lazy dependency markers."""
+        with self.assertRaisesRegex(TypeError, "Lazy"):
+
+            class AutoContextCallable(CallableModel):
+                @Flow.call(auto_context=True)
+                def __call__(self, *, value: Lazy[int]) -> GenericResult:
+                    return GenericResult(value=value)
+
+    def test_auto_context_rejects_callable_model_default(self):
+        """auto_context fields are contextual inputs, not dependency slots."""
+        with self.assertRaisesRegex(TypeError, "CallableModel"):
+
+            class AutoContextCallable(CallableModel):
+                @Flow.call(auto_context=True)
+                def __call__(self, *, value: int = MyCallable(i=1)) -> GenericResult:
+                    return GenericResult(value=value)
+
 
 class TestDeclaredTypeMatches(TestCase):
     """Tests for _declared_type_matches helper in callable.py."""
@@ -1167,6 +1312,7 @@ class TestDeclaredTypeMatches(TestCase):
         from ccflow.callable import _declared_type_matches
 
         self.assertTrue(_declared_type_matches(int, Union[int, str]))
+        self.assertTrue(_declared_type_matches(int, int | str))
         self.assertFalse(_declared_type_matches(float, Union[int, str]))
 
     def test_union_both_sides(self):
@@ -1175,6 +1321,7 @@ class TestDeclaredTypeMatches(TestCase):
 
         self.assertTrue(_declared_type_matches(Union[int, str], Union[int, str]))
         self.assertTrue(_declared_type_matches(Union[str, int], Union[int, str]))  # order independent
+        self.assertTrue(_declared_type_matches(int | str, int | str))
         self.assertFalse(_declared_type_matches(Union[int, float], Union[int, str]))
 
     def test_non_type_actual(self):

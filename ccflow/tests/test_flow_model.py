@@ -7,27 +7,31 @@ import pickle
 import subprocess
 import sys
 from datetime import date, timedelta
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Union
 
 import pytest
 from pydantic import Field, ValidationError, model_validator
 from ray.cloudpickle import dumps as rcpdumps, loads as rcploads
 
+import ccflow
+import ccflow._flow_model_binding as flow_binding_module
 import ccflow.flow_model as flow_model_module
 from ccflow import (
     CallableModel,
     ContextBase,
     DateRangeContext,
+    EvaluatorBase,
     Flow,
     FlowContext,
     FlowOptionsOverride,
     FromContext,
     GenericResult,
     Lazy,
+    ModelEvaluationContext,
     ModelRegistry,
 )
 from ccflow.callable import FlowOptions
-from ccflow.evaluators import GraphEvaluator, MemoryCacheEvaluator, get_dependency_graph
+from ccflow.evaluators import GraphEvaluator, MemoryCacheEvaluator, combine_evaluators, get_dependency_graph
 
 
 class SimpleContext(ContextBase):
@@ -175,8 +179,22 @@ def parity_bucket(raw: FromContext[int]) -> int:
 
 
 @Flow.context_transform
+def seed_plus_one(seed: FromContext[int]) -> int:
+    return seed + 1
+
+
+@Flow.context_transform
+def non_idempotent_a_step(a: FromContext[int]) -> int:
+    return 2 if a == 1 else 3
+
+
+@Flow.context_transform
 def static_bad() -> int:
     return 2
+
+
+def lazy_context_transform_for_rejection(value: Lazy[int]) -> int:
+    return value()
 
 
 @Flow.context_transform
@@ -354,6 +372,23 @@ def test_context_type_accepts_richer_subclass_for_from_context():
     assert model(RichRangeContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 4), label="x")).value == 8
 
 
+def test_declared_context_type_introspection_reports_effective_field_type():
+    class ModeContext(ContextBase):
+        mode: Literal["a"]
+
+    @Flow.model(context_type=ModeContext)
+    def choose(mode: FromContext[str]) -> str:
+        return mode
+
+    model = choose()
+
+    assert model.flow.context_inputs == {"mode": Literal["a"]}
+    assert model.flow.unbound_inputs == {"mode": Literal["a"]}
+    assert model.flow.compute(mode="a").value == "a"
+    with pytest.raises(ValidationError):
+        model.flow.compute(mode="b")
+
+
 def test_context_type_validation_applies_to_resolved_contextual_values():
     @Flow.model(context_type=OrderedContext)
     def add(a: FromContext[int], b: FromContext[int]) -> int:
@@ -378,6 +413,19 @@ def test_context_type_validates_construction_time_contextual_defaults_early():
         identity(x=-1)
 
 
+def test_context_type_validates_partial_contextual_defaults_early():
+    class PositivePairContext(ContextBase):
+        x: int = Field(gt=0)
+        y: int
+
+    @Flow.model(context_type=PositivePairContext)
+    def add(x: FromContext[int], y: FromContext[int]) -> int:
+        return x + y
+
+    with pytest.raises(ValueError, match="greater than 0"):
+        add(x=-1)
+
+
 def test_context_type_validates_static_with_context_overrides_early():
     @Flow.model(context_type=OrderedContext)
     def add(a: FromContext[int], b: FromContext[int]) -> int:
@@ -385,6 +433,28 @@ def test_context_type_validates_static_with_context_overrides_early():
 
     with pytest.raises(ValueError, match="a must be <= b"):
         add().flow.with_context(a=2, b=1)
+
+
+def test_context_type_validates_chained_static_with_context_overrides_early():
+    @Flow.model(context_type=OrderedContext)
+    def add(a: FromContext[int], b: FromContext[int]) -> int:
+        return a + b
+
+    with pytest.raises(ValueError, match="a must be <= b"):
+        add().flow.with_context(a=2).flow.with_context(b=1)
+
+
+def test_context_type_validates_partial_static_with_context_overrides_early():
+    class PositivePairContext(ContextBase):
+        x: int = Field(gt=0)
+        y: int
+
+    @Flow.model(context_type=PositivePairContext)
+    def add(x: FromContext[int], y: FromContext[int]) -> int:
+        return x + y
+
+    with pytest.raises(ValueError, match="greater than 0"):
+        add().flow.with_context(x=-1)
 
 
 def test_context_type_validates_static_field_transform_overrides_early():
@@ -441,6 +511,32 @@ def test_compute_does_not_unwrap_explicit_generic_result_returns():
     model = load()
     result = model.flow.compute(value=3)
     assert model.result_type == GenericResult[int]
+    assert type(result) is GenericResult[int]
+    assert repr(result) == "GenericResult[int](value=6)"
+    assert result.value == 6
+
+
+def test_compute_does_not_wrap_pep604_union_generic_result_returns():
+    @Flow.model
+    def load(value: FromContext[int]) -> GenericResult[int] | GenericResult[str]:
+        return GenericResult[int](value=value * 2)
+
+    model = load()
+    result = model.flow.compute(value=3)
+    assert model.result_type == GenericResult[int] | GenericResult[str]
+    assert type(result) is GenericResult[int]
+    assert repr(result) == "GenericResult[int](value=6)"
+    assert result.value == 6
+
+
+def test_compute_does_not_wrap_typing_union_generic_result_returns():
+    @Flow.model
+    def load(value: FromContext[int]) -> Union[GenericResult[int], GenericResult[str]]:
+        return GenericResult[int](value=value * 2)
+
+    model = load()
+    result = model.flow.compute(value=3)
+    assert model.result_type == Union[GenericResult[int], GenericResult[str]]
     assert type(result) is GenericResult[int]
     assert repr(result) == "GenericResult[int](value=6)"
     assert result.value == 6
@@ -573,6 +669,29 @@ def test_lazy_dependency_remains_lazy():
     deferred = choose(value=5, lazy_value=source())
     assert deferred.flow.compute(FlowContext(value=3, threshold=10)).value == 30
     assert calls["source"] == 1
+
+
+def test_lazy_parameter_requires_dependency_binding():
+    @Flow.model
+    def source(value: FromContext[int]) -> int:
+        return value
+
+    @Flow.model
+    def choose(lazy_value: Lazy[int]) -> int:
+        return lazy_value()
+
+    with pytest.raises(TypeError, match="Lazy"):
+        choose(lazy_value=1)
+
+    assert choose(lazy_value=source()).flow.compute(value=3).value == 3
+
+
+def test_lazy_parameter_rejects_literal_function_default():
+    with pytest.raises(TypeError, match="Lazy"):
+
+        @Flow.model
+        def choose(lazy_value: Lazy[int] = 1) -> int:
+            return lazy_value()
 
 
 def test_lazy_runtime_helper_is_removed():
@@ -723,12 +842,28 @@ def test_context_transform_rejects_none_for_required_param():
         increment_b(amount=None)
 
 
+def test_context_transform_rejects_lazy_params():
+    with pytest.raises(TypeError, match="does not support Lazy"):
+        Flow.context_transform(lazy_context_transform_for_rejection)
+
+
 def test_context_transform_rejects_nested_functions():
     with pytest.raises(TypeError, match="top-level named Python functions"):
 
         @Flow.context_transform
         def nested(value: FromContext[int]) -> int:
             return value
+
+
+def test_context_transform_rejects_non_importable_main_functions():
+    def main_transform(value: FromContext[int]) -> int:
+        return value
+
+    main_transform.__module__ = "__main__"
+    main_transform.__qualname__ = main_transform.__name__
+
+    with pytest.raises(TypeError, match="importable modules"):
+        Flow.context_transform(main_transform)
 
 
 def test_with_context_rejects_raw_callables():
@@ -921,39 +1056,16 @@ def test_unexpected_type_hint_resolution_errors_propagate(monkeypatch):
         Flow.model(add)
 
 
-def test_internal_generated_model_helpers_and_config_properties():
+def test_generated_model_flow_api_introspection_and_execution():
     @Flow.model
     def add(a: int, b: FromContext[int]) -> int:
         return a + b
 
-    generated_cls = flow_model_module._generated_model_class(add)
-    assert generated_cls is not None
-
-    config = generated_cls.__flow_model_config__
-    assert config.regular_param_names == ("a",)
-    assert config.contextual_param_names == ("b",)
-    assert config._params_by_name["a"] is config.param("a")
-    assert config._params_by_name["b"] is config.param("b")
-    assert config.param("a").name == "a"
-    assert config.param("b").name == "b"
-
-    with pytest.raises(KeyError):
-        config.param("missing")
-
     model = add(a=10)
-    assert flow_model_module._generated_model_class(model) is generated_cls
-
-    class DerivedGeneratedBase(flow_model_module._GeneratedFlowModelBase):
-        @Flow.call
-        def __call__(self, context: SimpleContext) -> GenericResult[int]:
-            return GenericResult(value=context.value)
-
-        @Flow.deps
-        def __deps__(self, context: SimpleContext):
-            del context
-            return []
-
-    assert flow_model_module._resolve_generated_model_bases(DerivedGeneratedBase) == (DerivedGeneratedBase,)
+    assert model.flow.context_inputs == {"b": int}
+    assert model.flow.bound_inputs == {"a": 10}
+    assert model.flow.unbound_inputs == {"b": int}
+    assert model.flow.compute(b=5).value == 15
 
 
 def test_type_adapter_caches_are_bounded_and_clearable(monkeypatch):
@@ -984,14 +1096,7 @@ def test_type_adapter_caches_are_bounded_and_clearable(monkeypatch):
         flow_model_module.clear_flow_model_caches()
 
 
-def test_internal_type_helpers_and_plain_callable_flow_api_paths():
-    assert flow_model_module._concrete_context_type(SimpleContext | None) is SimpleContext
-    assert flow_model_module._concrete_context_type(int) is None
-    assert flow_model_module._type_accepts_str(Annotated[str, flow_model_module._FromContextMarker()]) is True
-    assert flow_model_module._type_accepts_str(int | None) is False
-    assert flow_model_module._context_transform_repr(increment_b(amount=1)) == "increment_b(amount=1)"
-    assert flow_model_module._bound_field_names(object()) == set()
-
+def test_plain_callable_flow_api_paths():
     class PlainModel(CallableModel):
         @property
         def context_type(self):
@@ -1024,8 +1129,11 @@ def test_internal_type_helpers_and_plain_callable_flow_api_paths():
 def test_unhashable_annotations_still_validate():
     annotation = Annotated[int, []]
 
-    assert flow_model_module._can_validate_type(annotation) is True
-    assert flow_model_module._coerce_value("value", "3", annotation, "Field") == 3
+    @Flow.model
+    def add(x: annotation, y: FromContext[annotation]) -> int:
+        return x + y
+
+    assert add(x="2").flow.compute(y="3").value == 5
 
 
 def test_compute_accepts_context_object_for_from_context_models():
@@ -1193,17 +1301,33 @@ def test_context_type_validates_parameterized_annotations():
             return sum(vals)
 
 
+def test_context_type_rejects_nullable_field_for_non_nullable_from_context():
+    class OptionalValueContext(ContextBase):
+        value: int | None
+
+    with pytest.raises(TypeError, match="annotates"):
+
+        @Flow.model(context_type=OptionalValueContext)
+        def add_one(value: FromContext[int]) -> int:
+            return value + 1
+
+
 @pytest.mark.parametrize(
     ("func_annotation", "context_annotation", "expected"),
     [
         (int, int, True),
         (int, str, False),
         (int | None, int, True),
+        (int, int | None, False),
+        (int | None, int | None, True),
         (list[int], list[str], False),
         (list[int], list[int], True),
         (int | str, int, True),
         (Literal["a"], Literal["a"], True),
         (Literal["a"], Literal["b"], False),
+        (str, Literal["a"], True),
+        (Literal["a", "b"], Literal["a"], True),
+        (Literal["a"], str, False),
         (Annotated[int, "meta"], int, True),
         (dict[str, list[int]], dict[str, list[int]], True),
         (dict[str, list[int]], dict[str, list[str]], False),
@@ -1215,7 +1339,7 @@ def test_context_type_validates_parameterized_annotations():
     ],
 )
 def test_context_type_annotations_compatible_cases(func_annotation, context_annotation, expected):
-    assert flow_model_module._context_type_annotations_compatible(func_annotation, context_annotation) is expected
+    assert flow_binding_module._context_type_annotations_compatible(func_annotation, context_annotation) is expected
 
 
 def test_compute_forwards_options_with_custom_evaluator():
@@ -1304,6 +1428,306 @@ def test_compute_forwards_options_for_plain_callable_model():
     assert calls["count"] == 1
 
 
+def test_bound_plain_callable_compute_applies_context_before_validation():
+    calls = {"count": 0}
+
+    class RequiredContext(ContextBase):
+        a: int
+        b: int
+
+    class PlainSource(CallableModel):
+        @Flow.call
+        def __call__(self, context: RequiredContext) -> GenericResult[int]:
+            calls["count"] += 1
+            return GenericResult(value=context.a + context.b)
+
+    assert PlainSource().flow.with_context(a=1).flow.compute(b=2).value == 3
+    assert calls["count"] == 1
+
+
+def test_bound_plain_callable_dynamic_context_transform_runs_before_validation():
+    calls = {"count": 0}
+
+    class RequiredContext(ContextBase):
+        a: int
+        b: int
+
+    class PlainSource(CallableModel):
+        @Flow.call
+        def __call__(self, context: RequiredContext) -> GenericResult[int]:
+            calls["count"] += 1
+            return GenericResult(value=context.a + context.b)
+
+    assert PlainSource().flow.with_context(a=seed_plus_one()).flow.compute(seed=1, b=10).value == 12
+    assert calls["count"] == 1
+
+
+def test_bound_plain_callable_direct_call_applies_context_before_validation():
+    calls = {"count": 0}
+
+    class RequiredContext(ContextBase):
+        a: int
+        b: int
+
+    class PlainSource(CallableModel):
+        @Flow.call
+        def __call__(self, context: RequiredContext) -> GenericResult[int]:
+            calls["count"] += 1
+            return GenericResult(value=context.a + context.b)
+
+    bound = PlainSource().flow.with_context(a=1)
+
+    assert bound(FlowContext(b=2)).value == 3
+    assert bound.__deps__(FlowContext(b=2)) == [(bound.model, [RequiredContext(a=1, b=2)])]
+    assert calls["count"] == 1
+
+
+def test_bound_plain_callable_compute_preserves_bound_scoped_options():
+    calls = {"source": 0, "evaluator": 0}
+
+    class RequiredContext(ContextBase):
+        a: int
+        b: int
+
+    class PlainSource(CallableModel):
+        @Flow.call
+        def __call__(self, context: RequiredContext) -> GenericResult[int]:
+            calls["source"] += 1
+            return GenericResult(value=context.a + context.b)
+
+    class OffsetEvaluator(EvaluatorBase):
+        def __call__(self, context: ModelEvaluationContext):
+            calls["evaluator"] += 1
+            result = context()
+            return result.model_copy(update={"value": result.value + 100})
+
+    bound = PlainSource().flow.with_context(a=1)
+
+    with FlowOptionsOverride(options={"evaluator": OffsetEvaluator()}, models=(bound,)):
+        assert bound.flow.compute(b=2).value == 103
+
+    assert calls == {"source": 1, "evaluator": 1}
+
+
+def test_bound_plain_callable_dependency_preserves_bound_scoped_options():
+    calls = {"source": 0, "consumer": 0, "evaluator": 0}
+
+    class RequiredContext(ContextBase):
+        a: int
+        b: int
+
+    class PlainSource(CallableModel):
+        @Flow.call
+        def __call__(self, context: RequiredContext) -> GenericResult[int]:
+            calls["source"] += 1
+            return GenericResult(value=context.a + context.b)
+
+    class OffsetEvaluator(EvaluatorBase):
+        def __call__(self, context: ModelEvaluationContext):
+            calls["evaluator"] += 1
+            result = context()
+            return result.model_copy(update={"value": result.value + 100})
+
+    @Flow.model
+    def consumer(x: int) -> int:
+        calls["consumer"] += 1
+        return x
+
+    bound = PlainSource().flow.with_context(a=1)
+    model = consumer(x=bound)
+
+    with FlowOptionsOverride(options={"evaluator": OffsetEvaluator()}, models=(bound,)):
+        assert model.flow.compute(b=2).value == 103
+
+    assert calls == {"source": 1, "consumer": 1, "evaluator": 1}
+
+
+def test_bound_plain_callable_dependency_identity_ignores_unused_ambient_context():
+    calls = {"source": 0, "consumer": 0}
+
+    class RequiredContext(ContextBase):
+        a: int
+        b: int
+
+    class PlainSource(CallableModel):
+        @Flow.call
+        def __call__(self, context: RequiredContext) -> GenericResult[int]:
+            calls["source"] += 1
+            return GenericResult(value=context.a + context.b)
+
+    @Flow.model
+    def consumer(x: int) -> int:
+        calls["consumer"] += 1
+        return x
+
+    cache = MemoryCacheEvaluator()
+    model = consumer(x=PlainSource().flow.with_context(a=1, b=2))
+
+    with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
+        assert model.flow.compute(unused="one").value == 3
+        assert model.flow.compute(unused="two").value == 3
+
+    assert calls == {"source": 1, "consumer": 1}
+
+
+def test_bound_dependency_identity_rewrites_dynamic_context_once():
+    calls = {"source": 0, "consumer": 0}
+
+    @Flow.model
+    def source(a: FromContext[int]) -> int:
+        calls["source"] += 1
+        return a
+
+    @Flow.model
+    def consumer(x: int) -> int:
+        calls["consumer"] += 1
+        return x
+
+    cache = MemoryCacheEvaluator()
+    model = consumer(x=source().flow.with_context(a=non_idempotent_a_step()))
+
+    with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
+        assert model.flow.compute(a=1).value == 2
+        assert model.flow.compute(a=2).value == 3
+
+    assert calls == {"source": 2, "consumer": 2}
+
+
+def test_lazy_bound_plain_callable_dependency_preserves_bound_scoped_options():
+    calls = {"source": 0, "consumer": 0, "evaluator": 0}
+
+    class RequiredContext(ContextBase):
+        a: int
+        b: int
+
+    class PlainSource(CallableModel):
+        @Flow.call
+        def __call__(self, context: RequiredContext) -> GenericResult[int]:
+            calls["source"] += 1
+            return GenericResult(value=context.a + context.b)
+
+    class OffsetEvaluator(EvaluatorBase):
+        def __call__(self, context: ModelEvaluationContext):
+            calls["evaluator"] += 1
+            result = context()
+            return result.model_copy(update={"value": result.value + 100})
+
+    @Flow.model
+    def consumer(lazy_value: Lazy[int], use_lazy: FromContext[bool]) -> int:
+        calls["consumer"] += 1
+        return lazy_value() if use_lazy else 0
+
+    bound = PlainSource().flow.with_context(a=1)
+    model = consumer(lazy_value=bound)
+
+    with FlowOptionsOverride(options={"evaluator": OffsetEvaluator()}, models=(bound,)):
+        assert model.flow.compute(b=2, use_lazy=True).value == 103
+
+    assert calls == {"source": 1, "consumer": 1, "evaluator": 1}
+
+
+def test_bound_flow_unbound_inputs_subtracts_static_context():
+    class RequiredContext(ContextBase):
+        a: int
+        b: int
+
+    class PlainSource(CallableModel):
+        @Flow.call
+        def __call__(self, context: RequiredContext) -> GenericResult[int]:
+            return GenericResult(value=context.a + context.b)
+
+    @Flow.model
+    def add(a: FromContext[int], b: FromContext[int]) -> int:
+        return a + b
+
+    assert PlainSource().flow.with_context(a=1).flow.unbound_inputs == {"b": int}
+    assert add().flow.with_context(a=1).flow.unbound_inputs == {"b": int}
+    assert add().flow.with_context(a=static_bad()).flow.unbound_inputs == {"b": int}
+    assert add().flow.with_context(static_patch()).flow.unbound_inputs == {"b": int}
+    assert add().flow.with_context(a=1, b=2).flow.unbound_inputs == {}
+
+
+def test_bound_flow_unbound_inputs_reflects_dynamic_field_transform_inputs():
+    @Flow.model
+    def add(a: FromContext[int], b: FromContext[int]) -> int:
+        return a + b
+
+    bound = add().flow.with_context(a=seed_plus_one())
+
+    assert bound.flow.compute(seed=1, b=10).value == 12
+    assert bound.flow.context_inputs == {"b": int, "seed": int}
+    assert bound.flow.unbound_inputs == {"b": int, "seed": int}
+
+
+def test_bound_flow_bound_inputs_include_static_context_bindings():
+    @Flow.model
+    def add(a: int, b: FromContext[int]) -> int:
+        return a + b
+
+    bound = add(a=1).flow.with_context(b=2)
+
+    assert bound.flow.context_inputs == {}
+    assert bound.flow.unbound_inputs == {}
+    assert bound.flow.bound_inputs == {"a": 1, "b": 2}
+
+
+def test_bound_flow_bound_inputs_drops_static_patch_after_dynamic_override():
+    @Flow.model
+    def add(a: FromContext[int], b: FromContext[int]) -> int:
+        return a + b
+
+    bound = add().flow.with_context(static_patch()).flow.with_context(a=seed_plus_one())
+
+    assert bound.flow.compute(seed=3, b=10).value == 14
+    assert bound.flow.bound_inputs == {}
+    assert bound.flow.context_inputs == {"b": int, "seed": int}
+    assert bound.flow.unbound_inputs == {"b": int, "seed": int}
+
+
+def test_noop_bound_flow_compute_preserves_optional_none_context():
+    class Empty(ContextBase):
+        pass
+
+    class OptionalSource(CallableModel):
+        @Flow.call
+        def __call__(self, context: Empty | None = None) -> GenericResult[int]:
+            return GenericResult(value=0 if context is None else 1)
+
+    bound = OptionalSource().flow.with_context()
+
+    assert OptionalSource().flow.compute().value == 0
+    assert OptionalSource().flow.unbound_inputs == {}
+    assert bound.flow.compute().value == 0
+    assert bound.flow.unbound_inputs == {}
+    assert bound(None).value == 0
+
+
+def test_noop_bound_optional_context_compute_preserves_bound_scoped_options():
+    calls = {"source": 0, "evaluator": 0}
+
+    class Empty(ContextBase):
+        pass
+
+    class OptionalSource(CallableModel):
+        @Flow.call
+        def __call__(self, context: Empty | None = None) -> GenericResult[int]:
+            calls["source"] += 1
+            return GenericResult(value=0 if context is None else 1)
+
+    class OffsetEvaluator(EvaluatorBase):
+        def __call__(self, context: ModelEvaluationContext):
+            calls["evaluator"] += 1
+            result = context()
+            return result.model_copy(update={"value": result.value + 100})
+
+    bound = OptionalSource().flow.with_context()
+
+    with FlowOptionsOverride(options={"evaluator": OffsetEvaluator()}, models=(bound,)):
+        assert bound.flow.compute().value == 100
+
+    assert calls == {"source": 1, "evaluator": 1}
+
+
 def test_generated_model_cache_ignores_unused_flow_context_fields():
     calls = {"source": 0, "root": 0}
 
@@ -1325,6 +1749,361 @@ def test_generated_model_cache_ignores_unused_flow_context_fields():
         assert model(FlowContext(value=3, bonus=7, unused="two")).value == 37
 
     assert calls == {"source": 1, "root": 1}
+    assert len(cache.cache) == 2
+
+
+def test_generated_model_cache_changes_when_consumed_context_field_changes():
+    calls = {"count": 0}
+
+    @Flow.model
+    def add(a: int, b: FromContext[int]) -> int:
+        calls["count"] += 1
+        return a + b
+
+    cache = MemoryCacheEvaluator()
+    model = add(a=10)
+
+    with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
+        assert model.flow.compute(b=1, unused="same").value == 11
+        assert model.flow.compute(b=2, unused="same").value == 12
+
+    assert calls["count"] == 2
+    assert len(cache.cache) == 2
+
+
+def test_generated_model_cache_changes_when_regular_literal_input_changes():
+    calls = {"count": 0}
+
+    @Flow.model
+    def add(a: int, b: FromContext[int]) -> int:
+        calls["count"] += 1
+        return a + b
+
+    cache = MemoryCacheEvaluator()
+
+    with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
+        assert add(a=10).flow.compute(b=1).value == 11
+        assert add(a=20).flow.compute(b=1).value == 21
+
+    assert calls["count"] == 2
+    assert len(cache.cache) == 2
+
+
+def test_generated_model_cache_wraps_effective_key_with_nontransparent_evaluator():
+    calls = {"count": 0}
+
+    class OpaqueEvaluator(EvaluatorBase):
+        def __call__(self, context: ModelEvaluationContext):
+            return context()
+
+    @Flow.model
+    def add(a: int, b: FromContext[int]) -> int:
+        calls["count"] += 1
+        return a + b
+
+    cache = MemoryCacheEvaluator()
+    evaluator = combine_evaluators(OpaqueEvaluator(), cache)
+    model = add(a=10)
+
+    with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
+        assert model.flow.compute(b=1, unused="plain").value == 11
+
+    with FlowOptionsOverride(options={"evaluator": evaluator, "cacheable": True}):
+        assert model.flow.compute(b=1, unused="one").value == 11
+        assert model.flow.compute(b=1, unused="two").value == 11
+
+    assert calls["count"] == 2
+    assert len(cache.cache) == 2
+
+
+def test_generated_model_cache_uses_effective_key_when_result_validation_disabled():
+    calls = {"count": 0}
+
+    @Flow.model
+    def add(a: int, b: FromContext[int]) -> int:
+        calls["count"] += 1
+        return a + b
+
+    cache = MemoryCacheEvaluator()
+    model = add(a=10)
+
+    with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True, "validate_result": False}):
+        assert model.flow.compute(b=1, unused="one").value == 11
+        assert model.flow.compute(b=1, unused="two").value == 11
+
+    assert calls["count"] == 1
+    assert len(cache.cache) == 1
+
+
+def test_generated_model_cache_ignores_unresolved_unused_lazy_dependency_context():
+    calls = {"choose": 0}
+
+    @Flow.model
+    def source(missing: FromContext[int]) -> int:
+        return missing * 10
+
+    @Flow.model
+    def choose(x: int, lazy_value: Lazy[int], use_lazy: FromContext[bool]) -> int:
+        calls["choose"] += 1
+        return lazy_value() if use_lazy else x
+
+    cache = MemoryCacheEvaluator()
+    model = choose(x=7, lazy_value=source())
+
+    with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
+        assert model.flow.compute(use_lazy=False, unused="one").value == 7
+        assert model.flow.compute(use_lazy=False, unused="two").value == 7
+
+    assert calls["choose"] == 1
+    assert len(cache.cache) == 1
+
+
+def test_unused_lazy_plain_dependency_defers_missing_context_validation():
+    calls = {"source": 0, "choose": 0}
+
+    class RequiredContext(ContextBase):
+        missing: int
+
+    class PlainSource(CallableModel):
+        @Flow.call
+        def __call__(self, context: RequiredContext) -> GenericResult[int]:
+            calls["source"] += 1
+            return GenericResult(value=context.missing * 10)
+
+    @Flow.model
+    def choose(x: int, lazy_value: Lazy[int], use_lazy: FromContext[bool]) -> int:
+        calls["choose"] += 1
+        return lazy_value() if use_lazy else x
+
+    cache = MemoryCacheEvaluator()
+    model = choose(x=7, lazy_value=PlainSource())
+
+    with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
+        assert model.flow.compute(use_lazy=False, unused="one").value == 7
+        assert model.flow.compute(use_lazy=False, unused="two").value == 7
+        with pytest.raises(ValidationError):
+            model.flow.compute(use_lazy=True)
+
+    assert calls == {"source": 0, "choose": 2}
+    assert len(cache.cache) == 1
+
+
+def test_unused_lazy_bound_plain_dependency_applies_static_context_identity():
+    calls = {"source": 0, "choose": 0}
+
+    class RequiredContext(ContextBase):
+        a: int
+        b: int
+
+    class PlainSource(CallableModel):
+        @Flow.call
+        def __call__(self, context: RequiredContext) -> GenericResult[int]:
+            calls["source"] += 1
+            return GenericResult(value=context.a + context.b)
+
+    @Flow.model
+    def choose(x: int, lazy_value: Lazy[int], use_lazy: FromContext[bool]) -> int:
+        calls["choose"] += 1
+        return lazy_value() if use_lazy else x
+
+    cache = MemoryCacheEvaluator()
+    model = choose(x=7, lazy_value=PlainSource().flow.with_context(a=1))
+
+    with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
+        assert model.flow.compute(use_lazy=False, unused="one").value == 7
+        assert model.flow.compute(use_lazy=False, unused="two").value == 7
+        with pytest.raises(ValidationError):
+            model.flow.compute(use_lazy=True)
+
+    assert calls == {"source": 0, "choose": 2}
+    assert len(cache.cache) == 1
+
+
+def test_unused_lazy_bound_plain_dependency_dynamic_transform_can_leave_missing_context():
+    calls = {"source": 0, "choose": 0}
+
+    class RequiredContext(ContextBase):
+        a: int
+        b: int
+
+    class PlainSource(CallableModel):
+        @Flow.call
+        def __call__(self, context: RequiredContext) -> GenericResult[int]:
+            calls["source"] += 1
+            return GenericResult(value=context.a + context.b)
+
+    @Flow.model
+    def choose(x: int, lazy_value: Lazy[int], use_lazy: FromContext[bool]) -> int:
+        calls["choose"] += 1
+        return lazy_value() if use_lazy else x
+
+    cache = MemoryCacheEvaluator()
+    model = choose(x=7, lazy_value=PlainSource().flow.with_context(b=seed_plus_one()))
+
+    with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
+        assert model.flow.compute(use_lazy=False, seed=1, unused="one").value == 7
+        assert model.flow.compute(use_lazy=False, seed=1, unused="two").value == 7
+
+    assert calls == {"source": 0, "choose": 1}
+    assert len(cache.cache) == 1
+
+
+def test_unused_lazy_bound_plain_dependency_fully_resolved_identity_ignores_ambient_context():
+    calls = {"source": 0, "choose": 0}
+
+    class RequiredContext(ContextBase):
+        a: int
+        b: int
+
+    class PlainSource(CallableModel):
+        @Flow.call
+        def __call__(self, context: RequiredContext) -> GenericResult[int]:
+            calls["source"] += 1
+            return GenericResult(value=context.a + context.b)
+
+    @Flow.model
+    def choose(x: int, lazy_value: Lazy[int], use_lazy: FromContext[bool]) -> int:
+        calls["choose"] += 1
+        return lazy_value() if use_lazy else x
+
+    cache = MemoryCacheEvaluator()
+    model = choose(x=7, lazy_value=PlainSource().flow.with_context(a=1, b=2))
+
+    with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
+        assert model.flow.compute(use_lazy=False, unused="one").value == 7
+        assert model.flow.compute(use_lazy=False, unused="two").value == 7
+
+    assert calls == {"source": 0, "choose": 1}
+    assert len(cache.cache) == 1
+
+
+def test_unused_lazy_bound_dependency_uses_partial_context_identity():
+    calls = {"source": 0, "choose": 0}
+
+    @Flow.model
+    def source(a: FromContext[int], b: FromContext[int]) -> int:
+        calls["source"] += 1
+        return a + b
+
+    @Flow.model
+    def choose(x: int, lazy_value: Lazy[int], use_lazy: FromContext[bool]) -> int:
+        calls["choose"] += 1
+        return lazy_value() if use_lazy else x
+
+    cache = MemoryCacheEvaluator()
+    model = choose(x=7, lazy_value=source().flow.with_context(a=1))
+
+    with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
+        assert model.flow.compute(use_lazy=False, a=100).value == 7
+        assert model.flow.compute(use_lazy=False, a=200).value == 7
+        with pytest.raises(TypeError, match="Missing contextual input"):
+            model.flow.compute(use_lazy=True, a=300)
+
+    assert calls == {"source": 0, "choose": 2}
+    assert len(cache.cache) == 1
+
+
+def test_used_lazy_bound_dependency_identity_applies_dynamic_context_transform():
+    calls = {"source": 0, "choose": 0}
+
+    @Flow.model
+    def source(a: FromContext[int], b: FromContext[int]) -> int:
+        calls["source"] += 1
+        return a + b
+
+    @Flow.model
+    def choose(lazy_value: Lazy[int], use_lazy: FromContext[bool]) -> int:
+        calls["choose"] += 1
+        return lazy_value() if use_lazy else 0
+
+    cache = MemoryCacheEvaluator()
+    model = choose(lazy_value=source().flow.with_context(a=seed_plus_one()))
+
+    with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
+        assert model.flow.compute(use_lazy=True, seed=1, b=10).value == 12
+        assert model.flow.compute(use_lazy=True, seed=2, b=10).value == 13
+
+    assert calls == {"source": 2, "choose": 2}
+    assert len(cache.cache) == 6
+
+
+def test_unused_lazy_bound_dependency_records_missing_transform_context():
+    calls = {"source": 0, "choose": 0}
+
+    @Flow.model
+    def source(a: FromContext[int], b: FromContext[int]) -> int:
+        calls["source"] += 1
+        return a + b
+
+    @Flow.model
+    def choose(x: int, lazy_value: Lazy[int], use_lazy: FromContext[bool]) -> int:
+        calls["choose"] += 1
+        return lazy_value() if use_lazy else x
+
+    cache = MemoryCacheEvaluator()
+    model = choose(x=7, lazy_value=source().flow.with_context(a=seed_plus_one()))
+
+    with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
+        assert model.flow.compute(use_lazy=False, unused="one").value == 7
+        assert model.flow.compute(use_lazy=False, unused="two").value == 7
+        assert model.flow.compute(use_lazy=False, a=100, b=1).value == 7
+        assert model.flow.compute(use_lazy=False, a=200, b=1).value == 7
+
+    assert calls == {"source": 0, "choose": 1}
+    assert len(cache.cache) == 1
+
+
+def test_used_lazy_generated_dependency_identity_respects_contextual_defaults():
+    calls = {"dep": 0, "source": 0, "choose": 0}
+
+    @Flow.model
+    def dep(v: FromContext[int]) -> int:
+        calls["dep"] += 1
+        return v
+
+    @Flow.model
+    def source(d: int, a: FromContext[int], b: FromContext[int]) -> int:
+        calls["source"] += 1
+        return a + b + d
+
+    @Flow.model
+    def choose(lazy_value: Lazy[int], use_lazy: FromContext[bool]) -> int:
+        calls["choose"] += 1
+        return lazy_value() if use_lazy else 0
+
+    cache = MemoryCacheEvaluator()
+    model = choose(lazy_value=source(d=dep(), a=1))
+
+    with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
+        assert model.flow.compute(use_lazy=True, b=10, v=3).value == 14
+        assert model.flow.compute(use_lazy=True, b=10, v=999).value == 1010
+
+    assert calls == {"dep": 2, "source": 2, "choose": 2}
+
+
+def test_generated_model_cache_distinguishes_unresolved_lazy_dependency_models():
+    calls = {"choose": 0}
+
+    @Flow.model
+    def source_one(missing: FromContext[int]) -> int:
+        return missing * 10
+
+    @Flow.model
+    def source_two(missing: FromContext[int]) -> int:
+        return missing * 100
+
+    @Flow.model
+    def choose(x: int, lazy_value: Lazy[int], use_lazy: FromContext[bool]) -> int:
+        calls["choose"] += 1
+        return lazy_value() if use_lazy else x
+
+    cache = MemoryCacheEvaluator()
+
+    with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
+        assert choose(x=7, lazy_value=source_one()).flow.compute(use_lazy=False).value == 7
+        assert choose(x=7, lazy_value=source_two()).flow.compute(use_lazy=False).value == 7
+
+    assert calls["choose"] == 2
     assert len(cache.cache) == 2
 
 
@@ -1381,6 +2160,34 @@ def test_generated_dependency_graph_identity_ignores_unused_flow_context_fields(
     assert set(graph1.ids.keys()) == set(graph2.ids.keys())
 
 
+def test_bound_generated_model_dependency_graph_has_no_self_loop():
+    @Flow.model
+    def add(a: int, b: FromContext[int]) -> int:
+        return a + b
+
+    bound = add(a=1).flow.with_context(b=2)
+    graph = get_dependency_graph(bound.__call__.get_evaluation_context(bound, FlowContext(b=99)))
+
+    assert graph.root_id not in graph.graph[graph.root_id]
+
+
+def test_bound_generated_model_dependency_graph_traverses_collapsed_child_deps():
+    @Flow.model
+    def source(value: FromContext[int]) -> int:
+        return value * 10
+
+    @Flow.model
+    def root(x: int, bonus: FromContext[int]) -> int:
+        return x + bonus
+
+    bound = root(x=source()).flow.with_context(bonus=1)
+    graph = get_dependency_graph(bound.__call__.get_evaluation_context(bound, FlowContext(value=2, bonus=99)))
+
+    assert graph.root_id not in graph.graph[graph.root_id]
+    assert len(graph.ids) == 3
+    assert len(graph.graph[graph.root_id]) == 1
+
+
 def test_bound_model_cache_follows_rewritten_context_not_ambient_source_fields():
     calls = {"count": 0}
 
@@ -1397,7 +2204,33 @@ def test_bound_model_cache_follows_rewritten_context_not_ambient_source_fields()
         assert bound(FlowContext(raw=3)).value == 11
 
     assert calls["count"] == 1
-    assert len(cache.cache) == 1
+    assert len(cache.cache) == 2
+
+
+def test_bound_model_cache_respects_wrapped_model_scoped_evaluator():
+    calls = {"add": 0, "evaluator": 0}
+
+    class OffsetEvaluator(EvaluatorBase):
+        def __call__(self, context: ModelEvaluationContext):
+            calls["evaluator"] += 1
+            result = context()
+            return result.model_copy(update={"value": result.value + 100})
+
+    @Flow.model
+    def add(a: int, b: FromContext[int]) -> int:
+        calls["add"] += 1
+        return a + b
+
+    cache = MemoryCacheEvaluator()
+    base = add(a=1)
+    bound = base.flow.with_context(b=2)
+
+    with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
+        with FlowOptionsOverride(options={"evaluator": OffsetEvaluator()}, models=(base,)):
+            assert bound.flow.compute().value == 103
+        assert bound.flow.compute().value == 3
+
+    assert calls == {"add": 2, "evaluator": 1}
 
 
 def test_plain_callable_model_cache_remains_structural_for_flow_context():
@@ -1457,6 +2290,30 @@ def test_generated_models_cross_process_cloudpickle():
     assert result.returncode == 0, f"Cross-process cloudpickle failed:\n{result.stderr}"
 
 
+def test_local_generated_models_cross_process_cloudpickle():
+    """Local @Flow.model instances carry their generated class across processes."""
+    from ray.cloudpickle import dumps as rcpdumps
+
+    def make_model():
+        @Flow.model
+        def add(a: int, b: FromContext[int]) -> int:
+            return a + b
+
+        return add(a=1)
+
+    encoded = base64.b64encode(rcpdumps(make_model(), protocol=5)).decode()
+    script = (
+        "import base64\n"
+        "from ray.cloudpickle import loads as rcploads\n"
+        f"data = base64.b64decode('{encoded}')\n"
+        "model = rcploads(data)\n"
+        "result = model.flow.compute(b=2)\n"
+        "assert result.value == 3, f'Expected 3, got {result.value}'\n"
+    )
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, f"Cross-process local cloudpickle failed:\n{result.stderr}"
+
+
 def test_model_base_fields_visible_in_bound_inputs():
     """model_base fields that are explicitly set should appear in bound_inputs."""
 
@@ -1496,3 +2353,12 @@ def test_model_base_fields_rejected_by_compute():
     model = add(a=10, multiplier=3)
     with pytest.raises(TypeError, match="does not accept model configuration override\\(s\\): multiplier"):
         model.flow.compute(b=5, multiplier=99)
+
+
+def test_flow_model_public_exports_exclude_context_spec_models():
+    assert "StaticValueSpec" not in flow_model_module.__all__
+    assert "FieldContextSpec" not in flow_model_module.__all__
+    assert "PatchContextSpec" not in flow_model_module.__all__
+    assert not hasattr(ccflow, "StaticValueSpec")
+    assert not hasattr(ccflow, "FieldContextSpec")
+    assert not hasattr(ccflow, "PatchContextSpec")

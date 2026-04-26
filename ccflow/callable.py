@@ -16,6 +16,7 @@ import inspect
 import logging
 from functools import lru_cache, wraps
 from inspect import Signature, isclass, signature
+from types import UnionType
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -33,11 +34,13 @@ from typing import (
     cast,
     get_args,
     get_origin,
+    get_type_hints,
 )
 
 from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field, InstanceOf, PrivateAttr, TypeAdapter, field_validator, model_validator
 from typing_extensions import override
 
+from ._flow_model_binding import _analyze_auto_context_function, _is_result_annotation
 from .base import (
     BaseModel,
     ContextBase,
@@ -70,6 +73,7 @@ __all__ = (
 )
 
 log = logging.getLogger(__name__)
+_UNION_ORIGINS = (Union, UnionType)
 
 
 # *****************************************************************************
@@ -90,14 +94,17 @@ def _declared_type_matches(actual: Any, expected: Any) -> bool:
         expected = get_args(expected)[0]
     if isinstance(expected, TypeVar):
         return True
-    if get_origin(expected) is Union:
-        expected_args = tuple(arg for arg in get_args(expected) if isinstance(arg, type))
+    if actual is type(None):
+        if get_origin(expected) in _UNION_ORIGINS:
+            return type(None) in get_args(expected)
+        return expected is type(None)
+    if get_origin(actual) in _UNION_ORIGINS:
+        return all(_declared_type_matches(actual_arg, expected) for actual_arg in get_args(actual))
+    if get_origin(expected) in _UNION_ORIGINS:
+        expected_args = get_args(expected)
         if not expected_args:
             return False
-        if get_origin(actual) is Union:
-            actual_args = tuple(arg for arg in get_args(actual) if isinstance(arg, type))
-            return set(actual_args) == set(expected_args)
-        return isinstance(actual, type) and any(issubclass(actual, arg) for arg in expected_args)
+        return any(_declared_type_matches(actual, arg) for arg in expected_args)
 
     return isinstance(actual, type) and isinstance(expected, type) and issubclass(actual, expected)
 
@@ -125,15 +132,10 @@ class _CallableModel(BaseModel, abc.ABC):
     def _check_context_type(cls, context_type):
         type_call_arg = _cached_signature(cls.__call__).parameters["context"].annotation
 
-        # If optional type, extract inner type
-        if get_origin(type_call_arg) is Optional or (get_origin(type_call_arg) is Union and type(None) in get_args(type_call_arg)):
-            type_call_arg = [t for t in get_args(type_call_arg) if t is not type(None)][0]
-
         if (
-            not isinstance(type_call_arg, TypeVar)
-            and type_call_arg is not Signature.empty
-            and (not isclass(type_call_arg) or not issubclass(type_call_arg, context_type))
-            and (not isclass(context_type) or not issubclass(context_type, type_call_arg))
+            type_call_arg is not Signature.empty
+            and not isinstance(type_call_arg, TypeVar)
+            and not _declared_type_matches(context_type, type_call_arg)
         ):
             err_msg_type_mismatch = f"The context_type {context_type} must match the type of the context accepted by __call__ {type_call_arg}"
             raise ValueError(err_msg_type_mismatch)
@@ -143,7 +145,7 @@ class _CallableModel(BaseModel, abc.ABC):
         type_call_return = _cached_signature(cls.__call__).return_annotation
 
         # If union, check all types
-        if get_origin(type_call_return) is Union and get_args(type_call_return):
+        if get_origin(type_call_return) in _UNION_ORIGINS and get_args(type_call_return):
             types_call_return = [t for t in get_args(type_call_return) if t is not type(None)]
         else:
             types_call_return = [type_call_return]
@@ -221,7 +223,7 @@ class _CallableModel(BaseModel, abc.ABC):
         context: Any,
         child_evaluation_key: Callable[[Any, Any], bytes],
     ) -> Optional[Any]:
-        """Return a narrower identity payload for cache/graph keys when available.
+        """Return an effective evaluation identity payload when available.
 
         Returning ``None`` keeps the model on the existing structural key path.
         This is intentionally narrow and internal: only models whose effective
@@ -328,12 +330,10 @@ class FlowOptions(BaseModel):
             method_result_type = getattr(fn, "__result_type__", model.result_type)
 
             if (not isclass(method_context_type) or not issubclass(method_context_type, ContextBase)) and not (
-                get_origin(method_context_type) is Union and type(None) in get_args(method_context_type)
+                get_origin(method_context_type) in _UNION_ORIGINS and type(None) in get_args(method_context_type)
             ):
                 raise TypeError(f"Context type {method_context_type} must be a subclass of ContextBase")
-            if (not isclass(method_result_type) or not issubclass(method_result_type, ResultBase)) and not (
-                get_origin(method_result_type) is Union and all(isclass(t) and issubclass(t, ResultBase) for t in get_args(method_result_type))
-            ):
+            if not _is_result_annotation(method_result_type):
                 raise TypeError(f"Result type {method_result_type} must be a subclass of ResultBase")
 
             if self._deps and fn.__name__ != "__deps__":
@@ -343,6 +343,10 @@ class FlowOptions(BaseModel):
                 if context is Signature.empty:
                     if kwargs:
                         context = kwargs
+                    elif getattr(fn, "__auto_context__", None) is not None and all(
+                        not field.is_required() for field in method_context_type.model_fields.values()
+                    ):
+                        context = method_context_type()
                     else:
                         raise TypeError(
                             f"{fn.__name__}() missing 1 required positional argument: 'context' of type {method_context_type}, or kwargs to construct it"
@@ -351,7 +355,7 @@ class FlowOptions(BaseModel):
                 raise TypeError(f"{fn.__name__}() was passed a context and got an unexpected keyword argument '{next(iter(kwargs.keys()))}'")
 
             # Type coercion on input. We do this here (rather than relying on ModelEvaluationContext) as it produces a nicer traceback/error message
-            if get_origin(method_context_type) is Union and type(None) in get_args(method_context_type):
+            if get_origin(method_context_type) in _UNION_ORIGINS and type(None) in get_args(method_context_type):
                 if context is not None:
                     method_context_type = [t for t in get_args(method_context_type) if t is not type(None)][0]
                     if not isinstance(context, method_context_type):
@@ -653,7 +657,7 @@ class ModelEvaluationContext(
                 ctx_type = model.context_type
                 ctx_value = values.get("context")
                 # Handle Optional[ContextType] — if context is None, keep it; otherwise validate through the inner type
-                if get_origin(ctx_type) is Union and type(None) in get_args(ctx_type):
+                if get_origin(ctx_type) in _UNION_ORIGINS and type(None) in get_args(ctx_type):
                     if ctx_value is not None:
                         inner_type = [t for t in get_args(ctx_type) if t is not type(None)][0]
                         if not isinstance(ctx_value, inner_type):
@@ -683,9 +687,9 @@ class ModelEvaluationContext(
                     object.__setattr__(result, "_lazy_validation_requested", True)
                 elif hasattr(self.model, "result_type"):
                     result_type = self.model.result_type
-                    if not isclass(result_type) or not issubclass(result_type, ResultBase):
+                    if not _is_result_annotation(result_type):
                         raise TypeError(f"Model result_type {result_type} is not a subclass of ResultBase")
-                    result = result_type.model_validate(result)
+                    result = TypeAdapter(result_type).validate_python(result)
 
             return cast(ResultType, result)
         else:
@@ -805,7 +809,7 @@ class CallableModel(_CallableModel):
             )
 
         # If optional type, extract inner type
-        if get_origin(typ) is Optional or (get_origin(typ) is Union and type(None) in get_args(typ)):
+        if get_origin(typ) is Optional or (get_origin(typ) in _UNION_ORIGINS and type(None) in get_args(typ)):
             type_to_check = [t for t in get_args(typ) if t is not type(None)][0]
         else:
             type_to_check = typ
@@ -830,16 +834,16 @@ class CallableModel(_CallableModel):
             else:
                 raise TypeError("Must either define a return type annotation on __call__ or implement 'result_type'")
         elif isinstance(self, CallableModelGenericType) and hasattr(self, "_result_generic_type"):
-            if get_origin(typ) is Union and get_origin(self._result_generic_type) is Union:
+            if get_origin(typ) in _UNION_ORIGINS and get_origin(self._result_generic_type) in _UNION_ORIGINS:
                 if set(get_args(typ)) != set(get_args(self._result_generic_type)):
                     raise TypeError(
                         f"Return type annotation {typ} on __call__ does not match result_type {self._result_generic_type} defined by CallableModelGenericType"
                     )
-            elif get_origin(typ) is Union:
+            elif get_origin(typ) in _UNION_ORIGINS:
                 raise NotImplementedError(
                     "Return type annotation on __call__ is a Union, but result_type defined by CallableModelGenericType is not a Union. This case is not yet supported."
                 )
-            elif get_origin(self._result_generic_type) is Union:
+            elif get_origin(self._result_generic_type) in _UNION_ORIGINS:
                 raise NotImplementedError(
                     "Return type annotation on __call__ is not a Union, but result_type defined by CallableModelGenericType is a Union. This case is not yet supported."
                 )
@@ -849,7 +853,7 @@ class CallableModel(_CallableModel):
                 )
 
         # If union type, extract inner type
-        if get_origin(typ) is Union:
+        if get_origin(typ) in _UNION_ORIGINS:
             raise TypeError(
                 "Model __call__ signature result type cannot be a Union type without a concrete property. Please define a property 'result_type' on the model."
             )
@@ -930,17 +934,7 @@ class CallableModelGeneric(CallableModel, Generic[ContextType, ResultType]):
                     # have either generic parameters or context/result
                     if new_context_type is None and hasattr(base, "_context_generic_type") and issubclass(base._context_generic_type, ContextBase):
                         new_context_type = base._context_generic_type
-                    if (
-                        new_result_type is None
-                        and hasattr(base, "_result_generic_type")
-                        and (
-                            issubclass(base._result_generic_type, ResultBase)
-                            or (
-                                get_origin(base._result_generic_type) is Union
-                                and all(isclass(t) and issubclass(t, ResultBase) for t in get_args(base._result_generic_type))
-                            )
-                        )
-                    ):
+                    if new_result_type is None and hasattr(base, "_result_generic_type") and _is_result_annotation(base._result_generic_type):
                         new_result_type = base._result_generic_type
                     if base.__pydantic_generic_metadata__["args"]:
                         if len(base.__pydantic_generic_metadata__["args"]) >= 2:
@@ -948,10 +942,7 @@ class CallableModelGeneric(CallableModel, Generic[ContextType, ResultType]):
                             arg0, arg1 = base.__pydantic_generic_metadata__["args"][:2]
                             if new_context_type is None and isinstance(arg0, type) and issubclass(arg0, ContextBase):
                                 new_context_type = arg0
-                            if new_result_type is None and (
-                                (isinstance(arg1, type) and issubclass(arg1, ResultBase))
-                                or (get_origin(arg1) is Union and all(isclass(t) and issubclass(t, ResultBase) for t in get_args(arg1)))
-                            ):
+                            if new_result_type is None and ((isinstance(arg1, type) and issubclass(arg1, ResultBase)) or _is_result_annotation(arg1)):
                                 # NOTE: ContextBase inherits from ResultBase, so order matters here!
                                 new_result_type = arg1
                         else:
@@ -959,8 +950,7 @@ class CallableModelGeneric(CallableModel, Generic[ContextType, ResultType]):
                                 if new_context_type is None and isinstance(arg, type) and issubclass(arg, ContextBase):
                                     new_context_type = arg
                                 elif new_result_type is None and (
-                                    (isinstance(arg, type) and issubclass(arg, ResultBase))
-                                    or (get_origin(arg) is Union and all(isclass(t) and issubclass(t, ResultBase) for t in get_args(arg)))
+                                    (isinstance(arg, type) and issubclass(arg, ResultBase)) or _is_result_annotation(arg)
                                 ):
                                     # NOTE: ContextBase inherits from ResultBase, so order matters here!
                                     new_result_type = arg
@@ -1030,48 +1020,20 @@ def _apply_auto_context(func: Callable[..., Any], *, parent: Optional[Type[Conte
         model = MyCallable()
         model(x=42, y="hello")  # Works with kwargs
     """
-    from .flow_model import _callable_qualname, _resolved_flow_signature
-
-    sig = _resolved_flow_signature(
+    resolved_hints = get_type_hints(func, include_extras=True)
+    spec = _analyze_auto_context_function(
         func,
-        skip_self=True,
-        require_return_annotation=True,
-        annotation_error_suffix=" when auto_context=True",
-        return_error_suffix=" when auto_context=True",
-        function_name=_callable_qualname(func),
+        parent=parent,
+        resolved_hints=resolved_hints,
+        is_model_dependency=lambda value: isinstance(value, CallableModel),
     )
-    base_class = parent or ContextBase
-
-    # Validate parent fields are in function signature
-    if parent is not None:
-        parent_fields = set(parent.model_fields.keys()) - set(ContextBase.model_fields.keys())
-        sig_params = set(sig.parameters)
-        missing = parent_fields - sig_params
-        if missing:
-            raise TypeError(f"Parent context fields {missing} must be included in function signature")
-
-        # Validate parent field type compatibility
-        from .flow_model import _context_type_annotations_compatible
-
-        for fname in parent_fields:
-            parent_annotation = parent.model_fields[fname].annotation
-            func_annotation = sig.parameters[fname].annotation
-            if func_annotation is inspect.Parameter.empty:
-                continue
-            if not _context_type_annotations_compatible(func_annotation, parent_annotation):
-                raise TypeError(
-                    f"auto_context field '{fname}' has annotation {func_annotation!r} which is incompatible "
-                    f"with parent field annotation {parent_annotation!r}"
-                )
-
-    fields = {name: (param.annotation, ... if param.default is inspect.Parameter.empty else param.default) for name, param in sig.parameters.items()}
 
     # Create auto context class
-    auto_context_class = create_ccflow_model(f"{_callable_qualname(func)}_AutoContext", __base__=base_class, **fields)
+    auto_context_class = create_ccflow_model(spec.class_name, __base__=spec.base_class, **spec.fields)
 
     @wraps(func)
     def wrapper(self, context):
-        fn_kwargs = {name: getattr(context, name) for name in fields}
+        fn_kwargs = {name: getattr(context, name) for name in spec.fields}
         return func(self, **fn_kwargs)
 
     # Must set __signature__ so CallableModel validation sees 'context' parameter
@@ -1081,8 +1043,8 @@ def _apply_auto_context(func: Callable[..., Any], *, parent: Optional[Type[Conte
             inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
             inspect.Parameter("context", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=auto_context_class),
         ],
-        return_annotation=sig.return_annotation,
+        return_annotation=spec.signature.return_annotation,
     )
     wrapper_any.__auto_context__ = auto_context_class
-    wrapper_any.__result_type__ = sig.return_annotation
+    wrapper_any.__result_type__ = spec.signature.return_annotation
     return wrapper
