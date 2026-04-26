@@ -328,6 +328,12 @@ Key rules:
   multiple fields must move together, put that logic inside one patch
   transform.
 
+Importable transform functions are stored by module path. Local, nested,
+`__main__`, and notebook-defined transform functions are stored with an
+embedded cloudpickle payload so bound models can still move through pickle and
+Ray workers. For long-lived YAML/JSON configuration, prefer importable module
+functions so the serialized config stays small and inspectable.
+
 ## `context_type=...`
 
 When you want the `FromContext[...]` fields to match an existing nominal

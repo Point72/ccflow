@@ -2,6 +2,7 @@
 
 import inspect
 import logging
+from base64 import b64decode, b64encode
 from collections import OrderedDict
 from functools import lru_cache, wraps
 from typing import (
@@ -98,8 +99,15 @@ _ModelContextContract = NamedTuple(
 
 class ContextTransform(PydanticModel):
     kind: Literal["context_transform"] = "context_transform"
-    path: PyObjectPath
+    path: Optional[PyObjectPath] = None
+    serialized_config: Optional[str] = None
     bound_args: Dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _validate_location(self):
+        if (self.path is None) == (self.serialized_config is None):
+            raise ValueError("ContextTransform must define exactly one of path or serialized_config.")
+        return self
 
 
 class StaticValueSpec(PydanticModel):
@@ -131,12 +139,18 @@ def _context_values(context: ContextBase) -> Dict[str, Any]:
 
 def _context_transform_repr(transform: Any) -> str:
     if isinstance(transform, ContextTransform):
-        name = str(transform.path).rsplit(".", 1)[-1]
+        name = _callable_name(_load_context_transform_config_from_binding(transform).func)
         if not transform.bound_args:
             return f"{name}()"
         args = ", ".join(f"{key}={value!r}" for key, value in sorted(transform.bound_args.items()))
         return f"{name}({args})"
     return repr(transform)
+
+
+def _context_transform_identifier(binding: ContextTransform) -> str:
+    if binding.path is not None:
+        return str(binding.path)
+    return _callable_name(_load_context_transform_config_from_binding(binding).func)
 
 
 def _is_model_dependency(value: Any) -> bool:
@@ -290,12 +304,11 @@ def _registry_candidate_allowed(expected_type: Any, candidate: Any) -> bool:
 
 def _ensure_top_level_named_function(fn: _AnyCallable, *, decorator_name: str) -> None:
     if not inspect.isfunction(fn):
-        raise TypeError(f"{decorator_name} only supports top-level named Python functions.")
+        raise TypeError(f"{decorator_name} only supports Python functions.")
 
     name = getattr(fn, "__name__", "")
-    qualname = getattr(fn, "__qualname__", "")
-    if name == "<lambda>" or qualname != name or "<locals>" in qualname:
-        raise TypeError(f"{decorator_name} only supports top-level named Python functions.")
+    if name == "<lambda>":
+        raise TypeError(f"{decorator_name} only supports named Python functions.")
 
 
 @lru_cache(maxsize=None)
@@ -312,6 +325,31 @@ def _load_context_transform_config(path: str) -> _FlowModelConfig:
     return config
 
 
+def _serialize_context_transform_config(config: _FlowModelConfig) -> str:
+    import cloudpickle
+
+    payload = cloudpickle.dumps(config, protocol=5)
+    return b64encode(payload).decode("ascii")
+
+
+@lru_cache(maxsize=None)
+def _load_serialized_context_transform_config(serialized_config: str) -> _FlowModelConfig:
+    import cloudpickle
+
+    config = cloudpickle.loads(b64decode(serialized_config.encode("ascii")))
+    if not isinstance(config, _FlowModelConfig):
+        raise TypeError("Stored context transform payload does not contain a Flow.context_transform binding.")
+    return config
+
+
+def _load_context_transform_config_from_binding(binding: ContextTransform) -> _FlowModelConfig:
+    if binding.path is not None:
+        return _load_context_transform_config(str(binding.path))
+    if binding.serialized_config is None:
+        raise TypeError("ContextTransform has neither path nor serialized_config.")
+    return _load_serialized_context_transform_config(binding.serialized_config)
+
+
 def clear_flow_model_caches() -> None:
     """Clear module-level caches used by Flow.model internals."""
 
@@ -319,6 +357,7 @@ def clear_flow_model_caches() -> None:
     _UNHASHABLE_TYPE_ADAPTER_CACHE.clear()
     _load_context_transform_factory.cache_clear()
     _load_context_transform_config.cache_clear()
+    _load_serialized_context_transform_config.cache_clear()
 
 
 def _is_mapping_annotation(annotation: Any) -> bool:
@@ -591,12 +630,12 @@ def _identity_context_values_and_missing_for_model(model: CallableModel, values:
 
 
 def _context_transform_missing_context_names(binding: ContextTransform, values: Dict[str, Any]) -> Tuple[str, ...]:
-    config = _load_context_transform_config(str(binding.path))
+    config = _load_context_transform_config_from_binding(binding)
     return tuple(param.name for param in config.contextual_params if param.name not in values and not param.has_function_default)
 
 
 def _evaluate_context_transform_from_values(binding: ContextTransform, values: Dict[str, Any]) -> Any:
-    config = _load_context_transform_config(str(binding.path))
+    config = _load_context_transform_config_from_binding(binding)
     kwargs = _bound_context_transform_regular_kwargs(config, binding)
 
     for param in config.contextual_params:
@@ -622,7 +661,7 @@ def _apply_context_spec_values_for_identity(
     for patch in context_spec.patches:
         missing = _context_transform_missing_context_names(patch.binding, _context_values(context))
         if missing:
-            missing_transforms.append((str(patch.binding.path), missing))
+            missing_transforms.append((_context_transform_identifier(patch.binding), missing))
             continue
         result = _evaluate_context_transform_from_values(patch.binding, _context_values(context))
         current_values.update(_validate_patch_result(model, result))
@@ -790,12 +829,12 @@ def _bound_context_transform_regular_kwargs(config: _FlowModelConfig, binding: C
         elif param.has_function_default:
             kwargs[param.name] = param.function_default
         else:
-            raise TypeError(f"Context transform '{config.path}' is missing required regular parameter '{param.name}'.")
+            raise TypeError(f"Context transform '{_callable_name(config.func)}' is missing required regular parameter '{param.name}'.")
     return kwargs
 
 
 def _evaluate_static_context_transform(binding: ContextTransform) -> Any:
-    config = _load_context_transform_config(str(binding.path))
+    config = _load_context_transform_config_from_binding(binding)
     kwargs = _bound_context_transform_regular_kwargs(config, binding)
 
     for param in config.contextual_params:
@@ -856,7 +895,7 @@ def _statically_resolved_context_field_names(model: CallableModel, context_spec:
 
 
 def _context_transform_input_types(binding: ContextTransform, *, required_only: bool) -> Dict[str, Any]:
-    config = _load_context_transform_config(str(binding.path))
+    config = _load_context_transform_config_from_binding(binding)
     names = config.context_required_names if required_only else config.contextual_param_names
     return {name: config.context_input_types[name] for name in names}
 
@@ -893,7 +932,7 @@ def _validate_with_context_field_names(model: CallableModel, names: List[str]) -
 
 
 def _binding_uses_patch_shape(binding: ContextTransform) -> bool:
-    return _is_mapping_annotation(_load_context_transform_config(str(binding.path)).return_annotation)
+    return _is_mapping_annotation(_load_context_transform_config_from_binding(binding).return_annotation)
 
 
 def _validate_context_transform_factory_kwargs(config: _FlowModelConfig, kwargs: Dict[str, Any]) -> Dict[str, Any]:
@@ -1434,12 +1473,15 @@ def flow_context_transform(func: Optional[_AnyCallable] = None) -> _AnyCallable:
             function_name=_callable_name(fn),
         )
         config = _analyze_flow_context_transform(fn, sig, is_model_dependency=_is_model_dependency)
-        if not _is_importable_function(fn):
-            raise TypeError("@Flow.context_transform only supports top-level named functions from importable modules.")
+        serialized_config = None if _is_importable_function(fn) else _serialize_context_transform_config(config)
 
         @wraps(fn)
         def factory(**kwargs) -> ContextTransform:
-            return ContextTransform(path=config.path, bound_args=_validate_context_transform_factory_kwargs(config, kwargs))
+            return ContextTransform(
+                path=config.path if serialized_config is None else None,
+                serialized_config=serialized_config,
+                bound_args=_validate_context_transform_factory_kwargs(config, kwargs),
+            )
 
         cast(Any, factory).__flow_context_transform_config__ = config
         return factory

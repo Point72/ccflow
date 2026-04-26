@@ -10,6 +10,7 @@ from datetime import date, timedelta
 from typing import Annotated, Any, Literal, Union
 
 import pytest
+import ray
 from pydantic import Field, ValidationError, model_validator
 from ray.cloudpickle import dumps as rcpdumps, loads as rcploads
 
@@ -833,6 +834,8 @@ def test_context_transform_serializes_import_path_and_bound_args():
     binding = increment_b(amount=3)
     assert isinstance(binding, flow_model_module.ContextTransform)
     assert binding.kind == "context_transform"
+    assert binding.path is not None
+    assert binding.serialized_config is None
     assert binding.bound_args == {"amount": 3}
     assert str(binding.path).endswith(".increment_b")
 
@@ -847,23 +850,62 @@ def test_context_transform_rejects_lazy_params():
         Flow.context_transform(lazy_context_transform_for_rejection)
 
 
-def test_context_transform_rejects_nested_functions():
-    with pytest.raises(TypeError, match="top-level named Python functions"):
+def test_context_transform_supports_nested_functions_with_serialized_payload():
+    @Flow.model
+    def add(a: int, b: FromContext[int]) -> int:
+        return a + b
 
-        @Flow.context_transform
-        def nested(value: FromContext[int]) -> int:
-            return value
+    @Flow.context_transform
+    def nested_transform(b: FromContext[int], amount: int) -> int:
+        return b + amount
+
+    binding = nested_transform(amount=3)
+    assert binding.path is None
+    assert binding.serialized_config is not None
+
+    bound = add(a=1).flow.with_context(b=binding)
+    restored = rcploads(rcpdumps(bound))
+    assert restored.flow.compute(b=4).value == 8
 
 
-def test_context_transform_rejects_non_importable_main_functions():
+def test_context_transform_supports_non_importable_main_functions_with_serialized_payload():
+    @Flow.model
+    def add(a: int, b: FromContext[int]) -> int:
+        return a + b
+
     def main_transform(value: FromContext[int]) -> int:
-        return value
+        return value + 1
 
     main_transform.__module__ = "__main__"
     main_transform.__qualname__ = main_transform.__name__
 
-    with pytest.raises(TypeError, match="importable modules"):
-        Flow.context_transform(main_transform)
+    transformed = Flow.context_transform(main_transform)
+    binding = transformed()
+    assert binding.path is None
+    assert binding.serialized_config is not None
+
+    bound = add(a=1).flow.with_context(b=binding)
+    restored = rcploads(rcpdumps(bound))
+    assert restored.flow.compute(value=4).value == 6
+
+
+def test_context_transform_nested_function_survives_ray_task():
+    @Flow.model
+    def add(a: int, b: FromContext[int]) -> int:
+        return a + b
+
+    @Flow.context_transform
+    def nested_transform(b: FromContext[int], amount: int) -> int:
+        return b + amount
+
+    bound = add(a=1).flow.with_context(b=nested_transform(amount=3))
+
+    @ray.remote
+    def run_model(model):
+        return model.flow.compute(b=4).value
+
+    with ray.init(num_cpus=1):
+        assert ray.get(run_model.remote(bound)) == 8
 
 
 def test_with_context_rejects_raw_callables():
