@@ -7,7 +7,11 @@ from typing import Dict, List
 from unittest import TestCase
 
 import pytest
-from hydra.errors import InstantiationException
+
+try:
+    from lerna.errors import InstantiationException
+except ImportError:
+    from hydra.errors import InstantiationException
 from omegaconf import OmegaConf
 from omegaconf.errors import InterpolationKeyError
 from pydantic import ConfigDict
