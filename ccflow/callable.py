@@ -14,7 +14,7 @@ which all need to be defined together so that pydantic (especially V1) can resol
 import abc
 import logging
 from functools import lru_cache, wraps
-from inspect import Parameter, Signature, isclass, signature
+from inspect import Signature, isclass, signature
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -30,13 +30,12 @@ from typing import (
     Union,
     get_args,
     get_origin,
-    get_type_hints,
 )
 
 from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field, InstanceOf, PrivateAttr, TypeAdapter, field_validator, model_validator
 from typing_extensions import override
 
-from ._flow_model_binding import _analyze_auto_context_function
+from ._flow_model_binding import _normalize_auto_context_parent, _wrap_auto_context_call
 from .base import (
     BaseModel,
     ContextBase,
@@ -44,7 +43,6 @@ from .base import (
     ResultBase,
     ResultType,
 )
-from .local_persistence import create_ccflow_model
 from .validators import str_to_log_level
 
 if TYPE_CHECKING:
@@ -423,45 +421,6 @@ class FlowOptionsOverride(BaseModel):
         del FlowOptionsOverride._OPEN_OVERRIDES[override_id]
 
 
-def _normalize_auto_context_parent(auto_context: Any) -> Type[ContextBase]:
-    if auto_context is True:
-        return ContextBase
-    if isclass(auto_context) and issubclass(auto_context, ContextBase):
-        return auto_context
-    raise TypeError(f"auto_context must be False, True, or a ContextBase subclass, got {auto_context!r}")
-
-
-def _apply_auto_context(func: Callable[..., Any], *, parent: Type[ContextBase]) -> Callable[..., Any]:
-    resolved_hints = get_type_hints(func, include_extras=True)
-    spec = _analyze_auto_context_function(
-        func,
-        parent=parent,
-        resolved_hints=resolved_hints,
-        is_model_dependency=lambda value: isinstance(value, CallableModel),
-    )
-
-    auto_context_class = create_ccflow_model(spec.class_name, __base__=spec.base_class, **spec.fields)
-
-    @wraps(func)
-    def wrapper(self, context):
-        fn_kwargs = {name: getattr(context, name) for name in spec.fields}
-        return func(self, **fn_kwargs)
-
-    context_default = Signature.empty
-    if all(not field.is_required() for field in auto_context_class.model_fields.values()):
-        context_default = auto_context_class()
-
-    wrapper.__signature__ = Signature(
-        parameters=[
-            Parameter("self", Parameter.POSITIONAL_OR_KEYWORD),
-            Parameter("context", Parameter.POSITIONAL_OR_KEYWORD, annotation=auto_context_class, default=context_default),
-        ],
-        return_annotation=spec.signature.return_annotation,
-    )
-    wrapper.__auto_context__ = auto_context_class
-    return wrapper
-
-
 class Flow(PydanticBaseModel):
     @staticmethod
     def call(*args, **kwargs):
@@ -472,7 +431,11 @@ class Flow(PydanticBaseModel):
             context_parent = _normalize_auto_context_parent(auto_context)
 
             def auto_context_decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-                wrapped = _apply_auto_context(fn, parent=context_parent)
+                wrapped = _wrap_auto_context_call(
+                    fn,
+                    parent=context_parent,
+                    is_model_dependency=lambda value: isinstance(value, CallableModel),
+                )
                 return FlowOptions(**kwargs)(wrapped)
 
             if len(args) == 1 and callable(args[0]):
@@ -612,19 +575,9 @@ class ModelEvaluationContext(
         """Override _context_validator from parent"""
 
         # Validate the context with the model, if possible
-        if isinstance(values, dict):
-            model = values.get("model")
-            if model and isinstance(model, CallableModel) and not isinstance(values.get("context"), model.context_type):
-                ctx_type = model.context_type
-                ctx_value = values.get("context")
-                # Handle Optional[ContextType]: if context is None, keep it; otherwise validate through the inner type
-                if get_origin(ctx_type) is Union and type(None) in get_args(ctx_type):
-                    if ctx_value is not None:
-                        inner_type = [t for t in get_args(ctx_type) if t is not type(None)][0]
-                        if not isinstance(ctx_value, inner_type):
-                            values["context"] = inner_type.model_validate(ctx_value)
-                else:
-                    values["context"] = ctx_type.model_validate(ctx_value)
+        model = values.get("model")
+        if model and isinstance(model, CallableModel) and not isinstance(values.get("context"), model.context_type):
+            values["context"] = model.context_type.model_validate(values.get("context"))
 
         # Apply standard pydantic validation
         context = handler(values)

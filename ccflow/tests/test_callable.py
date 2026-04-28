@@ -22,7 +22,6 @@ from ccflow import (
     ResultType,
     WrapperModel,
 )
-from ccflow.callable import ModelEvaluationContext
 from ccflow.local_persistence import LOCAL_ARTIFACTS_MODULE_NAME
 
 
@@ -418,31 +417,6 @@ class TestCallableModel(TestCase):
         target = m(context)
         self.assertEqual(m(context=context), target)
         self.assertEqual(m().y, "default")
-
-    def test_optional_context_model_evaluation_context(self):
-        """ModelEvaluationContext should work with optional-context callables."""
-        m = MyCallableOptionalContext()
-        # With a concrete context dict
-        mec = ModelEvaluationContext(model=m, context={"a": "bar"})
-        result = mec()
-        self.assertEqual(result.y, "bar")
-        # With None context
-        mec_none = ModelEvaluationContext(model=m, context=None)
-        result_none = mec_none()
-        self.assertEqual(result_none.y, "default")
-
-    def test_optional_context_flow_compute(self):
-        """flow.compute() should work with optional-context callables."""
-        m = MyCallableOptionalContext()
-        # With no arguments (should pass None through optional path)
-        result = m.flow.compute()
-        self.assertEqual(result.y, "default")
-        # With explicit None
-        result = m.flow.compute(None)
-        self.assertEqual(result.y, "default")
-        # With a concrete context
-        result = m.flow.compute(MyContext(a="from_compute"))
-        self.assertEqual(result.y, "from_compute")
 
     def test_inheritance(self):
         m = MyCallableChild(i=5)

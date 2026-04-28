@@ -2,12 +2,14 @@
 
 import inspect
 from dataclasses import dataclass, field
+from functools import wraps
 from types import UnionType
-from typing import Annotated, Any, Callable, Dict, Literal, Optional, Tuple, Type, Union, get_args, get_origin
+from typing import Annotated, Any, Callable, Dict, Literal, Optional, Tuple, Type, Union, get_args, get_origin, get_type_hints
 
 from .base import ContextBase, ResultBase
 from .context import FlowContext
 from .exttypes import PyObjectPath
+from .local_persistence import create_ccflow_model
 from .result import GenericResult
 
 _AnyCallable = Callable[..., Any]
@@ -501,3 +503,47 @@ def _analyze_auto_context_function(
         class_name=f"{_callable_qualname(func)}_AutoContext",
         fields=fields,
     )
+
+
+def _normalize_auto_context_parent(auto_context: Any) -> Type[ContextBase]:
+    if auto_context is True:
+        return ContextBase
+    if inspect.isclass(auto_context) and issubclass(auto_context, ContextBase):
+        return auto_context
+    raise TypeError(f"auto_context must be False, True, or a ContextBase subclass, got {auto_context!r}")
+
+
+def _wrap_auto_context_call(
+    func: _AnyCallable,
+    *,
+    parent: Type[ContextBase],
+    is_model_dependency: Callable[[Any], bool],
+) -> _AnyCallable:
+    resolved_hints = get_type_hints(func, include_extras=True)
+    spec = _analyze_auto_context_function(
+        func,
+        parent=parent,
+        resolved_hints=resolved_hints,
+        is_model_dependency=is_model_dependency,
+    )
+
+    auto_context_class = create_ccflow_model(spec.class_name, __base__=spec.base_class, **spec.fields)
+
+    @wraps(func)
+    def wrapper(self, context):
+        fn_kwargs = {name: getattr(context, name) for name in spec.fields}
+        return func(self, **fn_kwargs)
+
+    context_default = inspect.Signature.empty
+    if all(not field.is_required() for field in auto_context_class.model_fields.values()):
+        context_default = auto_context_class()
+
+    wrapper.__signature__ = inspect.Signature(
+        parameters=[
+            inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+            inspect.Parameter("context", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=auto_context_class, default=context_default),
+        ],
+        return_annotation=spec.signature.return_annotation,
+    )
+    wrapper.__auto_context__ = auto_context_class
+    return wrapper
