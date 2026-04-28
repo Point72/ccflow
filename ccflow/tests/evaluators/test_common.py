@@ -386,6 +386,15 @@ class TestMemoryCacheEvaluator(TestCase):
         self.assertNotIn(key, evaluator.cache)
         self.assertNotIn(key, evaluator.ids)
 
+    def test_plain_callable_key_matches_public_cache_key(self):
+        """Existing CallableModels stay on the structural cache-key path."""
+        m1 = MyDateCallable(offset=1)
+        evaluator = MemoryCacheEvaluator()
+        context = DateContext(date=date(2022, 1, 1))
+        model_evaluation_context = ModelEvaluationContext(model=m1, context=context, options=dict(cacheable=True))
+
+        self.assertEqual(evaluator.key(model_evaluation_context), cache_key(model_evaluation_context))
+
     def test_caching(self):
         # Create some hard-to hash structure with all kinds of custom types
         # We will put this on the callable to make sure caching still works

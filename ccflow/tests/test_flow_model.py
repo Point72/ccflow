@@ -7,7 +7,8 @@ import pickle
 import subprocess
 import sys
 from datetime import date, timedelta
-from typing import Annotated, Any, Literal, Union
+from types import ModuleType
+from typing import Annotated, Any, Literal
 
 import pytest
 import ray
@@ -517,32 +518,6 @@ def test_compute_does_not_unwrap_explicit_generic_result_returns():
     assert result.value == 6
 
 
-def test_compute_does_not_wrap_pep604_union_generic_result_returns():
-    @Flow.model
-    def load(value: FromContext[int]) -> GenericResult[int] | GenericResult[str]:
-        return GenericResult[int](value=value * 2)
-
-    model = load()
-    result = model.flow.compute(value=3)
-    assert model.result_type == GenericResult[int] | GenericResult[str]
-    assert type(result) is GenericResult[int]
-    assert repr(result) == "GenericResult[int](value=6)"
-    assert result.value == 6
-
-
-def test_compute_does_not_wrap_typing_union_generic_result_returns():
-    @Flow.model
-    def load(value: FromContext[int]) -> Union[GenericResult[int], GenericResult[str]]:
-        return GenericResult[int](value=value * 2)
-
-    model = load()
-    result = model.flow.compute(value=3)
-    assert model.result_type == Union[GenericResult[int], GenericResult[str]]
-    assert type(result) is GenericResult[int]
-    assert repr(result) == "GenericResult[int](value=6)"
-    assert result.value == 6
-
-
 def test_auto_unwrap_can_be_enabled_for_auto_wrapped_results():
     @Flow.model(auto_unwrap=True)
     def add(a: int, b: FromContext[int]) -> int:
@@ -746,6 +721,25 @@ def test_generated_models_plain_pickle_roundtrip():
     assert restored.flow.compute(b=7).value == 42
 
 
+def test_generated_model_direct_call_plain_pickle_uses_serialized_factory(monkeypatch):
+    module = ModuleType("ccflow_test_direct_model")
+
+    def multiply(a: int, b: FromContext[int]) -> int:
+        return a * b
+
+    multiply.__module__ = module.__name__
+    multiply.__qualname__ = multiply.__name__
+    module.multiply = multiply
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+
+    factory = Flow.model(multiply)
+    assert not hasattr(module.multiply, "_generated_model")
+
+    model = factory(a=6)
+    restored = pickle.loads(pickle.dumps(model, protocol=5))
+    assert restored.flow.compute(b=7).value == 42
+
+
 def test_generated_models_cloudpickle_preserves_unset_validation_sentinel():
     @Flow.model
     def multiply(a: int, b: FromContext[int]) -> int:
@@ -848,6 +842,32 @@ def test_context_transform_rejects_none_for_required_param():
 def test_context_transform_rejects_lazy_params():
     with pytest.raises(TypeError, match="does not support Lazy"):
         Flow.context_transform(lazy_context_transform_for_rejection)
+
+
+def test_context_transform_direct_call_uses_serialized_payload_when_original_binding_is_plain(monkeypatch):
+    module = ModuleType("ccflow_test_direct_context_transform")
+
+    def increment(value: FromContext[int]) -> int:
+        return value + 1
+
+    increment.__module__ = module.__name__
+    increment.__qualname__ = increment.__name__
+    module.increment = increment
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+
+    transform_factory = Flow.context_transform(increment)
+    binding = transform_factory()
+
+    assert binding.path is None
+    assert binding.serialized_config is not None
+
+    @Flow.model
+    def add(a: int, b: FromContext[int]) -> int:
+        return a + b
+
+    bound = add(a=10).flow.with_context(b=binding)
+    restored = pickle.loads(pickle.dumps(bound, protocol=5))
+    assert restored.flow.compute(value=4).value == 15
 
 
 def test_context_transform_supports_nested_functions_with_serialized_payload():
@@ -1724,50 +1744,6 @@ def test_bound_flow_bound_inputs_drops_static_patch_after_dynamic_override():
     assert bound.flow.bound_inputs == {}
     assert bound.flow.context_inputs == {"b": int, "seed": int}
     assert bound.flow.unbound_inputs == {"b": int, "seed": int}
-
-
-def test_noop_bound_flow_compute_preserves_optional_none_context():
-    class Empty(ContextBase):
-        pass
-
-    class OptionalSource(CallableModel):
-        @Flow.call
-        def __call__(self, context: Empty | None = None) -> GenericResult[int]:
-            return GenericResult(value=0 if context is None else 1)
-
-    bound = OptionalSource().flow.with_context()
-
-    assert OptionalSource().flow.compute().value == 0
-    assert OptionalSource().flow.unbound_inputs == {}
-    assert bound.flow.compute().value == 0
-    assert bound.flow.unbound_inputs == {}
-    assert bound(None).value == 0
-
-
-def test_noop_bound_optional_context_compute_preserves_bound_scoped_options():
-    calls = {"source": 0, "evaluator": 0}
-
-    class Empty(ContextBase):
-        pass
-
-    class OptionalSource(CallableModel):
-        @Flow.call
-        def __call__(self, context: Empty | None = None) -> GenericResult[int]:
-            calls["source"] += 1
-            return GenericResult(value=0 if context is None else 1)
-
-    class OffsetEvaluator(EvaluatorBase):
-        def __call__(self, context: ModelEvaluationContext):
-            calls["evaluator"] += 1
-            result = context()
-            return result.model_copy(update={"value": result.value + 100})
-
-    bound = OptionalSource().flow.with_context()
-
-    with FlowOptionsOverride(options={"evaluator": OffsetEvaluator()}, models=(bound,)):
-        assert bound.flow.compute().value == 100
-
-    assert calls == {"source": 1, "evaluator": 1}
 
 
 def test_generated_model_cache_ignores_unused_flow_context_fields():

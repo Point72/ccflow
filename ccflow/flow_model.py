@@ -417,6 +417,36 @@ def _is_importable_function(func: _AnyCallable) -> bool:
     return bool(module and module != "__main__" and name and qualname and qualname == name and "<locals>" not in qualname)
 
 
+def _importable_function_path(func: _AnyCallable) -> Optional[str]:
+    if not _is_importable_function(func):
+        return None
+    return f"{func.__module__}.{func.__name__}"
+
+
+def _generated_model_factory_path_for_pickle(config: _FlowModelConfig, generated_cls: type) -> Optional[str]:
+    path = _importable_function_path(config.func)
+    if path is None:
+        return None
+    try:
+        factory = PyObjectPath(path).object
+    except ImportError:
+        return None
+    if getattr(factory, "_generated_model", None) is generated_cls:
+        return path
+    return None
+
+
+def _context_transform_should_use_import_path(config: _FlowModelConfig) -> bool:
+    path = config.path
+    if path is None or not _is_importable_function(config.func):
+        return False
+    try:
+        resolved = PyObjectPath(str(path)).object
+    except ImportError:
+        return True
+    return isinstance(getattr(resolved, "__flow_context_transform_config__", None), _FlowModelConfig)
+
+
 def _runtime_context_for_model(model: CallableModel, values: Dict[str, Any]) -> ContextBase:
     contract = _model_context_contract(model)
     if contract.runtime_context_type is FlowContext:
@@ -1313,8 +1343,8 @@ class _GeneratedFlowModelBase(CallableModel):
 
     def __reduce__(self):
         config = type(self).__flow_model_config__
-        if _is_importable_function(config.func):
-            factory_path = f"{config.func.__module__}.{config.func.__name__}"
+        factory_path = _generated_model_factory_path_for_pickle(config, type(self))
+        if factory_path is not None:
             return (_restore_generated_flow_model, (factory_path, self.__getstate__()))
         import cloudpickle
 
@@ -1473,7 +1503,7 @@ def flow_context_transform(func: Optional[_AnyCallable] = None) -> _AnyCallable:
             function_name=_callable_name(fn),
         )
         config = _analyze_flow_context_transform(fn, sig, is_model_dependency=_is_model_dependency)
-        serialized_config = None if _is_importable_function(fn) else _serialize_context_transform_config(config)
+        serialized_config = None if _context_transform_should_use_import_path(config) else _serialize_context_transform_config(config)
 
         @wraps(fn)
         def factory(**kwargs) -> ContextTransform:
