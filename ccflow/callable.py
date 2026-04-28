@@ -13,6 +13,7 @@ which all need to be defined together so that pydantic (especially V1) can resol
 
 import abc
 import logging
+from dataclasses import dataclass
 from functools import lru_cache, wraps
 from inspect import Signature, isclass, signature
 from typing import (
@@ -67,6 +68,14 @@ __all__ = (
 )
 
 log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class EvaluationDependency:
+    """Internal marker for a dependency invocation in an effective identity payload."""
+
+    model: Any
+    context: Any
 
 
 # *****************************************************************************
@@ -197,7 +206,6 @@ class _CallableModel(BaseModel, abc.ABC):
     def _evaluation_identity_payload(
         self,
         context: Any,
-        child_evaluation_key: Callable[[Any, Any], bytes],
     ) -> Optional[Any]:
         """Return an effective evaluation identity payload when available.
 

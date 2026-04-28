@@ -340,6 +340,8 @@ When you want the `FromContext[...]` fields to match an existing nominal
 context shape, use `context_type=...`:
 
 ```python
+from datetime import date
+
 from ccflow import DateRangeContext, Flow, FromContext
 
 

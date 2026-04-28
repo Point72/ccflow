@@ -8,7 +8,7 @@ import subprocess
 import sys
 from datetime import date, timedelta
 from types import ModuleType
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Optional
 
 import pytest
 import ray
@@ -1507,6 +1507,28 @@ def test_bound_plain_callable_compute_applies_context_before_validation():
     assert calls["count"] == 1
 
 
+def test_bound_plain_callable_empty_with_context_preserves_optional_none_context():
+    calls = {"count": 0}
+
+    class OptionalContext(ContextBase):
+        value: int = 1
+
+    class PlainSource(CallableModel):
+        @Flow.call
+        def __call__(self, context: Optional[OptionalContext] = None) -> GenericResult[int]:
+            calls["count"] += 1
+            return GenericResult(value=0 if context is None else context.value)
+
+    bound = PlainSource().flow.with_context()
+
+    assert bound.flow.compute().value == 0
+    assert bound(None).value == 0
+    assert bound({"value": 5}).value == 5
+    assert bound.flow.compute(value=5).value == 5
+    assert bound.flow.compute(_options=FlowOptions(evaluator=GraphEvaluator())).value == 0
+    assert calls["count"] == 5
+
+
 def test_bound_plain_callable_dynamic_context_transform_runs_before_validation():
     calls = {"count": 0}
 
@@ -1853,6 +1875,29 @@ def test_generated_model_cache_uses_effective_key_when_result_validation_disable
     assert len(cache.cache) == 1
 
 
+def test_generated_model_cache_key_preserves_result_validation_option():
+    calls = {"count": 0}
+
+    @Flow.model
+    def raw_result(value: FromContext[int]) -> GenericResult[int]:
+        calls["count"] += 1
+        return {"value": str(value)}
+
+    cache = MemoryCacheEvaluator()
+    model = raw_result()
+
+    with FlowOptionsOverride(options=FlowOptions(evaluator=cache, cacheable=True, validate_result=False)):
+        first = model.flow.compute(value=3, unused="one")
+
+    with FlowOptionsOverride(options=FlowOptions(evaluator=cache, cacheable=True, validate_result=True)):
+        second = model.flow.compute(value=3, unused="two")
+
+    assert first == {"value": "3"}
+    assert second == GenericResult[int](value=3)
+    assert calls["count"] == 2
+    assert len(cache.cache) == 2
+
+
 def test_generated_model_cache_ignores_unresolved_unused_lazy_dependency_context():
     calls = {"choose": 0}
 
@@ -2019,6 +2064,29 @@ def test_unused_lazy_bound_dependency_uses_partial_context_identity():
 
     assert calls == {"source": 0, "choose": 2}
     assert len(cache.cache) == 1
+
+
+def test_unused_lazy_resolved_dependency_identity_is_conservative():
+    calls = {"source": 0, "choose": 0}
+
+    @Flow.model
+    def source(a: FromContext[int]) -> int:
+        calls["source"] += 1
+        return a
+
+    @Flow.model
+    def choose(x: int, lazy_value: Lazy[int], use_lazy: FromContext[bool]) -> int:
+        calls["choose"] += 1
+        return lazy_value() if use_lazy else x
+
+    cache = MemoryCacheEvaluator()
+
+    with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
+        assert choose(x=7, lazy_value=source().flow.with_context(a=1)).flow.compute(use_lazy=False).value == 7
+        assert choose(x=7, lazy_value=source().flow.with_context(a=2)).flow.compute(use_lazy=False).value == 7
+
+    assert calls == {"source": 0, "choose": 2}
+    assert len(cache.cache) == 2
 
 
 def test_used_lazy_bound_dependency_identity_applies_dynamic_context_transform():

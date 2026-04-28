@@ -15,6 +15,7 @@ from ..base import BaseModel, make_lazy_result
 from ..callable import (
     CallableModel,
     ContextBase,
+    EvaluationDependency,
     EvaluatorBase,
     ModelEvaluationContext,
     ResultType,
@@ -38,11 +39,12 @@ __all__ = [
 log = logging.getLogger(__name__)
 
 
-class _EvaluationIdentityFallback(Exception):
-    """Internal signal to stay on the structural evaluation-key path."""
+class _EffectiveEvaluationKeyUnavailable(Exception):
+    """Internal signal to use the existing structural evaluation key."""
 
 
-_EXPECTED_IDENTITY_FAILURES = (TypeError, ValueError, ValidationError)
+_EFFECTIVE_IDENTITY_DECLINED_ERRORS = (TypeError, ValueError, ValidationError)
+_EFFECTIVE_EVALUATION_KEY_VERSION = "ccflow_effective_evaluation_key_v1"
 
 
 def combine_evaluators(first: Optional[EvaluatorBase], second: Optional[EvaluatorBase]) -> EvaluatorBase:
@@ -224,108 +226,143 @@ class LoggingEvaluator(EvaluatorBase):
             return f"{msg_str}{pformat(result_dict, **self.format_config.pformat_config)}"
 
 
-def _unwrap_evaluation_context(flow_obj: ModelEvaluationContext) -> tuple[ModelEvaluationContext, str, List[CallableModel]]:
-    fn = flow_obj.fn
+def _unwrap_evaluation_context(evaluation_context: ModelEvaluationContext) -> tuple[ModelEvaluationContext, str, List[CallableModel]]:
+    """Strip transparent evaluator wrappers and keep opaque wrappers in order.
+
+    This preserves the existing structural cache-key behavior: transparent
+    evaluators are ignored, while non-transparent evaluators remain part of the
+    identity. The returned function name is the innermost non-``__call__`` name,
+    so ``__deps__`` does not collapse into ``__call__`` when wrapped.
+    """
+    fn = evaluation_context.fn
     outer_to_inner_evaluators = []
-    while isinstance(flow_obj.context, ModelEvaluationContext):
-        fn = flow_obj.fn if flow_obj.fn != "__call__" else fn
-        if not isinstance(flow_obj, TransparentModelEvaluationContext):
-            outer_to_inner_evaluators.append(flow_obj.model)
-        flow_obj = flow_obj.context
-    return flow_obj, fn if fn != "__call__" else flow_obj.fn, outer_to_inner_evaluators
+    while isinstance(evaluation_context.context, ModelEvaluationContext):
+        fn = evaluation_context.fn if evaluation_context.fn != "__call__" else fn
+        if not isinstance(evaluation_context, TransparentModelEvaluationContext):
+            outer_to_inner_evaluators.append(evaluation_context.model)
+        evaluation_context = evaluation_context.context
+    return evaluation_context, fn if fn != "__call__" else evaluation_context.fn, outer_to_inner_evaluators
 
 
 def _evaluator_identity_payload(outer_to_inner_evaluators: List[CallableModel]) -> List[Dict[str, Any]]:
     return [evaluator.model_dump(mode="python") for evaluator in outer_to_inner_evaluators]
 
 
-def _structural_evaluation_key(flow_obj: ModelEvaluationContext) -> bytes:
-    flow_obj, fn, outer_to_inner_evaluators = _unwrap_evaluation_context(flow_obj)
-    d = flow_obj.model_dump(mode="python")
-    d["fn"] = fn
-    if outer_to_inner_evaluators:
-        d["_evaluators"] = _evaluator_identity_payload(outer_to_inner_evaluators)
-    return dask.base.tokenize(d).encode("utf-8")
+def _memo_token(model: CallableModel, context: Any) -> tuple[int, str]:
+    if hasattr(context, "model_dump"):
+        context_value = context.model_dump(mode="python")
+    else:
+        context_value = context
+    return (id(model), dask.base.tokenize((type(context), context_value)))
 
 
-class _EvaluationKeyBuilder:
-    """Build effective evaluation identities for cache and dependency graph keys.
+def _effective_model_key(
+    model: CallableModel,
+    context: Any,
+    memo: Dict[tuple[int, str], bytes],
+    active: Set[tuple[int, str]],
+) -> Optional[bytes]:
+    """Return a model's opt-in effective key, or ``None`` for normal opt-out.
 
-    Transparent evaluator layers are ignored. Non-transparent evaluator layers
-    are included as wrappers around the model's effective key, so they can
-    distinguish behavior without forcing generated models back to full ambient
-    context identity. Anything that cannot be represented clearly falls back to
-    the structural key.
+    Plain ``CallableModel`` instances opt out by returning ``None`` from
+    ``_evaluation_identity_payload()``. Dependency invocations inside the
+    payload are resolved by ``_resolve_effective_identity_payload()`` so models
+    declare what matters without constructing recursive keys themselves.
     """
+    token = _memo_token(model, context)
+    if token in memo:
+        return memo[token]
+    if token in active:
+        raise _EffectiveEvaluationKeyUnavailable("recursive effective identity")
 
-    def __init__(self) -> None:
-        self._memo: Dict[tuple[int, str], bytes] = {}
-        self._active: set[tuple[int, str]] = set()
-
-    def build(self, context: ModelEvaluationContext) -> bytes:
+    active.add(token)
+    try:
         try:
-            return self._build(context)
-        except _EvaluationIdentityFallback:
-            return _structural_evaluation_key(context)
-
-    def _build(self, context: ModelEvaluationContext) -> bytes:
-        inner, fn, outer_to_inner_evaluators = _unwrap_evaluation_context(context)
-        if fn != "__call__":
-            raise _EvaluationIdentityFallback("Only __call__ evaluations support effective evaluation identity.")
-        key = self._key_for_model(inner.model, inner.context)
-        if outer_to_inner_evaluators:
-            return dask.base.tokenize(
-                (
-                    "ccflow_evaluation_identity_v1",
-                    "non_transparent_evaluators",
-                    _evaluator_identity_payload(outer_to_inner_evaluators),
-                    key,
-                )
-            ).encode("utf-8")
+            payload = model._evaluation_identity_payload(context)
+        except _EFFECTIVE_IDENTITY_DECLINED_ERRORS as exc:
+            # Identity derivation runs before the actual call and may encounter
+            # the same validation failures as evaluation context construction.
+            # Falling back preserves existing behavior instead of turning key
+            # computation into a new failure mode for ordinary models.
+            raise _EffectiveEvaluationKeyUnavailable(str(exc)) from exc
+        # For normal CallableModels, `_evaluation_identity_payload` defaults to
+        # None, so we should hit this path
+        if payload is None:
+            return None
+        payload = _resolve_effective_identity_payload(payload, memo, active)
+        key = dask.base.tokenize((_EFFECTIVE_EVALUATION_KEY_VERSION, payload)).encode("utf-8")
+        memo[token] = key
         return key
+    finally:
+        active.discard(token)
 
-    def _key_for_model(self, model: CallableModel, context: Any) -> bytes:
-        memo_token = self._memo_token(model, context)
-        cached = self._memo.get(memo_token)
-        if cached is not None:
-            return cached
-        if memo_token in self._active:
-            raise _EvaluationIdentityFallback("Recursive cycle detected while deriving evaluation identity.")
 
-        self._active.add(memo_token)
+def _resolve_effective_identity_payload(
+    value: Any,
+    memo: Dict[tuple[int, str], bytes],
+    active: Set[tuple[int, str]],
+) -> Any:
+    """Replace dependency invocation markers with recursive effective keys."""
+    if isinstance(value, EvaluationDependency):
         try:
-            payload = self._identity_payload(model, context)
-            if payload is None:
-                raise _EvaluationIdentityFallback("Model did not provide an effective evaluation identity payload.")
-            key = dask.base.tokenize(("ccflow_evaluation_identity_v1", payload)).encode("utf-8")
-            self._memo[memo_token] = key
-            return key
-        finally:
-            self._active.discard(memo_token)
-
-    def _identity_payload(self, model: CallableModel, context: Any) -> Optional[Any]:
-        try:
-            return model._evaluation_identity_payload(context, self._child_evaluation_key)
-        except _EXPECTED_IDENTITY_FAILURES as exc:
-            raise _EvaluationIdentityFallback(str(exc)) from exc
-
-    def _child_evaluation_key(self, model: CallableModel, context: Any) -> bytes:
-        try:
-            evaluation = model.__call__.get_evaluation_context(model, context)
-        except _EXPECTED_IDENTITY_FAILURES as exc:
-            raise _EvaluationIdentityFallback(str(exc)) from exc
-        return self.build(evaluation)
-
-    def _memo_token(self, model: CallableModel, context: Any) -> tuple[int, str]:
-        if hasattr(context, "model_dump"):
-            context_value = context.model_dump(mode="python")
-        else:
-            context_value = context
-        return (id(model), dask.base.tokenize((type(context), context_value)))
+            evaluation = value.model.__call__.get_evaluation_context(value.model, value.context)
+        except _EFFECTIVE_IDENTITY_DECLINED_ERRORS as exc:
+            raise _EffectiveEvaluationKeyUnavailable(f"dependency {type(value.model).__name__} could not build evaluation context: {exc}") from exc
+        return _effective_evaluation_key(evaluation, memo=memo, active=active)
+    if isinstance(value, dict):
+        return {key: _resolve_effective_identity_payload(item, memo, active) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_resolve_effective_identity_payload(item, memo, active) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_resolve_effective_identity_payload(item, memo, active) for item in value)
+    return value
 
 
-def _evaluation_key(flow_obj: ModelEvaluationContext) -> bytes:
-    return _EvaluationKeyBuilder().build(flow_obj)
+def _effective_evaluation_key(
+    evaluation_context: ModelEvaluationContext,
+    memo: Optional[Dict[tuple[int, str], bytes]] = None,
+    active: Optional[Set[tuple[int, str]]] = None,
+) -> bytes:
+    """Use opt-in effective identity for ``__call__``; otherwise preserve ``cache_key()``."""
+    memo = {} if memo is None else memo
+    active = set() if active is None else active
+    inner, fn, outer_to_inner_evaluators = _unwrap_evaluation_context(evaluation_context)
+    if fn != "__call__":
+        # Keep non-call evaluations, especially ``__deps__``, on the exact
+        # public structural key path. Effective identity is only meant to
+        # narrow normal model execution where generated ``@Flow.model`` code
+        # knows which ambient ``FlowContext`` fields affect the result.
+        return cache_key(evaluation_context)
+
+    try:
+        key = _effective_model_key(inner.model, inner.context, memo, active)
+    except _EffectiveEvaluationKeyUnavailable as exc:
+        # Effective identity is an optimization/semantic narrowing for opt-in
+        # generated models. If deriving it is unclear, do not make cache/graph
+        # key construction a new failure mode; use the old structural key.
+        log.debug("Falling back to structural evaluation key for %s.__call__: %s", type(inner.model).__name__, exc)
+        return cache_key(evaluation_context)
+    if key is None:
+        # This is the ordinary path for existing CallableModel classes. The
+        # base implementation returns None, so their cache and graph identities
+        # remain byte-for-byte equivalent to ``cache_key(evaluation_context)``.
+        return cache_key(evaluation_context)
+
+    # Preserve the existing evaluation-context semantics around the narrowed
+    # model key: options still distinguish evaluations, transparent evaluators
+    # are ignored, and opaque evaluators remain part of identity.
+    return dask.base.tokenize(
+        (
+            _EFFECTIVE_EVALUATION_KEY_VERSION,
+            "evaluation_context",
+            {
+                "fn": fn,
+                "options": inner.options,
+                "_evaluators": _evaluator_identity_payload(outer_to_inner_evaluators),
+            },
+            key,
+        )
+    ).encode("utf-8")
 
 
 def cache_key(flow_obj: Union[ModelEvaluationContext, ContextBase, CallableModel]) -> bytes:
@@ -340,7 +377,18 @@ def cache_key(flow_obj: Union[ModelEvaluationContext, ContextBase, CallableModel
         flow_obj: The object to be tokenized to form the cache key.
     """
     if isinstance(flow_obj, ModelEvaluationContext):
-        return _structural_evaluation_key(flow_obj)
+        fn = flow_obj.fn
+        non_transparent = []
+        while isinstance(flow_obj.context, ModelEvaluationContext):
+            fn = flow_obj.fn if flow_obj.fn != "__call__" else fn
+            if not isinstance(flow_obj, TransparentModelEvaluationContext):
+                non_transparent.append(flow_obj.model)
+            flow_obj = flow_obj.context
+        d = flow_obj.model_dump(mode="python")
+        d["fn"] = fn if fn != "__call__" else flow_obj.fn
+        if non_transparent:
+            d["_evaluators"] = [e.model_dump(mode="python") for e in non_transparent]
+        return dask.base.tokenize(d).encode("utf-8")
     elif isinstance(flow_obj, (ContextBase, CallableModel)):
         return dask.base.tokenize(flow_obj.model_dump(mode="python")).encode("utf-8")
     else:
@@ -360,11 +408,16 @@ class MemoryCacheEvaluator(EvaluatorBase):
     def key(self, context: ModelEvaluationContext):
         """Function to convert a ModelEvaluationContext to a cache key.
 
-        Delegates to the shared evaluation-key builder, which narrows generated
-        ``@Flow.model`` identities when safe and otherwise falls back to
-        ``cache_key()`` semantics.
+        This is the only cache entry point that uses effective identity.
+        Generated ``@Flow.model`` instances can opt in to a narrower key that
+        ignores unused ambient context fields; ordinary ``CallableModel`` paths
+        fall back to the same structural key returned by ``cache_key()``.
         """
-        return _evaluation_key(context)
+        # Do not route callers of public ``cache_key()`` through this helper.
+        # Keeping the effective key private to the evaluator makes the new
+        # behavior additive: normal key introspection and non-opt-in models stay
+        # on the structural implementation above.
+        return _effective_evaluation_key(context)
 
     @property
     def cache(self):
@@ -401,6 +454,9 @@ class CallableModelGraph(BaseModel):
 
 
 def _is_wrapper_to_wrapped_edge(parent_model: Optional[CallableModel], current_model: CallableModel) -> bool:
+    # Effective identity can intentionally collapse a wrapper model and its
+    # wrapped model to the same graph/cache key. Only that wrapper-to-wrapped
+    # edge should be treated as a duplicate self-edge.
     return isinstance(parent_model, WrapperModel) and parent_model.model is current_model
 
 
@@ -409,27 +465,39 @@ def _build_dependency_graph(
     graph: CallableModelGraph,
     parent_key: Optional[bytes] = None,
     parent_model: Optional[CallableModel] = None,
-    visited_nodes: Optional[Set[tuple[bytes, int]]] = None,
 ):
-    if visited_nodes is None:
-        visited_nodes = set()
-
-    key = _evaluation_key(evaluation_context)
+    # Generated/bound ``@Flow.model`` nodes can use effective identity so unused
+    # ambient FlowContext fields do not split the graph. Normal CallableModel
+    # nodes opt out and therefore still receive ``cache_key(evaluation_context)``.
+    key = _effective_evaluation_key(evaluation_context)
     unwrapped_evaluation_context, _, _ = _unwrap_evaluation_context(evaluation_context)
     current_model = unwrapped_evaluation_context.model
     is_same_evaluation_key = parent_key == key
+    is_collapsed_wrapper_child = is_same_evaluation_key and _is_wrapper_to_wrapped_edge(parent_model, current_model)
+
     # Bound/wrapper models can intentionally collapse to their wrapped model's
-    # effective evaluation identity. Suppress only those wrapper-to-wrapped self-loops.
-    if parent_key and (not is_same_evaluation_key or not _is_wrapper_to_wrapped_edge(parent_model, current_model)):
+    # effective evaluation identity. Adding the wrapper -> wrapped edge in that
+    # case would create a fake self-loop in the public graph because both ends
+    # have the same key. Suppress only that edge; real cycles between ordinary
+    # models are still recorded.
+    if parent_key and not is_collapsed_wrapper_child:
         graph.graph[parent_key].add(key)
     if key not in graph.ids:
         graph.ids[key] = evaluation_context
-    if key not in graph.graph:
+    is_new_graph_key = key not in graph.graph
+    if is_new_graph_key:
         graph.graph[key] = set()
-    node = (key, id(current_model))
-    if node in visited_nodes:
+
+    # Main used ``key not in graph.graph`` as the traversal guard. That is no
+    # longer enough once effective identity can collapse multiple model objects
+    # to one key: a bound wrapper and its wrapped model may share the graph node,
+    # but the wrapped model still has dependencies that must be traversed.
+    #
+    # Preserve normal graph deduplication by key, and make the only exception
+    # the exact collapsed wrapper -> wrapped edge.
+    if not is_new_graph_key and not is_collapsed_wrapper_child:
         return
-    visited_nodes.add(node)
+
     # Note that __deps__ will be evaluated using whatever evaluator is configured for the model,
     # which could include logging, caching, etc.
     deps = evaluation_context.model.__deps__(evaluation_context.context)
@@ -442,7 +510,6 @@ def _build_dependency_graph(
                 graph,
                 parent_key=key,
                 parent_model=current_model,
-                visited_nodes=visited_nodes,
             )
 
 
@@ -452,7 +519,11 @@ def get_dependency_graph(evaluation_context: ModelEvaluationContext) -> Callable
     Args:
         evaluation_context: The model and context to build the graph for.
     """
-    root_key = _evaluation_key(evaluation_context)
+    # Keep the root id on the same identity function used for every graph node.
+    # For existing models this is still ``cache_key(evaluation_context)``; for
+    # generated flow models it is the narrowed key that ignores unused ambient
+    # context fields.
+    root_key = _effective_evaluation_key(evaluation_context)
     graph = CallableModelGraph(ids={}, graph={}, root_id=root_key)
     _build_dependency_graph(evaluation_context, graph)
     return graph
