@@ -247,6 +247,32 @@ class TestJoinTransform:
         assert out.columns == ["x", "v", "label"]
         assert out["label"].to_list() == ["a", "b", "c"]
 
+    def test_left_on_right_on(self):
+        lf = nw.from_native(pl.LazyFrame({"a": [1, 2, 3]}))
+        right_src = FrameSource(data={"b": [1, 2, 3], "y": ["a", "b", "c"]})
+        jt = JoinTransform(other=right_src, left_on="a", right_on="b", how="inner")
+        out = lf.pipe(jt).collect().to_native()
+        assert out["y"].to_list() == ["a", "b", "c"]
+
+    def test_cross_join(self):
+        lf = nw.from_native(pl.LazyFrame({"a": [1, 2]}))
+        right_src = FrameSource(data={"b": [10, 20]})
+        jt = JoinTransform(other=right_src, how="cross")
+        out = lf.pipe(jt).collect().to_native()
+        assert len(out) == 4
+
+    def test_rejects_missing_join_keys(self):
+        with pytest.raises(ValidationError, match="either on="):
+            JoinTransform(other=FrameSource(data={"x": [1]}))
+
+    def test_rejects_both_on_and_left_right(self):
+        with pytest.raises(ValidationError, match="not both"):
+            JoinTransform(other=FrameSource(data={"x": [1]}), on="x", left_on="x", right_on="x")
+
+    def test_rejects_partial_left_right(self):
+        with pytest.raises(ValidationError, match="must be specified together"):
+            JoinTransform(other=FrameSource(data={"x": [1]}), left_on="x")
+
 
 # --- 5. JoinBackTransform --- #
 

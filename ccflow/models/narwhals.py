@@ -186,9 +186,36 @@ class JoinTransform(NarwhalsFrameTransform):
         ...,
         description="Callable model producing the right-hand frame to join.",
     )
-    on: Union[str, List[str]] = Field(..., description="Column name(s) used as the join key.")
+    on: Union[str, List[str], None] = Field(
+        None,
+        description="Column name(s) used as the join key. Mutually exclusive with left_on/right_on.",
+    )
+    left_on: Union[str, List[str], None] = Field(
+        None,
+        description="Column name(s) on the left frame. Use with right_on when join keys differ.",
+    )
+    right_on: Union[str, List[str], None] = Field(
+        None,
+        description="Column name(s) on the right frame. Use with left_on when join keys differ.",
+    )
     how: str = Field("left", description="Join strategy: 'inner', 'left', 'right', 'full', 'cross', 'semi', 'anti'.")
     suffix: str = Field("_right", description="Suffix appended to overlapping column names from the right frame.")
+
+    @model_validator(mode="after")
+    def _validate_join_keys(self) -> "JoinTransform":
+        has_on = self.on is not None
+        has_left_right = self.left_on is not None or self.right_on is not None
+        if self.how == "cross":
+            if has_on or has_left_right:
+                raise ValueError("Cross joins must not specify on/left_on/right_on.")
+            return self
+        if has_on and has_left_right:
+            raise ValueError("Specify either on=... or left_on=... and right_on=..., not both.")
+        if has_left_right and (self.left_on is None or self.right_on is None):
+            raise ValueError("left_on and right_on must be specified together.")
+        if not has_on and not has_left_right:
+            raise ValueError("Must specify either on=... or left_on=... and right_on=...")
+        return self
 
     @model_validator(mode="after")
     def _validate_other_result_type(self) -> "JoinTransform":
@@ -203,7 +230,11 @@ class JoinTransform(NarwhalsFrameTransform):
 
     def __call__(self, df: nw.LazyFrame) -> nw.LazyFrame:
         right = _coerce_lazy(self.other(NullContext()).df)
-        return df.join(right, on=self.on, how=self.how, suffix=self.suffix)
+        if self.how == "cross":
+            return df.join(right, how="cross", suffix=self.suffix)
+        if self.on is not None:
+            return df.join(right, on=self.on, how=self.how, suffix=self.suffix)
+        return df.join(right, left_on=self.left_on, right_on=self.right_on, how=self.how, suffix=self.suffix)
 
 
 class JoinBackTransform(NarwhalsFrameTransform):
