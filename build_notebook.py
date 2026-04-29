@@ -115,16 +115,6 @@ arbitrary scale factors (we'll use `0.01`, ~10MB per table).
 """)
 
 code(r"""
-import sys
-from pathlib import Path
-
-# Ensure this worktree's ccflow takes precedence over any editable install.
-_WORKTREE = Path.cwd()
-while _WORKTREE != _WORKTREE.parent and not (_WORKTREE / "ccflow" / "models" / "narwhals.py").exists():
-    _WORKTREE = _WORKTREE.parent
-if str(_WORKTREE) not in sys.path:
-    sys.path.insert(0, str(_WORKTREE))
-
 import warnings
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
