@@ -20,8 +20,6 @@ from ccflow import (
 from ccflow.result.generic import GenericResult
 from ccflow.result.narwhals import NarwhalsFrameResult
 
-# --- helpers --- #
-
 
 class MultiplyColumn(NarwhalsFrameTransform):
     """Test transform: multiplies a column by a scalar."""
@@ -69,9 +67,6 @@ def _values(df: nw.LazyFrame, col: str) -> List:
     return df.collect().to_native()[col].to_list()
 
 
-# --- 1. NarwhalsFrameTransform base contract --- #
-
-
 class TestBaseTransform:
     def test_pipe_compatibility(self):
         """A NarwhalsFrameTransform is callable and works directly with .pipe()."""
@@ -90,9 +85,6 @@ class TestBaseTransform:
         t = MultiplyColumn(col="x", factor=3.0)
         t2 = MultiplyColumn.model_validate_json(t.model_dump_json())
         assert t == t2
-
-
-# --- 2. SequenceTransform --- #
 
 
 class TestSequenceTransform:
@@ -122,8 +114,27 @@ class TestSequenceTransform:
         lf = nw.from_native(pl.LazyFrame({"x": [1, 2, 3]}))
         assert _values(lf.pipe(SequenceTransform()), "x") == [1, 2, 3]
 
+    def test_accepts_plain_callable(self):
+        """Plain callables work at runtime (escape hatch); they just don't serialize."""
+        lf = nw.from_native(pl.LazyFrame({"x": [1, 2, 3]}))
+        seq = SequenceTransform(transforms=[lambda f: f.with_columns(nw.col("x") * 10)])
+        assert _values(lf.pipe(seq), "x") == [10, 20, 30]
 
-# --- 3. NarwhalsPipelineModel --- #
+    def test_accepts_plain_basemodel_and_roundtrips(self):
+        """A plain ccflow.BaseModel with __call__(frame)->frame works and round-trips via type_."""
+        from ccflow import BaseModel
+
+        class PlainAddOne(BaseModel):
+            col: str
+
+            def __call__(self, frame: nw.LazyFrame) -> nw.LazyFrame:
+                return frame.with_columns(nw.col(self.col) + 1)
+
+        seq = SequenceTransform(transforms=[PlainAddOne(col="x")])
+        seq2 = SequenceTransform.model_validate_json(seq.model_dump_json())
+        assert type(seq2.transforms[0]).__name__ == "PlainAddOne"
+        lf = nw.from_native(pl.LazyFrame({"x": [1, 2, 3]}))
+        assert _values(lf.pipe(seq2), "x") == [2, 3, 4]
 
 
 class TestPipelineModel:
@@ -206,8 +217,27 @@ class TestPipelineModel:
         assert _values(p1(NullContext()).df, "x") == [2, 4, 6]
         assert _values(p2(NullContext()).df, "x") == [20, 40, 60]
 
+    def test_context_forwarded_to_source(self):
+        """Pipeline forwards its context to source(...) -- non-NullContext sources work directly."""
+        from ccflow.context import ContextBase
 
-# --- 4. JoinTransform --- #
+        class TableCtx(ContextBase):
+            table: str
+
+        class TableSource(CallableModel):
+            tables: dict
+
+            @Flow.call
+            def __call__(self, context: TableCtx) -> NarwhalsFrameResult:
+                return NarwhalsFrameResult(df=pl.LazyFrame(self.tables[context.table]))
+
+        src = TableSource(tables={"a": {"x": [1, 2]}, "b": {"x": [10, 20]}})
+        p = NarwhalsPipelineModel(source=src, transforms=[MultiplyColumn(col="x", factor=3)])
+        # Pipeline context_type is delegated to the source.
+        assert p.context_type is TableCtx
+        # And the pipeline forwards the context through to source().
+        assert _values(p(TableCtx(table="a")).df, "x") == [3, 6]
+        assert _values(p(TableCtx(table="b")).df, "x") == [30, 60]
 
 
 class TestJoinTransform:
@@ -273,8 +303,40 @@ class TestJoinTransform:
         with pytest.raises(ValidationError, match="must be specified together"):
             JoinTransform(other=FrameSource(data={"x": [1]}), left_on="x")
 
+    def test_other_context_passed_through(self):
+        """A single context-keyed source can be reused by varying other_context."""
+        from ccflow.context import ContextBase
 
-# --- 5. JoinBackTransform --- #
+        class TableCtx(ContextBase):
+            table: str
+
+        class TableSource(CallableModel):
+            tables: dict
+
+            @Flow.call
+            def __call__(self, context: TableCtx) -> NarwhalsFrameResult:
+                return NarwhalsFrameResult(df=pl.LazyFrame(self.tables[context.table]))
+
+        src = TableSource(tables={"r": {"x": [1, 2], "y": ["a", "b"]}})
+        lf = nw.from_native(pl.LazyFrame({"x": [1, 2]}))
+        jt = JoinTransform(other=src, other_context=TableCtx(table="r"), on="x")
+        out = lf.pipe(jt).collect().to_native()
+        assert out["y"].to_list() == ["a", "b"]
+
+    def test_rejects_other_context_type_mismatch(self):
+        from ccflow.context import ContextBase
+
+        class TableCtx(ContextBase):
+            table: str
+
+        class TableSource(CallableModel):
+            @Flow.call
+            def __call__(self, context: TableCtx) -> NarwhalsFrameResult:
+                return NarwhalsFrameResult(df=pl.LazyFrame({"x": [1]}))
+
+        # NullContext is not an instance of TableCtx.
+        with pytest.raises(ValidationError, match="other_context"):
+            JoinTransform(other=TableSource(), on="x")
 
 
 class TestJoinBackTransform:
@@ -301,9 +363,6 @@ class TestJoinBackTransform:
         jb = JoinBackTransform(inner=MultiplyColumn(col="x", factor=2), on="x")
         jb2 = JoinBackTransform.model_validate_json(jb.model_dump_json())
         assert jb == jb2
-
-
-# --- 6. Confluence: source pipeline composed of two pipelines --- #
 
 
 class TestConfluence:

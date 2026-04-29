@@ -24,7 +24,7 @@ keeping the linear ``.pipe()`` contract that makes the rest of the design compos
 from typing import Callable, List, Type, Union
 
 import narwhals.stable.v1 as nw
-from pydantic import Field, SerializeAsAny, model_validator
+from pydantic import Field, model_validator
 
 from ..base import BaseModel
 from ..callable import CallableModel, Flow, GraphDepList
@@ -64,32 +64,43 @@ class NarwhalsFrameTransform(BaseModel):
         raise NotImplementedError
 
 
+# Loose union type used by ``SequenceTransform.transforms`` and
+# ``NarwhalsPipelineModel.transforms``. The two branches do different jobs:
+#
+# * The ``NarwhalsFrameTransform`` branch is the BaseModel-typed slot. It is what enables
+#   ccflow's ``type_`` discriminator to round-trip arbitrary subclasses through JSON --
+#   without a BaseModel branch in the union, pydantic's ``Callable`` validator cannot
+#   rehydrate a dict back into a model.
+# * The ``Callable`` branch is an ergonomic escape hatch for plain functions and other
+#   non-model callables. They are accepted at runtime but do *not* survive JSON
+#   serialization (pydantic has no way to encode an arbitrary callable).
+#
+# NFT is listed first so pydantic prefers the model branch over the duck-typed Callable
+# branch when an NFT instance is supplied (NFT instances are themselves callable).
+NarwhalsFrameTransformOrCallable = Union[NarwhalsFrameTransform, Callable[[nw.LazyFrame], nw.LazyFrame]]
+
+
 class SequenceTransform(NarwhalsFrameTransform):
-    """Compose a list of :class:`NarwhalsFrameTransform` instances into a single transform.
+    """Compose a list of transforms (or plain callables) into a single transform.
 
     The transforms are applied in order via :py:meth:`narwhals.LazyFrame.pipe`. ``SequenceTransform``
     is itself a :class:`NarwhalsFrameTransform`, so it can be nested inside other sequences and
     used directly as a ``.pipe()`` argument.
 
-    Because the ``transforms`` field is typed strictly as a list of :class:`NarwhalsFrameTransform`,
-    a ``SequenceTransform`` is always JSON-roundtrippable.
+    The ``transforms`` field accepts either :class:`NarwhalsFrameTransform` instances (or any
+    other ``ccflow.BaseModel`` whose ``__call__`` matches the transform shape) or plain
+    callables. See :data:`NarwhalsFrameTransformOrCallable` for the serialization tradeoffs.
     """
 
-    transforms: List[NarwhalsFrameTransform] = Field(
+    transforms: List[NarwhalsFrameTransformOrCallable] = Field(
         default_factory=list,
-        description="Transforms applied in order via `.pipe()`.",
+        description="Transforms (or plain callables) applied in order via `.pipe()`.",
     )
 
     def __call__(self, df: nw.LazyFrame) -> nw.LazyFrame:
         for t in self.transforms:
             df = df.pipe(t)
         return df
-
-
-# A loose union type used by NarwhalsPipelineModel.transforms. We deliberately put
-# NarwhalsFrameTransform first in the union so pydantic prefers the BaseModel branch over
-# the duck-typed Callable branch (NarwhalsFrameTransform instances are themselves callable).
-NarwhalsFrameTransformOrCallable = Union[NarwhalsFrameTransform, Callable[[nw.LazyFrame], nw.LazyFrame]]
 
 
 def _coerce_lazy(df) -> nw.LazyFrame:
@@ -116,21 +127,20 @@ class NarwhalsPipelineModel(CallableModel):
     The output frame is always a ``narwhals.LazyFrame``; users that need an eager result should
     call ``.collect()`` on the returned :class:`~ccflow.NarwhalsFrameResult`.
 
-    Parameters
-    ----------
-    source:
-        A :class:`~ccflow.CallableModel` returning a :class:`~ccflow.NarwhalsFrameResult`. The
-        pipeline's :attr:`context_type` is delegated to the source's.
-        ``SerializeAsAny`` is applied explicitly because ccflow's metaclass does not unwrap
-        generic-aliased ``BaseModel`` fields, and we want JSON roundtrip to preserve subclass info.
-    transforms:
-        A list of :class:`NarwhalsFrameTransform` instances or plain callables of one
-        ``LazyFrame`` argument. Plain callables are accepted at runtime but cannot be JSON
-        serialized; pipelines that need full serialization should use only
-        :class:`NarwhalsFrameTransform` instances.
+    Attributes:
+        source: A :class:`~ccflow.CallableModel` returning a :class:`~ccflow.NarwhalsFrameResult`.
+            The pipeline's :attr:`context_type` is delegated to the source's, and the context
+            passed to ``pipeline(context)`` is forwarded to ``source(context)`` -- so any
+            context-keyed source can be used directly as the pipeline source.
+        transforms: A list of :class:`NarwhalsFrameTransform` instances (or any other
+            ``ccflow.BaseModel`` whose ``__call__`` takes a ``LazyFrame``) or plain callables.
+            Plain callables are accepted at runtime but cannot be JSON serialized; pipelines
+            that need full serialization should use model-typed transforms. Subclassing
+            :class:`NarwhalsFrameTransform` is an opt-in convention that aids codebase
+            searchability and makes the contract explicit, but is not strictly required.
     """
 
-    source: SerializeAsAny[CallableModel] = Field(
+    source: CallableModel = Field(
         ...,
         description="Upstream callable model that produces a NarwhalsFrameResult.",
     )
@@ -156,14 +166,14 @@ class NarwhalsPipelineModel(CallableModel):
         return NarwhalsFrameResult
 
     @Flow.call
-    def __call__(self, context) -> NarwhalsFrameResult:
+    def __call__(self, context: ContextBase = NullContext()) -> NarwhalsFrameResult:
         df = _coerce_lazy(self.source(context).df)
         for t in self.transforms:
             df = _coerce_lazy(df.pipe(t))
         return NarwhalsFrameResult(df=df)
 
     @Flow.deps
-    def __deps__(self, context) -> GraphDepList:
+    def __deps__(self, context: ContextBase = NullContext()) -> GraphDepList:
         # Surface the source so that GraphEvaluator can see this edge. Transforms that themselves
         # invoke other CallableModels (e.g. JoinTransform) are NOT surfaced here -- multi-source
         # graph awareness is intentionally out of scope for v1; see module docstring.
@@ -173,18 +183,23 @@ class NarwhalsPipelineModel(CallableModel):
 class JoinTransform(NarwhalsFrameTransform):
     """Join another callable model's frame onto the input frame.
 
-    The ``other`` model is invoked with :class:`~ccflow.NullContext` -- this transform is for the
-    common case where the secondary input is independent of any pipeline-level context. Pipelines
-    needing context-dependent secondary sources should compose at the
-    :class:`~ccflow.CallableModel` graph layer instead.
+    The ``other`` model is invoked with :attr:`other_context` (defaulting to
+    :class:`~ccflow.NullContext`), which is enough for any registry-provided table provider
+    to drop in directly. For a context-keyed source whose context cannot be expressed at
+    config time, override ``other_context`` per join.
 
     Parameters mirror :py:meth:`narwhals.LazyFrame.join`. The ``other`` model is expected to
-    return a :class:`~ccflow.NarwhalsFrameResult`; this is enforced at construction time.
+    return a :class:`~ccflow.NarwhalsFrameResult`; this is enforced at construction time, along
+    with a check that ``other_context`` is an instance of ``other.context_type``.
     """
 
-    other: SerializeAsAny[CallableModel] = Field(
+    other: CallableModel = Field(
         ...,
         description="Callable model producing the right-hand frame to join.",
+    )
+    other_context: ContextBase = Field(
+        default_factory=NullContext,
+        description="Context passed to other(). Defaults to NullContext().",
     )
     on: Union[str, List[str], None] = Field(
         None,
@@ -222,14 +237,13 @@ class JoinTransform(NarwhalsFrameTransform):
         rt = self.other.result_type
         if not (isinstance(rt, type) and issubclass(rt, NarwhalsFrameResult)):
             raise ValueError(f"JoinTransform.other must return NarwhalsFrameResult (or subclass); got other with result_type={rt!r}.")
-        # NullContext-only invocation is by design for v1; verify the source can accept it.
         ct = self.other.context_type
-        if not (isinstance(ct, type) and issubclass(NullContext, ct)):
-            raise ValueError(f"JoinTransform.other must accept a NullContext (or supertype); got other with context_type={ct!r}.")
+        if not isinstance(self.other_context, ct):
+            raise ValueError(f"JoinTransform.other_context must be an instance of {ct!r}; got {type(self.other_context)!r}.")
         return self
 
     def __call__(self, df: nw.LazyFrame) -> nw.LazyFrame:
-        right = _coerce_lazy(self.other(NullContext()).df)
+        right = _coerce_lazy(self.other(self.other_context).df)
         if self.how == "cross":
             return df.join(right, how="cross", suffix=self.suffix)
         if self.on is not None:
