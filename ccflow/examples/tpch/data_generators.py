@@ -13,55 +13,69 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 """
 
 import io
-from typing import Any
+from typing import Any, Literal
 
 import duckdb
 import polars as pl
 import pyarrow as pa
 import pyarrow.csv as pc
-from pydantic import model_validator
+from pydantic import conint, model_validator
 
-from ccflow import CallableModel, Flow
+from ccflow import BaseModel, CallableModel, Flow, NullContext
 from ccflow.result.narwhals import NarwhalsDataFrameResult
 
-from .base import TPCHQueryContext, TPCHTableContext
-
-__all__ = ("TPCHAnswerGenerator", "TPCHDataGenerator")
+__all__ = ("TPCHTable", "TPCHDuckDBBackend", "TPCHTableProvider", "TPCHAnswerProvider")
 
 
-class TPCHAnswerGenerator(CallableModel):
-    """Generates data for the TPC-H benchmark."""
+TPCHTable = Literal["customer", "lineitem", "nation", "orders", "part", "partsupp", "region", "supplier"]
 
-    scale_factor: float
-    _conn: Any = None
 
-    @model_validator(mode="after")
-    def _validate(self):
-        if self._conn is None:
-            self._conn = duckdb.connect(":memory:")
-            self._conn.execute("INSTALL tpch; LOAD tpch")
-        return self
+def _convert_schema(schema: pa.Schema) -> pa.Schema:
+    """Cast decimal columns to float64 and date32 to ns timestamp.
 
-    def get_query(self, context) -> str:
-        return f"""
-            SELECT answer FROM tpch_answers()
-            WHERE scale_factor={self.scale_factor} AND query_nr={context.query_id}
-            """
-
-    @Flow.call()
-    def __call__(self, context: TPCHQueryContext) -> NarwhalsDataFrameResult:
-        """Generates data for the TPC-H benchmark."""
-        results = self._conn.query(self.get_query(context))
-        row = results.fetchone()
-        if row:
-            answer = row[0]
-            tbl_answer = pc.read_csv(io.BytesIO(answer.encode("utf-8")), parse_options=pc.ParseOptions(delimiter="|"))
-            return NarwhalsDataFrameResult(df=tbl_answer)
+    Narwhals' polars/pandas/etc. backends prefer these dtypes over the
+    DuckDB-native decimal/date32 representations.
+    """
+    new_fields = []
+    for field in schema:
+        if pa.types.is_decimal(field.type):
+            new_fields.append(pa.field(field.name, pa.float64()))
+        elif field.type == pa.date32():
+            new_fields.append(pa.field(field.name, pa.timestamp("ns")))
         else:
-            raise ValueError(f"No TPCH answers found for the given scale factor ({self.scale_factor}) and query number ({context.query_id}).")
+            new_fields.append(field)
+    return pa.schema(new_fields)
 
 
-class TPCHDataGenerator(CallableModel):
+class TPCHDuckDBBackend(BaseModel):
+    """Shared DuckDB connection that runs ``dbgen`` once for a given scale factor.
+
+    This is a plain ``ccflow.BaseModel``, not a ``CallableModel``. The
+    distinction matters in ccflow:
+
+    * ``CallableModel`` subclasses are the only models the framework invokes
+      as workflow steps (via ``@Flow.call``). They represent *something to
+      run*.
+    * ``BaseModel`` subclasses live in the ``ModelRegistry`` as plain
+      configured Python objects — useful for shared state, connections,
+      configuration that other models depend on. They are not themselves
+      callable as workflow steps.
+
+    This backend is shared state: it owns one DuckDB connection and ensures
+    ``dbgen(sf=...)`` runs exactly once. By registering it under
+    ``/tpch/backend`` and having every ``TPCHTableProvider`` /
+    ``TPCHAnswerProvider`` reference that same path, the whole example uses a
+    single connection regardless of how many providers are instantiated.
+
+    Note on ``_conn`` / ``_generated``: leading-underscore annotated fields
+    on a ``BaseModel`` become Pydantic ``PrivateAttr``s — they are not part
+    of the model's public schema, and *they are not preserved by
+    ``model_copy()``*. The ``model_validator`` below re-initialises the
+    connection on every fresh instance, so a copied backend would simply
+    create its own connection (and re-run ``dbgen`` lazily on first use)
+    rather than share the original's state.
+    """
+
     scale_factor: float
     _conn: Any = None
     _generated: bool = False
@@ -73,30 +87,51 @@ class TPCHDataGenerator(CallableModel):
             self._conn.execute("INSTALL tpch; LOAD tpch")
         return self
 
-    def _generate_if_needed(self):
-        if self._generated:
-            return
-        self._conn.execute(f"CALL dbgen(sf={self.scale_factor})")
-        self._generated = True
+    def _ensure_generated(self) -> None:
+        if not self._generated:
+            self._conn.execute(f"CALL dbgen(sf={self.scale_factor})")
+            self._generated = True
 
-    def convert_schema(self, schema: pa.Schema) -> pa.Schema:
-        new_schema = []
-        for field in schema:
-            if pa.types.is_decimal(field.type):
-                new_schema.append(pa.field(field.name, pa.float64()))
-            elif field.type == pa.date32():
-                new_schema.append(pa.field(field.name, pa.timestamp("ns")))
-            else:
-                new_schema.append(field)
-        return pa.schema(new_schema)
+    def get_table(self, table: TPCHTable) -> pl.DataFrame:
+        self._ensure_generated()
+        tbl_arrow = self._conn.query(f"SELECT * FROM {table}").to_arrow_table()
+        tbl_arrow = tbl_arrow.cast(_convert_schema(tbl_arrow.schema))
+        # Use the polars backend by default; it's the fastest narwhals backend
+        # for the downstream query bodies.
+        return pl.from_arrow(tbl_arrow)
+
+    def get_answer(self, query_id: int) -> pa.Table:
+        row = self._conn.query(f"SELECT answer FROM tpch_answers() WHERE scale_factor={self.scale_factor} AND query_nr={query_id}").fetchone()
+        if not row:
+            raise ValueError(f"No TPC-H answer found for scale_factor={self.scale_factor}, query_nr={query_id}")
+        return pc.read_csv(io.BytesIO(row[0].encode("utf-8")), parse_options=pc.ParseOptions(delimiter="|"))
+
+
+class TPCHTableProvider(CallableModel):
+    """Provides a single TPC-H table as a Narwhals frame.
+
+    One instance per table; the output schema is fixed by the ``table`` field.
+    The call takes a ``NullContext`` because the provider has no runtime
+    parameters — everything it needs is already on the model itself. The
+    ``= NullContext()`` default lets callers (such as ``TPCHQuery``) invoke
+    the provider with no arguments; ``@Flow.call`` reads the default from the
+    signature in that case.
+    """
+
+    backend: TPCHDuckDBBackend
+    table: TPCHTable
 
     @Flow.call
-    def __call__(self, context: TPCHTableContext) -> NarwhalsDataFrameResult:
-        """Generates data for the TPC-H benchmark."""
-        self._generate_if_needed()
-        tbl = self._conn.query(f"SELECT * FROM {context.table}")
-        tbl_arrow = tbl.to_arrow_table()
-        new_schema = self.convert_schema(tbl_arrow.schema)
-        tbl_arrow = tbl_arrow.cast(new_schema)
-        # Convert to Polars DataFrame to use the polars backend by default for downstream calculations (it's faster)
-        return NarwhalsDataFrameResult(df=pl.from_arrow(tbl_arrow))
+    def __call__(self, context: NullContext = NullContext()) -> NarwhalsDataFrameResult:
+        return NarwhalsDataFrameResult(df=self.backend.get_table(self.table))
+
+
+class TPCHAnswerProvider(CallableModel):
+    """Provides the canonical reference answer for a single TPC-H query."""
+
+    backend: TPCHDuckDBBackend
+    query_id: conint(ge=1, le=22)
+
+    @Flow.call
+    def __call__(self, context: NullContext = NullContext()) -> NarwhalsDataFrameResult:
+        return NarwhalsDataFrameResult(df=self.backend.get_answer(self.query_id))
