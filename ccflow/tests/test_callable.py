@@ -14,6 +14,7 @@ from ccflow import (
     Flow,
     GenericResult,
     GraphDepList,
+    Lazy,
     MetaData,
     ModelRegistry,
     NullContext,
@@ -783,3 +784,251 @@ class TestCallableModelDeps(TestCase):
                 @Flow.deps
                 def foo(self, context):
                     return []
+
+
+class TestAutoContext(TestCase):
+    """Tests for the opt-in @Flow.call(auto_context=...) path."""
+
+    def test_basic_usage_with_kwargs(self):
+        class AutoContextCallable(CallableModel):
+            @Flow.call(auto_context=True)
+            def __call__(self, *, x: int, y: str = "default") -> GenericResult:
+                return GenericResult(value=f"{x}-{y}")
+
+        model = AutoContextCallable()
+
+        self.assertEqual(model(x=42, y="hello").value, "42-hello")
+        self.assertEqual(model(x=10).value, "10-default")
+
+    def test_no_arg_call_uses_generated_context_defaults_only_for_auto_context(self):
+        class AutoContextCallable(CallableModel):
+            @Flow.call(auto_context=True)
+            def __call__(self, *, x: int = 1, y: str = "a") -> GenericResult:
+                return GenericResult(value=f"{x}-{y}")
+
+        class PlainCallable(CallableModel):
+            @Flow.call
+            def __call__(self, context: MyContext = MyContext(a="plain")) -> MyResult:
+                return MyResult(x=1, y=context.a)
+
+        self.assertEqual(AutoContextCallable()().value, "1-a")
+        self.assertEqual(PlainCallable()().y, "plain")
+
+    def test_no_arg_call_still_rejects_required_generated_context_fields(self):
+        class AutoContextCallable(CallableModel):
+            @Flow.call(auto_context=True)
+            def __call__(self, *, x: int, y: str = "a") -> GenericResult:
+                return GenericResult(value=f"{x}-{y}")
+
+        with self.assertRaisesRegex(TypeError, "missing 1 required positional argument: 'context'"):
+            AutoContextCallable()()
+
+    def test_auto_context_attribute_and_registration(self):
+        class AutoContextCallable(CallableModel):
+            @Flow.call(auto_context=True)
+            def __call__(self, *, value: int) -> GenericResult:
+                return GenericResult(value=value)
+
+        inner = AutoContextCallable.__call__.__wrapped__
+        self.assertTrue(hasattr(inner, "__auto_context__"))
+
+        auto_ctx = inner.__auto_context__
+        self.assertTrue(issubclass(auto_ctx, ContextBase))
+        self.assertIn("value", auto_ctx.model_fields)
+        self.assertTrue(hasattr(auto_ctx, "__ccflow_import_path__"))
+        self.assertTrue(auto_ctx.__ccflow_import_path__.startswith(LOCAL_ARTIFACTS_MODULE_NAME))
+
+    def test_call_with_context_object(self):
+        class AutoContextCallable(CallableModel):
+            @Flow.call(auto_context=True)
+            def __call__(self, *, x: int, y: str = "default") -> GenericResult:
+                return GenericResult(value=f"{x}-{y}")
+
+        auto_ctx = AutoContextCallable.__call__.__wrapped__.__auto_context__
+        ctx = auto_ctx(x=99, y="context")
+
+        self.assertEqual(AutoContextCallable()(ctx).value, "99-context")
+
+    def test_with_parent_context(self):
+        class ParentContext(ContextBase):
+            base_value: str = "base"
+
+        class AutoContextCallable(CallableModel):
+            @Flow.call(auto_context=ParentContext)
+            def __call__(self, *, x: int, base_value: str) -> GenericResult:
+                return GenericResult(value=f"{x}-{base_value}")
+
+        auto_ctx = AutoContextCallable.__call__.__wrapped__.__auto_context__
+
+        self.assertTrue(issubclass(auto_ctx, ParentContext))
+        self.assertIn("base_value", auto_ctx.model_fields)
+        self.assertIn("x", auto_ctx.model_fields)
+        self.assertEqual(AutoContextCallable()(x=42, base_value="custom").value, "42-custom")
+
+    def test_parent_fields_must_be_in_signature(self):
+        class ParentContext(ContextBase):
+            required_field: str
+
+        with self.assertRaisesRegex(TypeError, "must be included in function signature"):
+
+            class AutoContextCallable(CallableModel):
+                @Flow.call(auto_context=ParentContext)
+                def __call__(self, *, x: int) -> GenericResult:
+                    return GenericResult(value=x)
+
+    def test_parent_field_type_incompatibility_rejected(self):
+        class ParentContext(ContextBase):
+            base: int
+
+        with self.assertRaisesRegex(TypeError, "incompatible"):
+
+            class AutoContextCallable(CallableModel):
+                @Flow.call(auto_context=ParentContext)
+                def __call__(self, *, base: str) -> GenericResult:
+                    return GenericResult(value=base)
+
+    def test_parent_field_defaults_remain_authoritative_for_auto_context(self):
+        class ParentContext(ContextBase):
+            base: str = "parent"
+
+        class AutoContextCallable(CallableModel):
+            @Flow.call(auto_context=ParentContext)
+            def __call__(self, *, base: str = "function") -> GenericResult:
+                return GenericResult(value=base)
+
+        self.assertEqual(AutoContextCallable()().value, "parent")
+
+    def test_cloudpickle_roundtrip(self):
+        class AutoContextCallable(CallableModel):
+            multiplier: int = 2
+
+            @Flow.call(auto_context=True)
+            def __call__(self, *, x: int) -> GenericResult:
+                return GenericResult(value=x * self.multiplier)
+
+        restored = rcploads(rcpdumps(AutoContextCallable(multiplier=3)))
+
+        self.assertEqual(restored(x=10).value, 30)
+
+    def test_ray_task_execution(self):
+        class AutoContextCallable(CallableModel):
+            factor: int = 2
+
+            @Flow.call(auto_context=True)
+            def __call__(self, *, x: int, y: int = 1) -> GenericResult:
+                return GenericResult(value=(x + y) * self.factor)
+
+        @ray.remote
+        def run_callable(model, **kwargs):
+            return model(**kwargs).value
+
+        with ray.init(num_cpus=1):
+            result = ray.get(run_callable.remote(AutoContextCallable(factor=5), x=10, y=2))
+
+        self.assertEqual(result, 60)
+
+    def test_postponed_annotations_are_resolved(self):
+        namespace = {}
+        exec(
+            """
+from __future__ import annotations
+
+from ccflow import CallableModel, Flow, GenericResult
+
+
+class AutoContextCallable(CallableModel):
+    @Flow.call(auto_context=True)
+    def __call__(self, *, x: int) -> GenericResult[int]:
+        return GenericResult(value=x)
+
+
+result = AutoContextCallable().flow.compute(x=1)
+""",
+            namespace,
+            namespace,
+        )
+
+        self.assertEqual(namespace["result"].value, 1)
+
+    def test_postponed_annotations_unresolved_names_stay_loud(self):
+        namespace = {}
+        with self.assertRaises(NameError):
+            exec(
+                """
+from __future__ import annotations
+
+from ccflow import CallableModel, Flow, GenericResult
+
+
+class AutoContextCallable(CallableModel):
+    @Flow.call(auto_context=True)
+    def __call__(self, *, x: MissingType) -> GenericResult[int]:
+        return GenericResult(value=x)
+""",
+                namespace,
+                namespace,
+            )
+
+    def test_normal_keyword_only_flow_call_without_auto_context_still_fails(self):
+        class BadCallable(CallableModel):
+            @Flow.call
+            def __call__(self, *, x: int, y: str = "default") -> GenericResult:
+                return GenericResult(value=f"{x}-{y}")
+
+        with self.assertRaisesRegex(ValueError, "__call__ method must take a single argument, named 'context'"):
+            BadCallable()
+
+    def test_invalid_auto_context_value(self):
+        with self.assertRaisesRegex(TypeError, "auto_context must be False, True, or a ContextBase subclass"):
+
+            @Flow.call(auto_context="invalid")
+            def bad_func(self, *, x: int) -> GenericResult:
+                return GenericResult(value=x)
+
+    def test_auto_context_rejects_var_args(self):
+        with self.assertRaisesRegex(TypeError, "variadic positional"):
+
+            class AutoContextCallable(CallableModel):
+                @Flow.call(auto_context=True)
+                def __call__(self, *args: int) -> GenericResult:
+                    return GenericResult(value=len(args))
+
+    def test_auto_context_rejects_var_kwargs(self):
+        with self.assertRaisesRegex(TypeError, "variadic keyword"):
+
+            class AutoContextCallable(CallableModel):
+                @Flow.call(auto_context=True)
+                def __call__(self, **kwargs: int) -> GenericResult:
+                    return GenericResult(value=len(kwargs))
+
+    def test_auto_context_requires_return_annotation(self):
+        with self.assertRaisesRegex(TypeError, "must have a return type annotation"):
+
+            class AutoContextCallable(CallableModel):
+                @Flow.call(auto_context=True)
+                def __call__(self, *, value: int):
+                    return GenericResult(value=value)
+
+    def test_auto_context_rejects_missing_annotation(self):
+        with self.assertRaisesRegex(TypeError, "must have a type annotation"):
+
+            class AutoContextCallable(CallableModel):
+                @Flow.call(auto_context=True)
+                def __call__(self, *, value) -> GenericResult:
+                    return GenericResult(value=value)
+
+    def test_auto_context_rejects_lazy_annotation(self):
+        with self.assertRaisesRegex(TypeError, "Lazy"):
+
+            class AutoContextCallable(CallableModel):
+                @Flow.call(auto_context=True)
+                def __call__(self, *, value: Lazy[int]) -> GenericResult:
+                    return GenericResult(value=value)
+
+    def test_auto_context_rejects_callable_model_default(self):
+        with self.assertRaisesRegex(TypeError, "CallableModel"):
+
+            class AutoContextCallable(CallableModel):
+                @Flow.call(auto_context=True)
+                def __call__(self, *, value: int = MyCallable(i=1)) -> GenericResult:
+                    return GenericResult(value=value)

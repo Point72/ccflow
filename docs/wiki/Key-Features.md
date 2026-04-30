@@ -22,6 +22,10 @@ The naming was inspired by the open source library [Pydantic](https://docs.pydan
 `CallableModel`'s are called with a context (something that derives from `ContextBase`) and returns a result (something that derives from `ResultBase`).
 As an example, you may have a `SQLReader` callable model that when called with a `DateRangeContext` returns a `ArrowResult` (wrapper around a Arrow table) with data in the date range defined by the context by querying some SQL database.
 
+`@Flow.model` is a plain-function API for defining `CallableModel`s with normal Python function signatures.
+It keeps the same evaluator, registry, cache, and result machinery while making contextual execution more ergonomic via helpers like `.flow.compute(...)` and `.flow.with_context(...)`.
+See [Flow Model](Flow-Model) for the full guide.
+
 ## Model Registry
 
 A `ModelRegistry` is a named collection of models.

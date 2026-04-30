@@ -315,6 +315,30 @@ class TestCacheKey(TestCase):
         )
         assert cache_key(opaque2) == cache_key(opaque2b)
 
+    def test_opaque_mec_order_preserved(self):
+        """Non-transparent evaluator wrapper order is identity-significant."""
+
+        class OpaqueEval(EvaluatorBase):
+            tag: str
+
+            def __call__(self, context: ModelEvaluationContext):
+                return context()
+
+        m = MyDateCallable(offset=1)
+        ctx = DateContext(date=date(2022, 1, 1))
+        inner = ModelEvaluationContext(model=m, context=ctx)
+
+        inner_then_outer = ModelEvaluationContext(
+            model=OpaqueEval(tag="outer"),
+            context=ModelEvaluationContext(model=OpaqueEval(tag="inner"), context=inner),
+        )
+        outer_then_inner = ModelEvaluationContext(
+            model=OpaqueEval(tag="inner"),
+            context=ModelEvaluationContext(model=OpaqueEval(tag="outer"), context=inner),
+        )
+
+        assert cache_key(inner_then_outer) != cache_key(outer_then_inner)
+
     def test_fn_deps_preserved_through_transparent(self):
         """fn='__deps__' is preserved when walking through transparent layers."""
         m = MyDateCallable(offset=1)
@@ -361,6 +385,50 @@ class TestMemoryCacheEvaluator(TestCase):
         key = evaluator.key(model_evaluation_context)
         self.assertNotIn(key, evaluator.cache)
         self.assertNotIn(key, evaluator.ids)
+
+    def test_plain_callable_key_matches_public_cache_key(self):
+        """Existing CallableModels stay on the structural cache-key path."""
+        m1 = MyDateCallable(offset=1)
+        evaluator = MemoryCacheEvaluator()
+        context = DateContext(date=date(2022, 1, 1))
+        model_evaluation_context = ModelEvaluationContext(model=m1, context=context, options=dict(cacheable=True))
+
+        self.assertEqual(evaluator.key(model_evaluation_context), cache_key(model_evaluation_context))
+
+    def test_plain_callable_key_fallback_does_not_log(self):
+        """Normal opt-out from effective identity should stay quiet."""
+        m1 = MyDateCallable(offset=1)
+        evaluator = MemoryCacheEvaluator()
+        context = DateContext(date=date(2022, 1, 1))
+        model_evaluation_context = ModelEvaluationContext(model=m1, context=context, options=dict(cacheable=True))
+
+        with self.assertNoLogs("ccflow.evaluators.common", level="DEBUG"):
+            self.assertEqual(evaluator.key(model_evaluation_context), cache_key(model_evaluation_context))
+
+    def test_effective_key_exception_fallback_logs_debug(self):
+        """Unexpected effective-identity failures are visible without breaking existing calls."""
+
+        class BadIdentityCallable(MyDateCallable):
+            def _evaluation_identity_payload(self, context):
+                raise ValueError("identity broke")
+
+        m1 = BadIdentityCallable(offset=1)
+        evaluator = MemoryCacheEvaluator()
+        context = DateContext(date=date(2022, 1, 1))
+        model_evaluation_context = ModelEvaluationContext(model=m1, context=context, options=dict(cacheable=True))
+
+        with self.assertLogs("ccflow.evaluators.common", level="DEBUG") as captured:
+            self.assertEqual(evaluator.key(model_evaluation_context), cache_key(model_evaluation_context))
+        self.assertIn("Falling back to structural evaluation key for BadIdentityCallable.__call__: identity broke", captured.output[0])
+
+    def test_plain_callable_deps_key_matches_public_cache_key(self):
+        """Non-__call__ evaluations stay structural."""
+        m1 = MyDateCallable(offset=1)
+        evaluator = MemoryCacheEvaluator()
+        context = DateContext(date=date(2022, 1, 1))
+        model_evaluation_context = ModelEvaluationContext(model=m1, context=context, fn="__deps__", options=dict(cacheable=True))
+
+        self.assertEqual(evaluator.key(model_evaluation_context), cache_key(model_evaluation_context))
 
     def test_caching(self):
         # Create some hard-to hash structure with all kinds of custom types
@@ -510,6 +578,34 @@ class TestGraphDeps(TestCase):
                 self.assertEqual(set(graph.ids[dep_key].context.model.meta.name for dep_key in graph.graph[k]), set(["n0"]))
             elif v.model.meta.name == "n0":
                 self.assertEqual(set(graph.ids[dep_key].context.model.meta.name for dep_key in graph.graph[k]), set())
+
+    def test_plain_callable_graph_keys_match_public_cache_key(self):
+        """Dependency graphs for ordinary CallableModels keep structural keys."""
+        n0 = NodeModel(meta=dict(name="n0"))
+        n1 = NodeModel(meta=dict(name="n1"), deps_model=[n0])
+        n2 = NodeModel(meta=dict(name="n2"), deps_model=[n0])
+        root = NodeModel(meta=dict(name="n3"), deps_model=[n1, n2])
+        context = DateContext(date=date(2022, 1, 1))
+
+        graph = get_dependency_graph(ModelEvaluationContext(model=root, context=context))
+
+        for key, evaluation_context in graph.ids.items():
+            self.assertEqual(key, cache_key(evaluation_context))
+        self.assertEqual(graph.root_id, cache_key(ModelEvaluationContext(model=root, context=context)))
+
+    def test_plain_callable_graph_deduplicates_equal_models_by_key(self):
+        """Ordinary graph traversal should keep main's key-only deduplication."""
+        leaf1 = NodeModel(meta=dict(name="leaf"))
+        leaf2 = NodeModel(meta=dict(name="leaf"))
+        root = NodeModel(meta=dict(name="root"), deps_model=[leaf1, leaf2])
+        context = DateContext(date=date(2022, 1, 1))
+
+        NodeModel._deps_calls = []
+        graph = get_dependency_graph(ModelEvaluationContext(model=root, context=context))
+
+        self.assertEqual(NodeModel._deps_calls, [("root", date(2022, 1, 1)), ("leaf", date(2022, 1, 1))])
+        self.assertEqual(len(graph.ids), 2)
+        self.assertEqual(graph.ids.keys(), graph.graph.keys())
 
     def test_graph_deps_circular(self):
         root = CircularModel()

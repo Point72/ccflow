@@ -13,13 +13,30 @@ which all need to be defined together so that pydantic (especially V1) can resol
 
 import abc
 import logging
+from dataclasses import dataclass
 from functools import lru_cache, wraps
 from inspect import Signature, isclass, signature
-from typing import Any, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar, Union, get_args, get_origin
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    ClassVar,
+    Dict,
+    Generic,
+    List,
+    Optional,
+    Tuple,
+    Type,
+    TypeVar,
+    Union,
+    get_args,
+    get_origin,
+)
 
 from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field, InstanceOf, PrivateAttr, TypeAdapter, field_validator, model_validator
 from typing_extensions import override
 
+from ._flow_model_binding import _normalize_auto_context_parent, _wrap_auto_context_call
 from .base import (
     BaseModel,
     ContextBase,
@@ -28,6 +45,9 @@ from .base import (
     ResultType,
 )
 from .validators import str_to_log_level
+
+if TYPE_CHECKING:
+    from .flow_model import FlowAPI
 
 __all__ = (
     "GraphDepType",
@@ -48,6 +68,14 @@ __all__ = (
 )
 
 log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class EvaluationDependency:
+    """Internal marker for a dependency invocation in an effective identity payload."""
+
+    model: Any
+    context: Any
 
 
 # *****************************************************************************
@@ -174,6 +202,18 @@ class _CallableModel(BaseModel, abc.ABC):
 
         Implementations should be decorated with Flow.call.
         """
+
+    def _evaluation_identity_payload(
+        self,
+        context: Any,
+    ) -> Optional[Any]:
+        """Return an effective evaluation identity payload when available.
+
+        Returning ``None`` keeps the model on the existing structural key path.
+        This is intentionally narrow and internal: only models whose effective
+        invocation can be described declaratively should override it.
+        """
+        return None
 
 
 CallableModelType = TypeVar("CallableModelType", bound=_CallableModel)
@@ -393,6 +433,23 @@ class Flow(PydanticBaseModel):
     @staticmethod
     def call(*args, **kwargs):
         """Decorator for methods on callable models"""
+        auto_context = kwargs.pop("auto_context", False)
+
+        if auto_context is not False:
+            context_parent = _normalize_auto_context_parent(auto_context)
+
+            def auto_context_decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+                wrapped = _wrap_auto_context_call(
+                    fn,
+                    parent=context_parent,
+                    is_model_dependency=lambda value: isinstance(value, CallableModel),
+                )
+                return FlowOptions(**kwargs)(wrapped)
+
+            if len(args) == 1 and callable(args[0]):
+                return auto_context_decorator(args[0])
+            return auto_context_decorator
+
         if len(args) == 1 and callable(args[0]):
             # No arguments to decorator, this is the decorator
             fn = args[0]
@@ -417,6 +474,76 @@ class Flow(PydanticBaseModel):
             # Arguments to decorator, this is just returning the decorator
             # Note that the code below is executed only once
             return FlowOptionsDeps(**kwargs)
+
+    @staticmethod
+    def model(*args, **kwargs):
+        """Decorator that generates a CallableModel class from a plain Python function.
+
+        This is syntactic sugar over CallableModel. The decorator generates a real
+        CallableModel class with proper __call__ and __deps__ methods, so all existing
+        features (caching, evaluation, registry, serialization) work unchanged.
+
+        Args:
+            context_type: Optional ContextBase subclass used only to validate/coerce
+                `FromContext[...]` inputs against an existing nominal context shape
+            auto_unwrap: When True, `.flow.compute(...)` unwraps auto-wrapped
+                `GenericResult(value=...)` outputs back to the annotated return type.
+                Explicit `ResultBase` returns are left unchanged. Default: False.
+            model_base: Optional custom `CallableModel` subclass to use as an
+                additional base for the generated model class.
+            cacheable: Enable caching of results (default: False)
+            volatile: Mark as volatile (default: False)
+            log_level: Logging verbosity (default: logging.DEBUG)
+            validate_result: Validate return type (default: True)
+            verbose: Verbose logging output (default: True)
+            evaluator: Custom evaluator (default: None)
+
+        Primary authoring model:
+            Mark runtime/contextual inputs explicitly with `FromContext[...]`.
+            Ordinary unmarked parameters are regular bound inputs and are never
+            read implicitly from the runtime context.
+
+            @Flow.model
+            def load_prices(
+                source: str,
+                start_date: FromContext[date],
+                end_date: FromContext[date],
+            ) -> GenericResult[pl.DataFrame]:
+                return GenericResult(value=query_db(source, start_date, end_date))
+
+
+        Dependencies:
+            Any ordinary parameter can be bound either to a literal value or
+            to another CallableModel. When a CallableModel is supplied, the
+            generated model treats it as an upstream dependency and resolves it
+            with the current context before calling the underlying function.
+
+            `FromContext[...]` parameters are different: they may be satisfied by
+            runtime context, construction-time contextual defaults, or function
+            defaults, but not by CallableModel values.
+
+        Usage:
+            # Create model instances
+            loader = load_prices(source="prod_db")
+            returns = compute_returns(prices=loader)
+
+            # Execute
+            ctx = DateRangeContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31))
+            result = returns(ctx)
+
+        Returns:
+            A factory function that creates CallableModel instances
+        """
+        from .flow_model import flow_model
+
+        return flow_model(*args, **kwargs)
+
+    @staticmethod
+    def context_transform(*args, **kwargs):
+        """Decorator that turns a top-level function into a serializable with_context() transform factory."""
+        from .flow_model import flow_context_transform
+
+        return flow_context_transform(*args, **kwargs)
 
 
 # *****************************************************************************
@@ -671,6 +798,13 @@ class CallableModel(_CallableModel):
         upstream dependencies in this function.
         """
         return []
+
+    @property
+    def flow(self) -> "FlowAPI":
+        """Access flow helpers for execution, context transforms, and introspection."""
+        from .flow_model import FlowAPI
+
+        return FlowAPI(self)
 
 
 class WrapperModel(CallableModel, Generic[CallableModelType], abc.ABC):
