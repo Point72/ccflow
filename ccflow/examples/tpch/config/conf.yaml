@@ -1,0 +1,262 @@
+# TPC-H example registry.
+#
+# This file is loaded by ``ccflow.examples.tpch.load_config()`` into the root
+# ``ModelRegistry`` and demonstrates several ccflow features:
+#
+#   1. A *flat* model graph defined entirely in YAML — Python code defines the
+#      classes (``TPCHDuckDBBackend``, ``TPCHTableProvider``, ``TPCHAnswerProvider``,
+#      ``TPCHQuery``); this file decides which instances exist and how they are
+#      wired together.
+#   2. Cross-references between registry entries. Strings beginning with ``/``
+#      are absolute paths into the registry; ccflow's pydantic validators
+#      resolve them to the actual configured Python instance at config-load
+#      time. Resolution is by reference (not copy), so every provider below
+#      points at the *same* ``/tpch/backend`` instance, and ``dbgen`` runs
+#      exactly once for the whole registry.  Order within this file does not
+#      matter — references are resolved after the whole file is parsed.
+#   3. Explicit dependencies on a generic ``CallableModel``. ``TPCHQuery`` has
+#      an ``inputs: tuple[CallableModel[NullContext, NarwhalsFrameResult], ...]``
+#      field; the registry resolves each ``/table/<name>`` reference into the
+#      corresponding ``TPCHTableProvider`` instance, so each query's table
+#      dependencies are first-class fields on that query's model instance.
+#   4. ``scale_factor`` lives on a single backend entry, so loading the same
+#      config with a hydra override
+#      (``load_config(overrides=["tpch.backend.scale_factor=1.0"])``) reconfigures
+#      every table, answer and query consistently.
+
+# ---------------------------------------------------------------------------
+# Shared DuckDB backend. Plain ``ccflow.BaseModel`` — not callable itself,
+# but registered so all providers share one connection and one ``dbgen`` call.
+# ---------------------------------------------------------------------------
+tpch:
+  backend:
+    _target_: ccflow.examples.tpch.TPCHDuckDBBackend
+    scale_factor: 0.1
+
+# ---------------------------------------------------------------------------
+# Per-table providers. One instance per TPC-H table; the output schema of
+# each instance is fixed by its ``table`` field.
+# ---------------------------------------------------------------------------
+table:
+  customer:
+    _target_: ccflow.examples.tpch.TPCHTableProvider
+    backend: /tpch/backend
+    table: customer
+  lineitem:
+    _target_: ccflow.examples.tpch.TPCHTableProvider
+    backend: /tpch/backend
+    table: lineitem
+  nation:
+    _target_: ccflow.examples.tpch.TPCHTableProvider
+    backend: /tpch/backend
+    table: nation
+  orders:
+    _target_: ccflow.examples.tpch.TPCHTableProvider
+    backend: /tpch/backend
+    table: orders
+  part:
+    _target_: ccflow.examples.tpch.TPCHTableProvider
+    backend: /tpch/backend
+    table: part
+  partsupp:
+    _target_: ccflow.examples.tpch.TPCHTableProvider
+    backend: /tpch/backend
+    table: partsupp
+  region:
+    _target_: ccflow.examples.tpch.TPCHTableProvider
+    backend: /tpch/backend
+    table: region
+  supplier:
+    _target_: ccflow.examples.tpch.TPCHTableProvider
+    backend: /tpch/backend
+    table: supplier
+
+# ---------------------------------------------------------------------------
+# Reference answers, one per query, served straight from DuckDB's
+# ``tpch_answers()`` table at the configured scale factor.
+# ---------------------------------------------------------------------------
+answer:
+  Q1:
+    _target_: ccflow.examples.tpch.TPCHAnswerProvider
+    backend: /tpch/backend
+    query_id: 1
+  Q2:
+    _target_: ccflow.examples.tpch.TPCHAnswerProvider
+    backend: /tpch/backend
+    query_id: 2
+  Q3:
+    _target_: ccflow.examples.tpch.TPCHAnswerProvider
+    backend: /tpch/backend
+    query_id: 3
+  Q4:
+    _target_: ccflow.examples.tpch.TPCHAnswerProvider
+    backend: /tpch/backend
+    query_id: 4
+  Q5:
+    _target_: ccflow.examples.tpch.TPCHAnswerProvider
+    backend: /tpch/backend
+    query_id: 5
+  Q6:
+    _target_: ccflow.examples.tpch.TPCHAnswerProvider
+    backend: /tpch/backend
+    query_id: 6
+  Q7:
+    _target_: ccflow.examples.tpch.TPCHAnswerProvider
+    backend: /tpch/backend
+    query_id: 7
+  Q8:
+    _target_: ccflow.examples.tpch.TPCHAnswerProvider
+    backend: /tpch/backend
+    query_id: 8
+  Q9:
+    _target_: ccflow.examples.tpch.TPCHAnswerProvider
+    backend: /tpch/backend
+    query_id: 9
+  Q10:
+    _target_: ccflow.examples.tpch.TPCHAnswerProvider
+    backend: /tpch/backend
+    query_id: 10
+  Q11:
+    _target_: ccflow.examples.tpch.TPCHAnswerProvider
+    backend: /tpch/backend
+    query_id: 11
+  Q12:
+    _target_: ccflow.examples.tpch.TPCHAnswerProvider
+    backend: /tpch/backend
+    query_id: 12
+  Q13:
+    _target_: ccflow.examples.tpch.TPCHAnswerProvider
+    backend: /tpch/backend
+    query_id: 13
+  Q14:
+    _target_: ccflow.examples.tpch.TPCHAnswerProvider
+    backend: /tpch/backend
+    query_id: 14
+  Q15:
+    _target_: ccflow.examples.tpch.TPCHAnswerProvider
+    backend: /tpch/backend
+    query_id: 15
+  Q16:
+    _target_: ccflow.examples.tpch.TPCHAnswerProvider
+    backend: /tpch/backend
+    query_id: 16
+  Q17:
+    _target_: ccflow.examples.tpch.TPCHAnswerProvider
+    backend: /tpch/backend
+    query_id: 17
+  Q18:
+    _target_: ccflow.examples.tpch.TPCHAnswerProvider
+    backend: /tpch/backend
+    query_id: 18
+  Q19:
+    _target_: ccflow.examples.tpch.TPCHAnswerProvider
+    backend: /tpch/backend
+    query_id: 19
+  Q20:
+    _target_: ccflow.examples.tpch.TPCHAnswerProvider
+    backend: /tpch/backend
+    query_id: 20
+  Q21:
+    _target_: ccflow.examples.tpch.TPCHAnswerProvider
+    backend: /tpch/backend
+    query_id: 21
+  Q22:
+    _target_: ccflow.examples.tpch.TPCHAnswerProvider
+    backend: /tpch/backend
+    query_id: 22
+
+# ---------------------------------------------------------------------------
+# The 22 TPC-H queries. Each ``TPCHQuery`` is the same Python class with a
+# different ``query_id`` and a different tuple of table-provider inputs.
+# Wiring the inputs in YAML makes each query's table dependencies explicit
+# and overridable per-query.
+# ---------------------------------------------------------------------------
+query:
+  Q1:
+    _target_: ccflow.examples.tpch.TPCHQuery
+    query_id: 1
+    inputs: [/table/lineitem]
+  Q2:
+    _target_: ccflow.examples.tpch.TPCHQuery
+    query_id: 2
+    inputs: [/table/region, /table/nation, /table/supplier, /table/part, /table/partsupp]
+  Q3:
+    _target_: ccflow.examples.tpch.TPCHQuery
+    query_id: 3
+    inputs: [/table/customer, /table/lineitem, /table/orders]
+  Q4:
+    _target_: ccflow.examples.tpch.TPCHQuery
+    query_id: 4
+    inputs: [/table/lineitem, /table/orders]
+  Q5:
+    _target_: ccflow.examples.tpch.TPCHQuery
+    query_id: 5
+    inputs: [/table/region, /table/nation, /table/customer, /table/lineitem, /table/orders, /table/supplier]
+  Q6:
+    _target_: ccflow.examples.tpch.TPCHQuery
+    query_id: 6
+    inputs: [/table/lineitem]
+  Q7:
+    _target_: ccflow.examples.tpch.TPCHQuery
+    query_id: 7
+    inputs: [/table/nation, /table/customer, /table/lineitem, /table/orders, /table/supplier]
+  Q8:
+    _target_: ccflow.examples.tpch.TPCHQuery
+    query_id: 8
+    inputs: [/table/part, /table/supplier, /table/lineitem, /table/orders, /table/customer, /table/nation, /table/region]
+  Q9:
+    _target_: ccflow.examples.tpch.TPCHQuery
+    query_id: 9
+    inputs: [/table/part, /table/partsupp, /table/nation, /table/lineitem, /table/orders, /table/supplier]
+  Q10:
+    _target_: ccflow.examples.tpch.TPCHQuery
+    query_id: 10
+    inputs: [/table/customer, /table/nation, /table/lineitem, /table/orders]
+  Q11:
+    _target_: ccflow.examples.tpch.TPCHQuery
+    query_id: 11
+    inputs: [/table/nation, /table/partsupp, /table/supplier]
+  Q12:
+    _target_: ccflow.examples.tpch.TPCHQuery
+    query_id: 12
+    inputs: [/table/lineitem, /table/orders]
+  Q13:
+    _target_: ccflow.examples.tpch.TPCHQuery
+    query_id: 13
+    inputs: [/table/customer, /table/orders]
+  Q14:
+    _target_: ccflow.examples.tpch.TPCHQuery
+    query_id: 14
+    inputs: [/table/lineitem, /table/part]
+  Q15:
+    _target_: ccflow.examples.tpch.TPCHQuery
+    query_id: 15
+    inputs: [/table/lineitem, /table/supplier]
+  Q16:
+    _target_: ccflow.examples.tpch.TPCHQuery
+    query_id: 16
+    inputs: [/table/part, /table/partsupp, /table/supplier]
+  Q17:
+    _target_: ccflow.examples.tpch.TPCHQuery
+    query_id: 17
+    inputs: [/table/lineitem, /table/part]
+  Q18:
+    _target_: ccflow.examples.tpch.TPCHQuery
+    query_id: 18
+    inputs: [/table/customer, /table/lineitem, /table/orders]
+  Q19:
+    _target_: ccflow.examples.tpch.TPCHQuery
+    query_id: 19
+    inputs: [/table/lineitem, /table/part]
+  Q20:
+    _target_: ccflow.examples.tpch.TPCHQuery
+    query_id: 20
+    inputs: [/table/part, /table/partsupp, /table/nation, /table/lineitem, /table/supplier]
+  Q21:
+    _target_: ccflow.examples.tpch.TPCHQuery
+    query_id: 21
+    inputs: [/table/lineitem, /table/nation, /table/orders, /table/supplier]
+  Q22:
+    _target_: ccflow.examples.tpch.TPCHQuery
+    query_id: 22
+    inputs: [/table/customer, /table/orders]

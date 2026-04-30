@@ -3,46 +3,40 @@ from typing import get_args
 import pytest
 from polars.testing import assert_frame_equal
 
-from ccflow.examples.tpch import TPCHAnswerGenerator, TPCHDataGenerator, TPCHQueryContext, TPCHQueryRunner, TPCHTable, TPCHTableContext
+from ccflow import ModelRegistry
+from ccflow.examples.tpch import TPCHTable, load_config
 
 
 @pytest.fixture(scope="module")
-def scale_factor():
-    return 0.1
-
-
-@pytest.fixture(scope="module")
-def tpch_answer_generator(scale_factor):
-    return TPCHAnswerGenerator(scale_factor=scale_factor)
-
-
-@pytest.fixture(scope="module")
-def tpch_data_generator(scale_factor):
-    return TPCHDataGenerator(scale_factor=scale_factor)
-
-
-@pytest.mark.parametrize("query_id", range(1, 23))
-def test_tpch_answer_generation(tpch_answer_generator, query_id):
-    context = TPCHQueryContext(query_id=query_id)
-    out = tpch_answer_generator(context)
-    assert out is not None
-    assert len(out.df) > 0
+def registry():
+    # Load the TPC-H example registry from its YAML. We override the scale
+    # factor on the single shared backend; that one override flows through
+    # to all table/answer/query entries because they all reference
+    # ``/tpch/backend``.
+    load_config(overrides=["tpch.backend.scale_factor=0.1"], overwrite=True)
+    return ModelRegistry.root()
 
 
 @pytest.mark.parametrize("table", get_args(TPCHTable))
-def test_tpch_data_generation(tpch_data_generator, table):
-    context = TPCHTableContext(table=table)
-    out = tpch_data_generator(context)
+def test_tpch_table_provider(registry, table):
+    provider = registry[f"/table/{table}"]
+    out = provider()
     assert out is not None
     assert len(out.df) > 0
 
 
 @pytest.mark.parametrize("query_id", range(1, 23))
-def test_tpch_queries(tpch_answer_generator, tpch_data_generator, query_id):
-    runner = TPCHQueryRunner(table_provider=tpch_data_generator)
-    context = TPCHQueryContext(query_id=query_id)
-    answer = tpch_answer_generator(context)
-    out = runner(context)
+def test_tpch_answer_provider(registry, query_id):
+    provider = registry[f"/answer/Q{query_id}"]
+    out = provider()
     assert out is not None
-    assert answer is not None
-    assert_frame_equal(out.df.to_polars(), answer.df.to_polars(), check_dtypes=False)
+    assert len(out.df) > 0
+
+
+@pytest.mark.parametrize("query_id", range(1, 23))
+def test_tpch_query(registry, query_id):
+    query = registry[f"/query/Q{query_id}"]
+    answer = registry[f"/answer/Q{query_id}"]
+    out = query()
+    expected = answer()
+    assert_frame_equal(out.df.to_polars(), expected.df.to_polars(), check_dtypes=False)

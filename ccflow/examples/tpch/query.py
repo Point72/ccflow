@@ -1,51 +1,52 @@
+"""Generic TPC-H query runner.
+
+A single ``TPCHQuery`` class can express any of the 22 TPC-H queries; each
+query gets one configured instance in the registry (``query/Q1`` ...
+``query/Q22``). The query's table dependencies are explicit Pydantic fields
+on each instance (via ``inputs``).
+"""
+
 from importlib import import_module
-from typing import Dict, Tuple
+from typing import Tuple
 
-from pydantic import Field
+from pydantic import conint
 
-from ccflow import CallableModel, CallableModelGenericType, Flow
+from ccflow import CallableModel, CallableModelGenericType, Flow, NullContext
 from ccflow.result.narwhals import NarwhalsFrameResult
 
-from .base import TPCHQueryContext, TPCHTable, TPCHTableContext
-
-__all__ = ("TPCHQueryRunner",)
+__all__ = ("TPCHQuery",)
 
 
-_QUERY_TABLE_MAP: Dict[int, Tuple[TPCHTable, ...]] = {
-    1: ("lineitem",),
-    2: ("region", "nation", "supplier", "part", "partsupp"),
-    3: ("customer", "lineitem", "orders"),
-    4: ("lineitem", "orders"),
-    5: ("region", "nation", "customer", "lineitem", "orders", "supplier"),
-    6: ("lineitem",),
-    7: ("nation", "customer", "lineitem", "orders", "supplier"),
-    8: ("part", "supplier", "lineitem", "orders", "customer", "nation", "region"),
-    9: ("part", "partsupp", "nation", "lineitem", "orders", "supplier"),
-    10: ("customer", "nation", "lineitem", "orders"),
-    11: ("nation", "partsupp", "supplier"),
-    12: ("lineitem", "orders"),
-    13: ("customer", "orders"),
-    14: ("lineitem", "part"),
-    15: ("lineitem", "supplier"),
-    16: ("part", "partsupp", "supplier"),
-    17: ("lineitem", "part"),
-    18: ("customer", "lineitem", "orders"),
-    19: ("lineitem", "part"),
-    20: ("part", "partsupp", "nation", "lineitem", "supplier"),
-    21: ("lineitem", "nation", "orders", "supplier"),
-    22: ("customer", "orders"),
-}
+class TPCHQuery(CallableModel):
+    """Runs one TPC-H query (``q{query_id}``) against a tuple of table providers.
 
+    The query body itself comes from ``ccflow.examples.tpch.queries.q{N}.query``
+    (vendored from narwhals); each input is called to produce a frame, and the
+    frames are passed positionally to that function in the order given.
 
-class TPCHQueryRunner(CallableModel):
-    """Generically runs TPC-H queries from a pre-packaged repository of queries (courtesy of narwhals)."""
+    A few ccflow features worth noting on this class:
 
-    table_provider: CallableModelGenericType[TPCHTableContext, NarwhalsFrameResult]
-    query_table_map: Dict[int, Tuple[TPCHTable, ...]] = Field(_QUERY_TABLE_MAP, validate_default=True)
+    * The ``inputs`` field is typed ``CallableModelGenericType[NullContext,
+      NarwhalsFrameResult]``. Using a ``CallableModelGenericType[C, R]`` as a
+      Pydantic field type causes ccflow to validate, when the registry is
+      loaded, that each resolved provider's ``__call__`` actually takes a
+      ``NullContext`` (or subclass) and returns a ``NarwhalsFrameResult`` (or
+      subclass). The configured ``TPCHTableProvider`` instances satisfy this
+      because their return type, ``NarwhalsDataFrameResult``, is a subclass
+      of ``NarwhalsFrameResult``.
+    * Each provider is invoked with no arguments (``provider()``). The
+      ``@Flow.call`` decorator on the provider's ``__call__`` reads the
+      ``context: NullContext = NullContext()`` default from the signature
+      when no context is passed in, so a "no-arg" call is well-defined.
+    """
+
+    query_id: conint(ge=1, le=22)
+    inputs: Tuple[CallableModelGenericType[NullContext, NarwhalsFrameResult], ...]
 
     @Flow.call
-    def __call__(self, context: TPCHQueryContext) -> NarwhalsFrameResult:
-        query_module = import_module(f"ccflow.examples.tpch.queries.q{context.query_id}")
-        inputs = (self.table_provider(TPCHTableContext(table=table)).df for table in self.query_table_map[context.query_id])
-        result = query_module.query(*inputs)
-        return NarwhalsFrameResult(df=result)
+    def __call__(self, context: NullContext = NullContext()) -> NarwhalsFrameResult:
+        query_module = import_module(f"ccflow.examples.tpch.queries.q{self.query_id}")
+        # Materialise the frames eagerly into a tuple before unpacking, so the
+        # query body can iterate its inputs more than once if it wants to.
+        frames = tuple(provider().df for provider in self.inputs)
+        return NarwhalsFrameResult(df=query_module.query(*frames))
