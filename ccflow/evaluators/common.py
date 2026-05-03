@@ -7,7 +7,6 @@ from pprint import pformat
 from types import MappingProxyType
 from typing import Any, Callable, Dict, List, Optional, Set, Union
 
-import dask.base
 from pydantic import Field, PrivateAttr, ValidationError, field_validator
 from typing_extensions import override
 
@@ -22,6 +21,7 @@ from ..callable import (
     TransparentModelEvaluationContext,
     WrapperModel,
 )
+from ..utils.tokenize import compute_cache_token, compute_data_token
 
 __all__ = [
     "cache_key",
@@ -67,6 +67,17 @@ def combine_evaluators(first: Optional[EvaluatorBase], second: Optional[Evaluato
         return MultiEvaluator(evaluators=[first] + second.evaluators)
     else:
         return MultiEvaluator(evaluators=[first, second])
+
+
+def _flatten_cache_key_context(flow_obj: ModelEvaluationContext) -> tuple[ModelEvaluationContext, str, List[EvaluatorBase]]:
+    fn = flow_obj.fn
+    non_transparent: List[EvaluatorBase] = []
+    while isinstance(flow_obj.context, ModelEvaluationContext):
+        fn = flow_obj.fn if flow_obj.fn != "__call__" else fn
+        if not isinstance(flow_obj, TransparentModelEvaluationContext):
+            non_transparent.append(flow_obj.model)
+        flow_obj = flow_obj.context
+    return flow_obj, fn if fn != "__call__" else flow_obj.fn, non_transparent
 
 
 class MultiEvaluator(EvaluatorBase):
@@ -253,7 +264,7 @@ def _memo_token(model: CallableModel, context: Any) -> tuple[int, str]:
         context_value = context.model_dump(mode="python")
     else:
         context_value = context
-    return (id(model), dask.base.tokenize((type(context), context_value)))
+    return (id(model), compute_data_token((type(context), context_value)))
 
 
 def _effective_model_key(
@@ -290,7 +301,10 @@ def _effective_model_key(
         if payload is None:
             return None
         payload = _resolve_effective_identity_payload(payload, memo, active)
-        key = dask.base.tokenize((_EFFECTIVE_EVALUATION_KEY_VERSION, payload)).encode("utf-8")
+        key = compute_cache_token(
+            data_values=[(_EFFECTIVE_EVALUATION_KEY_VERSION, payload)],
+            behavior_classes=[type(model)],
+        ).encode("utf-8")
         memo[token] = key
         return key
     finally:
@@ -351,17 +365,20 @@ def _effective_evaluation_key(
     # Preserve the existing evaluation-context semantics around the narrowed
     # model key: options still distinguish evaluations, transparent evaluators
     # are ignored, and opaque evaluators remain part of identity.
-    return dask.base.tokenize(
-        (
-            _EFFECTIVE_EVALUATION_KEY_VERSION,
-            "evaluation_context",
-            {
-                "fn": fn,
-                "options": inner.options,
-                "_evaluators": _evaluator_identity_payload(outer_to_inner_evaluators),
-            },
-            key,
-        )
+    return compute_cache_token(
+        data_values=[
+            (
+                _EFFECTIVE_EVALUATION_KEY_VERSION,
+                "evaluation_context",
+                {
+                    "fn": fn,
+                    "options": inner.options,
+                    "_evaluators": _evaluator_identity_payload(outer_to_inner_evaluators),
+                },
+                key,
+            )
+        ],
+        behavior_classes=[type(evaluator) for evaluator in outer_to_inner_evaluators],
     ).encode("utf-8")
 
 
@@ -373,24 +390,26 @@ def cache_key(flow_obj: Union[ModelEvaluationContext, ContextBase, CallableModel
     only on the underlying model, context, fn, options, and any non-transparent
     evaluators in the chain.
 
+    When the underlying model has callable methods, a behavior token (SHA-256 of
+    method bytecode) is included so that code changes invalidate the cache.
+
     Args:
         flow_obj: The object to be tokenized to form the cache key.
     """
     if isinstance(flow_obj, ModelEvaluationContext):
-        fn = flow_obj.fn
-        non_transparent = []
-        while isinstance(flow_obj.context, ModelEvaluationContext):
-            fn = flow_obj.fn if flow_obj.fn != "__call__" else fn
-            if not isinstance(flow_obj, TransparentModelEvaluationContext):
-                non_transparent.append(flow_obj.model)
-            flow_obj = flow_obj.context
-        d = flow_obj.model_dump(mode="python")
-        d["fn"] = fn if fn != "__call__" else flow_obj.fn
-        if non_transparent:
-            d["_evaluators"] = [e.model_dump(mode="python") for e in non_transparent]
-        return dask.base.tokenize(d).encode("utf-8")
+        flow_obj, fn, non_transparent = _flatten_cache_key_context(flow_obj)
+        return compute_cache_token(
+            data_values=[
+                {**flow_obj.model_dump(mode="python"), "fn": fn},
+                *(evaluator.model_dump(mode="python") for evaluator in non_transparent),
+            ],
+            behavior_classes=[type(flow_obj.model), *(type(evaluator) for evaluator in non_transparent)],
+        ).encode("utf-8")
     elif isinstance(flow_obj, (ContextBase, CallableModel)):
-        return dask.base.tokenize(flow_obj.model_dump(mode="python")).encode("utf-8")
+        return compute_cache_token(
+            data_values=[flow_obj.model_dump(mode="python")],
+            behavior_classes=[type(flow_obj)],
+        ).encode("utf-8")
     else:
         raise TypeError(f"object of type {type(flow_obj)} cannot be serialized by this function!")
 

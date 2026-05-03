@@ -1792,6 +1792,60 @@ def test_generated_model_cache_ignores_unused_flow_context_fields():
     assert len(cache.cache) == 2
 
 
+def test_generated_model_effective_cache_key_includes_behavior_token(monkeypatch):
+    @Flow.model
+    def add(a: int, b: FromContext[int]) -> int:
+        return a + b
+
+    def helper_v1():
+        return 1
+
+    def helper_v2():
+        return 2
+
+    model = add(a=10)
+    model_type = type(model)
+    context = model.__call__.get_evaluation_context(model, FlowContext(b=1, unused="same"), _options={"cacheable": True})
+    cache = MemoryCacheEvaluator()
+
+    monkeypatch.setattr(model_type, "__ccflow_tokenizer_deps__", [helper_v1], raising=False)
+    key1 = cache.key(context)
+
+    monkeypatch.setattr(model_type, "__ccflow_tokenizer_deps__", [helper_v2], raising=False)
+    monkeypatch.delattr(model_type, "__ccflow_tokenizer_cache__", raising=False)
+    key2 = cache.key(context)
+
+    assert key1 != key2
+
+
+def test_generated_model_effective_cache_key_includes_opaque_evaluator_behavior():
+    class OpaqueA(EvaluatorBase):
+        tag: str = "same"
+
+        def __call__(self, context: ModelEvaluationContext):
+            return context()
+
+    class OpaqueB(EvaluatorBase):
+        tag: str = "same"
+
+        def __call__(self, context: ModelEvaluationContext):
+            result = context()
+            return result
+
+    @Flow.model
+    def add(a: int, b: FromContext[int]) -> int:
+        return a + b
+
+    model = add(a=10)
+    inner = model.__call__.get_evaluation_context(model, FlowContext(b=1, unused="same"), _options={"cacheable": True})
+    cache = MemoryCacheEvaluator()
+
+    key1 = cache.key(ModelEvaluationContext(model=OpaqueA(), context=inner))
+    key2 = cache.key(ModelEvaluationContext(model=OpaqueB(), context=inner))
+
+    assert key1 != key2
+
+
 def test_generated_model_cache_changes_when_consumed_context_field_changes():
     calls = {"count": 0}
 
@@ -2226,6 +2280,31 @@ def test_generated_model_diamond_cache_reuses_shared_source_and_ignores_unused_f
 
     assert calls == {"source": 1, "left": 1, "right": 1, "root": 1}
     assert len(cache.cache) == 4
+
+
+def test_bound_generated_sibling_dependencies_keep_distinct_rewritten_contexts_with_graph_cache():
+    calls = {"source": 0, "root": 0}
+
+    @Flow.model
+    def source(value: FromContext[int]) -> int:
+        calls["source"] += 1
+        return value
+
+    @Flow.model
+    def root(left: int, right: int) -> int:
+        calls["root"] += 1
+        return left + right
+
+    cache = MemoryCacheEvaluator()
+    evaluator = combine_evaluators(cache, GraphEvaluator())
+    shared = source()
+    model = root(left=shared.flow.with_context(value=1), right=shared.flow.with_context(value=2))
+
+    with FlowOptionsOverride(options={"evaluator": evaluator, "cacheable": True}):
+        assert model.flow.compute(value=99, unused="ambient").value == 3
+
+    assert calls == {"source": 2, "root": 1}
+    assert len(cache.cache) >= 3
 
 
 def test_generated_dependency_graph_identity_ignores_unused_flow_context_fields():
