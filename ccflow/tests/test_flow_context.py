@@ -68,6 +68,29 @@ def test_flow_context_value_semantics_and_hash():
     assert len({first, second, third}) == 2
 
 
+def test_flow_context_hash_handles_nested_models_and_rejects_opaque_unhashable_values():
+    class WithDict:
+        __hash__ = None
+
+        def __init__(self):
+            self.values = {"a": [1, 2]}
+
+    class UnhashableNoState:
+        __slots__ = ()
+        __hash__ = None
+
+    nested = FlowContext(model=NumberContext(x=1), values={"items": [{2, 1}]})
+    same = FlowContext(model=NumberContext(x=1), values={"items": [{1, 2}]})
+
+    assert nested == nested
+    assert nested != {"model": NumberContext(x=1)}
+    assert hash(nested) == hash(same)
+    assert hash(FlowContext(value=WithDict())) == hash(FlowContext(value=WithDict()))
+
+    with pytest.raises(TypeError, match="unhashable value"):
+        hash(FlowContext(value=UnhashableNoState()))
+
+
 def test_flow_context_pickle_and_cloudpickle_roundtrip():
     ctx = FlowContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31), tags=frozenset({"a", "b"}))
     assert pickle.loads(pickle.dumps(ctx)) == ctx

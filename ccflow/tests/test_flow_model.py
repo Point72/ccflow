@@ -204,6 +204,311 @@ def static_patch() -> dict[str, object]:
     return {"a": 2}
 
 
+def test_module_level_flow_model_examples_and_transforms_execute():
+    assert data_aggregator(input_a=1, input_b=2, operation="add").flow.compute().value == 3
+    with pytest.raises(ValueError, match="unsupported operation"):
+        data_aggregator(input_a=1, input_b=2, operation="multiply").flow.compute()
+
+    raw = date_range_loader_previous_day(source="warehouse").flow.compute(start_date=date(2024, 1, 2), end_date=date(2024, 1, 3)).value
+    assert raw == {"source": "warehouse", "start_date": "2024-01-01", "end_date": "2024-01-03"}
+    assert date_range_processor(raw_data=raw).flow.compute().value.startswith("raw:warehouse")
+    assert date_range_processor(raw_data=raw, normalize=True).flow.compute().value.startswith("normalized:warehouse")
+
+    contextual = contextual_loader(source="warehouse").flow.compute(start_date=date(2024, 1, 1), end_date=date(2024, 1, 2)).value
+    assert contextual_processor(prefix="p", data=contextual).flow.compute(start_date=date(2024, 1, 1), end_date=date(2024, 1, 2)).value == (
+        "p:warehouse:2024-01-01 to 2024-01-02"
+    )
+
+    assert (
+        pipeline_stage3(stage2_output=pipeline_stage2(stage1_output=pipeline_stage1(initial=2), multiplier=3), offset=4).flow.compute(value=5).value
+        == 25
+    )
+
+    @Flow.model
+    def load(start_date: FromContext[int], end_date: FromContext[int], bucket: FromContext[int]) -> int:
+        return start_date * 100 + end_date * 10 + bucket
+
+    shifted = load().flow.with_context(
+        shift_integer_window(amount=2),
+        start_date=bump_start_date(amount=10),
+        bucket=parity_bucket(),
+    )
+    assert shifted.flow.compute(start_date=1, end_date=5, raw=7).value == 1171
+
+    @Flow.model
+    def add(a: FromContext[int]) -> int:
+        return a
+
+    assert add().flow.with_context(a=non_idempotent_a_step()).flow.compute(a=1).value == 2
+    assert add().flow.with_context(a=non_idempotent_a_step()).flow.compute(a=10).value == 3
+    assert add().flow.with_context(static_patch()).flow.compute(a=1).value == 2
+
+
+def test_context_transform_internal_error_and_repr_paths():
+    assert flow_model_module._context_transform_repr(static_patch()) == "static_patch()"
+    assert flow_model_module._context_transform_repr(increment_b(amount=2)) == "increment_b(amount=2)"
+    assert flow_model_module._context_transform_repr(123) == "123"
+    assert flow_model_module._context_transform_identifier(increment_b(amount=1)).endswith(".increment_b")
+
+    with pytest.raises(ValidationError, match="exactly one"):
+        flow_model_module.ContextTransform()
+
+    with pytest.raises(ValidationError, match="exactly one"):
+        flow_model_module.ContextTransform(path="ccflow.tests.test_flow_model.increment_b", serialized_config="also-set")
+
+    with pytest.raises(TypeError, match="does not resolve to a Flow.context_transform binding"):
+        flow_model_module._load_context_transform_config("ccflow.tests.test_flow_model.lazy_context_transform_for_rejection")
+
+    invalid_payload = base64.b64encode(pickle.dumps({"not": "a config"}, protocol=5)).decode("ascii")
+    with pytest.raises(TypeError, match="payload does not contain"):
+        flow_model_module._load_serialized_context_transform_config(invalid_payload)
+
+    invalid_binding = flow_model_module.ContextTransform.model_construct(path=None, serialized_config=None, bound_args={})
+    with pytest.raises(TypeError, match="neither path nor serialized_config"):
+        flow_model_module._load_context_transform_config_from_binding(invalid_binding)
+
+    with pytest.raises(ImportError, match="does not have a _generated_model"):
+        flow_model_module._restore_generated_flow_model("ccflow.tests.test_flow_model.lazy_context_transform_for_rejection", {})
+
+
+def test_flow_model_low_level_value_helpers_cover_edge_paths():
+    assert flow_model_module._bound_field_names(object()) == set()
+    assert flow_model_module._concrete_context_type(int | None) is None
+    no_name_annotation = int | str
+    assert flow_model_module._expected_type_repr(no_name_annotation) == repr(no_name_annotation)
+    assert flow_model_module._coerce_value("x", "still-raw", object(), "test") == "still-raw"
+    assert flow_model_module._unwrap_model_result(7) == 7
+    assert flow_model_module._type_accepts_str(Annotated[str, "meta"]) is True
+    assert flow_model_module._type_accepts_str(int | str) is True
+    assert flow_binding_module._is_result_annotation(GenericResult[int] | None) is True
+    assert flow_model_module._registry_candidate_allowed(object(), data_source(base_value=1)) is True
+    assert flow_model_module._registry_candidate_allowed(int, GenericResult(value=1)) is False
+    assert flow_model_module._is_mapping_annotation(inspect.Signature.empty) is False
+    assert flow_model_module._is_mapping_annotation(123) is False
+    generated_type = type(basic_loader(source="s", multiplier=2))
+    assert flow_model_module._resolve_generated_model_bases(generated_type) == (generated_type,)
+    assert callable(Flow.context_transform())
+
+    metadata: list[object] = []
+    annotation = Annotated[int, metadata]
+    assert flow_model_module._type_adapter(annotation) is flow_model_module._type_adapter(annotation)
+
+    with pytest.raises(TypeError, match="only supports Python functions"):
+        flow_model_module._ensure_top_level_named_function(123, decorator_name="@Flow.model")
+    with pytest.raises(TypeError, match="only supports named Python functions"):
+        flow_model_module._ensure_top_level_named_function(lambda: None, decorator_name="@Flow.model")
+
+
+def test_lazy_thunks_and_regular_resolution_edge_paths():
+    calls = {"dependency": 0, "inner": 0}
+
+    @Flow.model
+    def source(value: FromContext[int]) -> int:
+        calls["dependency"] += 1
+        return value + 10
+
+    thunk = flow_model_module._make_lazy_thunk(source(), FlowContext(value=2))
+    assert thunk() == 12
+    assert thunk() == 12
+    assert calls["dependency"] == 1
+
+    def inner():
+        calls["inner"] += 1
+        return "13"
+
+    coercing = flow_model_module._make_coercing_lazy_thunk(inner, "value", int)
+    assert coercing() == 13
+    assert coercing() == 13
+    assert calls["inner"] == 1
+
+    @Flow.model
+    def missing_regular(x: int) -> int:
+        return x
+
+    missing_config = type(missing_regular()).__flow_model_config__
+    with pytest.raises(TypeError, match="still unbound"):
+        flow_model_module._resolve_regular_param_value(missing_regular(), missing_config.param("x"), FlowContext())
+
+    @Flow.model
+    def lazy_consumer(x: Lazy[int]) -> int:
+        return x()
+
+    lazy_model = getattr(lazy_consumer, "_generated_model").model_construct(x=1)
+    lazy_config = type(lazy_model).__flow_model_config__
+    with pytest.raises(TypeError, match="must be bound to a CallableModel"):
+        flow_model_module._resolve_regular_param_value(lazy_model, lazy_config.param("x"), FlowContext())
+
+
+def test_context_transform_validation_and_static_resolution_edge_paths():
+    @Flow.context_transform
+    def default_amount(amount: int = 5) -> int:
+        return amount
+
+    @Flow.context_transform
+    def default_seed(seed: FromContext[int] = 9) -> int:
+        return seed + 1
+
+    @Flow.context_transform
+    def dynamic_patch(seed: FromContext[int]) -> dict[str, object]:
+        return {"a": seed}
+
+    @Flow.model
+    def add(a: FromContext[int], b: FromContext[int]) -> int:
+        return a + b
+
+    assert add().flow.with_context(a=default_amount(), b=default_seed()).flow.compute().value == 15
+    assert flow_model_module._evaluate_context_transform_from_values(default_seed(), {}) == 10
+    with pytest.raises(TypeError, match="Missing contextual input"):
+        flow_model_module._evaluate_context_transform_from_values(seed_plus_one(), {})
+
+    dynamic_spec = flow_model_module._BoundContextSpec(
+        patches=[flow_model_module.PatchContextSpec(binding=dynamic_patch())],
+        field_overrides={},
+    )
+    assert flow_model_module._statically_resolved_context_values(add(), dynamic_spec) is None
+    assert flow_model_module._statically_resolved_context_field_names(add(), dynamic_spec) == set()
+
+    identity_values, missing_transforms = flow_model_module._apply_context_spec_values_for_identity(add(), dynamic_spec, FlowContext(b=2))
+    assert identity_values == {"b": 2}
+    assert missing_transforms == ((flow_model_module._context_transform_identifier(dynamic_patch()), ("seed",)),)
+
+    missing_regular = default_amount()
+    config = flow_model_module._load_context_transform_config_from_binding(default_amount())
+    assert flow_model_module._bound_context_transform_regular_kwargs(config, missing_regular) == {"amount": 5}
+
+    with pytest.raises(TypeError, match="unexpected keyword"):
+        increment_b(amount=1, extra=2)
+    with pytest.raises(TypeError, match="Do not pass contextual"):
+        increment_b(b=1, amount=2)
+    with pytest.raises(TypeError, match="missing required regular"):
+        increment_b()
+
+    with pytest.raises(TypeError, match="must return a mapping"):
+        flow_model_module._validate_patch_result(add(), 1)
+    with pytest.raises(TypeError, match="string field names"):
+        flow_model_module._validate_patch_result(add(), {1: 2})
+
+    class OpaqueModel:
+        context_type = object
+
+    assert flow_model_module._validate_patch_result(OpaqueModel(), {"x": 1}) == {"x": 1}
+    flow_model_module._validate_with_context_field_names(OpaqueModel(), ["anything"])
+    assert (
+        flow_model_module._static_field_override_value(OpaqueModel(), "anything", flow_model_module.FieldContextSpec(binding=default_amount())) == 5
+    )
+
+    with pytest.raises(TypeError, match="raw callables"):
+        add().flow.with_context(lambda: {"a": 1})
+    with pytest.raises(TypeError, match="Positional with_context"):
+        add().flow.with_context(123)
+
+
+def test_additional_flow_model_source_edge_paths(monkeypatch):
+    @Flow.context_transform
+    def default_seed(seed: FromContext[int] = 9) -> int:
+        return seed + 1
+
+    @Flow.context_transform
+    def dynamic_patch(seed: FromContext[int]) -> dict[str, object]:
+        return {"a": seed}
+
+    @Flow.model
+    def add(a: FromContext[int], b: FromContext[int]) -> int:
+        return a + b
+
+    @Flow.model
+    def regular_required(x: int) -> int:
+        return x
+
+    @Flow.model
+    def lazy_consumer(x: Lazy[int]) -> int:
+        return x()
+
+    restored = flow_model_module._restore_generated_flow_model(
+        "ccflow.tests.test_flow_model.basic_loader",
+        basic_loader(source="s", multiplier=2).__getstate__(),
+    )
+    assert restored.flow.compute(value=3).value == 6
+
+    class FailingPath:
+        def __init__(self, path):
+            self.path = path
+
+        @property
+        def object(self):
+            raise ImportError(self.path)
+
+    original_path = flow_model_module.PyObjectPath
+    monkeypatch.setattr(flow_model_module, "PyObjectPath", FailingPath)
+    config = type(basic_loader(source="s", multiplier=2)).__flow_model_config__
+    assert flow_model_module._generated_model_factory_path_for_pickle(config, type(basic_loader(source="s", multiplier=2))) is None
+    monkeypatch.setattr(flow_model_module, "PyObjectPath", original_path)
+
+    assert flow_model_module._registry_candidate_allowed(int, 1) is True
+    opaque_model = type("OpaqueModel", (), {"context_type": object})()
+    assert flow_model_module._coerce_model_context_value(opaque_model, "anything", "raw", "test") == "raw"
+    assert flow_model_module._generated_model_identity_payload(regular_required(), FlowContext()) is None
+
+    context_spec = flow_model_module._BoundContextSpec(
+        patches=[flow_model_module.PatchContextSpec(binding=dynamic_patch())],
+        field_overrides={"b": flow_model_module.FieldContextSpec(binding=default_seed())},
+    )
+    values, missing = flow_model_module._apply_context_spec_values_for_identity(add(), context_spec, FlowContext(seed=1))
+    assert values == {"a": 1, "b": 2, "seed": 1}
+    assert missing == ()
+    assert flow_model_module._statically_resolved_context_values(add(), context_spec) is None
+
+    bound = add().flow.with_context(dynamic_patch())
+    assert bound.flow.context_inputs == {"a": int, "b": int, "seed": int}
+    assert bound.flow.unbound_inputs == {"a": int, "b": int, "seed": int}
+
+    with pytest.raises(TypeError, match="missing required regular"):
+        flow_model_module._bound_context_transform_regular_kwargs(
+            flow_model_module._load_context_transform_config_from_binding(increment_b(amount=1)),
+            increment_b(amount=1).model_copy(update={"bound_args": {}}),
+        )
+    with pytest.raises(TypeError, match="Missing regular parameter"):
+        regular_required().__deps__(FlowContext())
+    assert lazy_consumer(x=data_source(base_value=1)).__deps__(FlowContext(value=1)) == []
+    assert getattr(basic_loader, "_generated_model")._resolve_registry_refs("raw") == "raw"
+    assert flow_model_module._GeneratedFlowModelBase._resolve_registry_refs({}) == {}
+
+    def transform_with_bad_hints(value: FromContext[int]) -> int:
+        return value
+
+    def raise_attribute_error(*args, **kwargs):
+        raise AttributeError("bad hints")
+
+    monkeypatch.setattr(flow_model_module, "get_type_hints", raise_attribute_error)
+    assert Flow.context_transform(transform_with_bad_hints)().serialized_config is not None
+
+
+def test_plain_and_bound_optional_compute_paths_and_identity_helpers():
+    class AnyContextModel:
+        context_type = object
+
+    class FlowContextModel:
+        context_type = FlowContext
+
+    class OptionalContextModel(CallableModel):
+        @Flow.call
+        def __call__(self, context: Optional[SimpleContext] = None) -> GenericResult[int]:
+            return GenericResult(value=0 if context is None else context.value)
+
+    assert flow_model_module._model_context_contract(AnyContextModel()).input_types is None
+    assert flow_model_module._model_context_contract(FlowContextModel()).input_types is None
+    assert flow_model_module._identity_context_values_for_model(AnyContextModel(), FlowContext(extra=1)) == {"extra": 1}
+    assert OptionalContextModel().flow.compute(None).value == 0
+    assert OptionalContextModel().flow.compute().value == 0
+    assert OptionalContextModel().flow.unbound_inputs == {}
+
+    bound = OptionalContextModel().flow.with_context()
+    assert bound.flow.compute(FlowContext(value=3)).value == 3
+    with pytest.raises(TypeError, match="either one context object"):
+        bound.flow.compute(FlowContext(value=3), value=4)
+    assert bound.flow._compute_target is bound
+
+
 def test_from_context_anchor_behavior():
     @Flow.model
     def foo(a: int, b: FromContext[int]) -> int:
@@ -1385,14 +1690,22 @@ def test_context_type_rejects_nullable_field_for_non_nullable_from_context():
         (list[int], list[str], False),
         (list[int], list[int], True),
         (int | str, int, True),
+        (int | str, int | None, False),
+        (int | None, type(None), True),
+        (int | None, int | str, False),
+        (int, int | str, False),
+        (object, int | str, True),
         (Literal["a"], Literal["a"], True),
         (Literal["a"], Literal["b"], False),
         (str, Literal["a"], True),
         (Literal["a", "b"], Literal["a"], True),
         (Literal["a"], str, False),
+        (list[int], Literal["a"], False),
         (Annotated[int, "meta"], int, True),
         (dict[str, list[int]], dict[str, list[int]], True),
         (dict[str, list[int]], dict[str, list[str]], False),
+        (list, list[int], False),
+        (tuple[int], tuple[int, str], False),
         (Any, int, True),
         (Any, str, True),
         (int, Any, True),
