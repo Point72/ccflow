@@ -1,16 +1,18 @@
 """This module defines re-usable contexts for the "Callable Model" framework defined in flow.callable.py."""
 
+from collections.abc import Mapping
 from datetime import date, datetime
-from typing import Generic, Hashable, Optional, Sequence, Set, TypeVar
+from typing import Any, Generic, Hashable, Optional, Sequence, Set, TypeVar
 
 from deprecated import deprecated
-from pydantic import field_validator, model_validator
+from pydantic import ConfigDict, PrivateAttr, field_validator, model_validator
 
 from .base import ContextBase
 from .exttypes import Frequency
 from .validators import normalize_date, normalize_datetime
 
 __all__ = (
+    "FlowContext",
     "NullContext",
     "GenericContext",
     "DateContext",
@@ -88,6 +90,60 @@ _SEPARATOR = ","
 
 # Starting 0.8.0 Nullcontext is an alias to ContextBase
 NullContext = ContextBase
+
+
+class FlowContext(ContextBase):
+    """Universal context for @Flow.model functions.
+
+    Instead of generating a new ContextBase subclass for each @Flow.model,
+    this single class with extra="allow" serves as the universal carrier.
+    Validation happens via TypedDict + TypeAdapter at compute() time.
+
+    This design avoids:
+    - Proliferation of dynamic _funcname_Context classes
+    - Class registration overhead for serialization
+    - Pickling issues with Ray/distributed computing
+    """
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+    _frozen_hash_key: Hashable | None = PrivateAttr(default=None)
+    _hash_value: int | None = PrivateAttr(default=None)
+
+    def _hash_key(self) -> Hashable:
+        if self._frozen_hash_key is None:
+            self._frozen_hash_key = _freeze_for_hash(self.model_dump(mode="python"))
+        return self._frozen_hash_key
+
+    def __eq__(self, other: Any) -> bool:
+        if self is other:
+            return True
+        if not isinstance(other, FlowContext):
+            return False
+        return self._hash_key() == other._hash_key()
+
+    def __hash__(self) -> int:
+        if self._hash_value is None:
+            self._hash_value = hash(self._hash_key())
+        return self._hash_value
+
+
+def _freeze_for_hash(value: Any) -> Hashable:
+    if isinstance(value, Mapping):
+        return tuple(sorted(((key, _freeze_for_hash(item)) for key, item in value.items()), key=lambda item: repr(item[0])))
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_for_hash(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(_freeze_for_hash(item) for item in value)
+    if hasattr(value, "model_dump"):
+        return (type(value), _freeze_for_hash(value.model_dump(mode="python")))
+    try:
+        hash(value)
+    except TypeError as exc:
+        if hasattr(value, "__dict__"):
+            return (type(value), _freeze_for_hash(vars(value)))
+        raise TypeError(f"FlowContext contains an unhashable value of type {type(value).__name__}: {value!r}") from exc
+    return value
+
 
 C = TypeVar("C", bound=Hashable)
 

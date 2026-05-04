@@ -1,0 +1,26 @@
+# Hydra config for examples/flow_model_hydra_builder_demo.py
+#
+# Pattern:
+# - configure static pipeline specs in YAML
+# - use model_alias to pass already-registered models into a plain Python builder
+# - keep runtime context as runtime inputs, supplied later at execution time
+
+library_visitors:
+    _target_: examples.flow_model_hydra_builder_demo.count_visitors
+    location: library
+
+previous_week:
+    _target_: examples.flow_model_hydra_builder_demo.build_visitor_delta
+    current:
+        _target_: ccflow.compose.model_alias
+        model_name: library_visitors
+    label: previous_week
+    days_back: 7
+
+previous_two_weeks:
+    _target_: examples.flow_model_hydra_builder_demo.build_visitor_delta
+    current:
+        _target_: ccflow.compose.model_alias
+        model_name: library_visitors
+    label: previous_two_weeks
+    days_back: 14

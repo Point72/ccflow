@@ -275,8 +275,13 @@ class TestContextInheritance(TestCase):
     def test_inheritance(self):
         """Test that if a context has a superset of fields of another context, it is a subclass of that context."""
 
-        for parent_name, parent_class in self.classes.items():
-            for child_name, child_class in self.classes.items():
+        # Exclude FlowContext from this test - it's a special universal carrier with no
+        # declared fields (uses extra="allow"), so the "superset implies subclass" logic
+        # doesn't apply to it.
+        classes_to_check = {name: cls for name, cls in self.classes.items() if name != "FlowContext"}
+
+        for parent_name, parent_class in classes_to_check.items():
+            for child_name, child_class in classes_to_check.items():
                 if parent_class is child_class:
                     continue
 

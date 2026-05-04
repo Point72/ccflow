@@ -355,6 +355,12 @@ The behavior of the `@Flow.call` decorator can be controlled in several ways:
 - by setting `options` in the `meta` attribute of the CallableModel
 - by passing `_options` directly to the `__call__` method
 
+For hand-written `CallableModel` classes, `@Flow.call(auto_context=True)` is
+also available when the `__call__` method should declare context fields as
+keyword-only parameters instead of accepting one explicit context object. This
+is an opt-in `Flow.call` feature; it does not add the dependency wiring or
+`FromContext[...]` semantics provided by `@Flow.model`.
+
 An example of the first one (model-specific options) is to disable validation of the result type on a particular model
 
 ```python
