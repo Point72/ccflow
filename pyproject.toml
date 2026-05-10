@@ -38,11 +38,9 @@ classifiers = [
 
 dependencies = [
     "cloudpathlib",
-    "cloudpickle",
     "dask",
     "deprecated",
     "hydra-core",
-    "IPython",
     "jinja2",
     "narwhals",
     "numpy<3",
@@ -50,8 +48,6 @@ dependencies = [
     "pandas",
     "pyarrow",
     "pydantic>=2.6,<3",
-    "smart_open",
-    "tenacity",
 ]
 
 [project.optional-dependencies]
@@ -59,14 +55,15 @@ full = [
     "bleach",
     "cexprtk",
     "duckdb",
-    "pandas",
+    "IPython",
     "panel",
     "panel_material_ui",
     "plotly",
     "polars",
     "ray",
     "scipy",
-    "xarray"
+    "smart_open",
+    "xarray",
 ]
 develop = [
     "build",
@@ -87,13 +84,14 @@ develop = [
     "cexprtk",
     "csp>=0.8.0,<1",
     "duckdb",
-    "pandas",
+    "IPython",
     "panel",
     "panel_material_ui",
     "plotly",
     "polars",
     "ray",
     "scipy",
+    "smart_open",
     "xarray",
     # Test deps
     "beautifulsoup4",
