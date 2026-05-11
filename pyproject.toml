@@ -45,6 +45,7 @@ dependencies = [
     "narwhals",
     "numpy<3",
     "orjson",
+    "packaging",
     "pandas",
     "pyarrow",
     "pydantic>=2.6,<3",

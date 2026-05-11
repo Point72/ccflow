@@ -9,11 +9,12 @@ import platform
 import sys
 import warnings
 from types import GenericAlias, MappingProxyType
-from typing import Any, Callable, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar, Union, get_args, get_origin
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar, Union, get_args, get_origin
 
-import omegaconf
-from omegaconf import DictConfig, OmegaConf
 from packaging import version
+
+if TYPE_CHECKING:
+    from omegaconf import DictConfig
 from pydantic import (
     BaseModel as PydanticBaseModel,
     ConfigDict,
@@ -381,6 +382,8 @@ def _is_config_subregistry(value):
     """Test whether a config value is a subregistry, i.e. it is a dict which either
     contains a _target_ key, or recursively contains a dict that has a _target_ key.
     """
+    from omegaconf import DictConfig
+
     if isinstance(value, (dict, DictConfig)):
         if _is_config_model(value):
             return True
@@ -575,7 +578,7 @@ class ModelRegistry(BaseModel, collections.abc.Mapping):
 
     def load_config(
         self,
-        cfg: DictConfig,
+        cfg: "DictConfig",
         overwrite: bool = False,
         skip_exceptions: bool = False,
         resolve_from: Optional["ModelRegistry"] = None,
@@ -597,7 +600,7 @@ class ModelRegistry(BaseModel, collections.abc.Mapping):
         path: str,
         overrides: Optional[List[str]] = None,
         version_base: Optional[str] = None,
-    ) -> DictConfig:
+    ) -> "DictConfig":
         """Create the config from the path.
 
         Args:
@@ -680,7 +683,9 @@ class _ModelRegistryLoader:
     def __init__(self, overwrite: bool):
         self._overwrite = overwrite
 
-    def _make_subregistries(self, cfg, registries: List[ModelRegistry]) -> List[Tuple[List[ModelRegistry], str, DictConfig, Optional[Exception]]]:
+    def _make_subregistries(self, cfg, registries: List[ModelRegistry]) -> List[Tuple[List[ModelRegistry], str, "DictConfig", Optional[Exception]]]:
+        from omegaconf import DictConfig
+
         registry = registries[-1]
         models_to_register = []
         for k, v in cfg.items():
@@ -699,7 +704,7 @@ class _ModelRegistryLoader:
         return models_to_register
 
     def load_config(
-        self, cfg: DictConfig, registry: ModelRegistry, skip_exceptions: bool = False, resolve_from: Optional[ModelRegistry] = None
+        self, cfg: "DictConfig", registry: ModelRegistry, skip_exceptions: bool = False, resolve_from: Optional[ModelRegistry] = None
     ) -> ModelRegistry:
         """Load from OmegaConf DictConfig that follows hydra conventions."""
         # Here we use hydra's 'instantiate' to instantiate models,
@@ -710,6 +715,7 @@ class _ModelRegistryLoader:
         # or if they are of a specific subclass of the parent.
         from hydra.errors import InstantiationException
         from hydra.utils import instantiate
+        from omegaconf import OmegaConf, UnsupportedValueType
 
         if resolve_from is not None and resolve_from is not registry:
             initial_chain = [resolve_from, registry]
@@ -734,7 +740,7 @@ class _ModelRegistryLoader:
                     try:
                         OmegaConf.create([model])
                         continue
-                    except omegaconf.UnsupportedValueType:
+                    except UnsupportedValueType:
                         pass
 
                 if hasattr(model, "meta") and hasattr(model.meta, "name") and model.meta.name == "":

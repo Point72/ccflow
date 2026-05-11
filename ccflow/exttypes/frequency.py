@@ -1,11 +1,10 @@
 import re
 import warnings
 from datetime import timedelta
-from functools import cached_property
+from functools import cache, cached_property
 from typing import Type
 
-import pandas as pd
-from pandas.tseries.frequencies import to_offset
+from packaging.version import Version
 from pydantic import TypeAdapter
 from pydantic_core import core_schema
 
@@ -18,10 +17,14 @@ class Frequency(str):
     @cached_property
     def offset(self) -> Type:
         """Return the underlying pandas DateOffset object."""
+        from pandas.tseries.frequencies import to_offset
+
         return to_offset(str(self))
 
     @cached_property
     def timedelta(self) -> timedelta:
+        import pandas as pd
+
         return pd.to_timedelta(self.offset).to_pytimedelta()
 
     @classmethod
@@ -50,13 +53,15 @@ class Frequency(str):
             # https://pandas.pydata.org/docs/dev/whatsnew/v3.0.0.html#enforced-deprecation-of-aliases-m-q-y-etc-in-favour-of-me-qe-ye-etc-for-offsets
             value = _normalize_frequency_alias(value)
 
+        import pandas as pd
+
         if isinstance(value, (timedelta, str)):
             try:
                 with warnings.catch_warnings():
                     # Because pandas 2.2 deprecated many frequency strings (i.e. "Y", "M", "T" still in common use)
                     # We should consider switching away from pandas on this and supporting ISO
                     warnings.simplefilter("ignore", category=FutureWarning)
-                    value = to_offset(value)
+                    value = pd.tseries.frequencies.to_offset(value)
             except ValueError as e:
                 raise ValueError(f"ensure this value can be converted to a pandas offset: {e}")
 
@@ -74,7 +79,12 @@ class Frequency(str):
 _TYPE_ADAPTER = TypeAdapter(Frequency)
 
 
-_PD_GE_22 = tuple(int(x) for x in pd.__version__.split(".")[:2]) >= (2, 2)
+@cache
+def _pd_ge_22() -> bool:
+    import pandas as pd
+
+    return Version(pd.__version__) >= Version("2.2")
+
 
 _LEGACY_FREQ_PATTERN = re.compile(
     r"^(?P<count>[+-]?\d+)?(?P<unit>T|M|A|Y)(?:-(?P<suffix>[A-Za-z]{3}))?$",
@@ -99,7 +109,7 @@ def _normalize_frequency_alias(value: str) -> str:
     if not normalized:
         return normalized
 
-    if _PD_GE_22:
+    if _pd_ge_22():
         # Pandas >= 2.2 deprecated legacy aliases (M, Q, Y, A, T).
         # Convert them to the canonical forms (ME, QE, YE, min).
         match = _LEGACY_FREQ_PATTERN.fullmatch(normalized)
