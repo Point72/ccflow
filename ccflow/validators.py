@@ -5,7 +5,6 @@ from datetime import date, datetime
 from typing import Any, Dict, Optional
 from zoneinfo import ZoneInfo
 
-import pandas as pd
 from pydantic import TypeAdapter, ValidationError
 
 from .exttypes import PyObjectPath
@@ -26,6 +25,8 @@ def normalize_date(v: Any) -> Any:
     """Validator that will convert string offsets to date based on today, and convert datetime to date."""
     if isinstance(v, str):  # Check case where it's an offset
         try:
+            import pandas as pd
+
             timestamp = pd.tseries.frequencies.to_offset(_normalize_frequency_alias(v)) + date.today()
             return timestamp.date()
         except ValueError:
@@ -45,6 +46,8 @@ def normalize_datetime(v: Any) -> Any:
     """Validator that will convert string offsets to datetime based on today, and convert datetime to date."""
     if isinstance(v, str):  # Check case where it's an offset
         try:
+            import pandas as pd
+
             return (pd.tseries.frequencies.to_offset(_normalize_frequency_alias(v)) + date.today()).to_pydatetime()
         except ValueError:
             pass
