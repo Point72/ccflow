@@ -10,8 +10,6 @@ import warnings
 from datetime import date
 from typing import List, Tuple
 
-import pandas as pd
-
 from ccflow.exttypes.frequency import _normalize_frequency_alias
 
 _MIN_END_DATE = date(1969, 12, 31)
@@ -33,6 +31,8 @@ def dates_to_chunks(start: date, end: date, chunk_size: str = "ME", trim: bool =
     Returns:
         List of tuples of (start date, end date) for each of the chunks
     """
+    import pandas as pd
+
     normalized_chunk_size = _normalize_frequency_alias(chunk_size)
     with warnings.catch_warnings():
         # Because pandas 2.2 deprecated many frequency strings (i.e. "Y", "M", "T" still in common use)
