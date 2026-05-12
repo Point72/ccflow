@@ -38,7 +38,7 @@ classifiers = [
 
 dependencies = [
     "cloudpathlib",
-    "dask",
+    "cloudpickle",
     "deprecated",
     "hydra-core",
     "jinja2",
