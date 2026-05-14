@@ -598,7 +598,7 @@ class TestGraphDeps(TestCase):
         self.assertEqual(graph.root_id, cache_key(ModelEvaluationContext(model=root, context=context)))
 
     def test_plain_callable_graph_deduplicates_equal_models_by_key(self):
-        """Ordinary graph traversal should keep main's key-only deduplication."""
+        """Ordinary graph traversal deduplicates structurally equal nodes by key."""
         leaf1 = NodeModel(meta=dict(name="leaf"))
         leaf2 = NodeModel(meta=dict(name="leaf"))
         root = NodeModel(meta=dict(name="root"), deps_model=[leaf1, leaf2])

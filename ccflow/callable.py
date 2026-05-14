@@ -519,9 +519,9 @@ class Flow(PydanticBaseModel):
         Transform bindings serialize enough function metadata to survive model
         serialization, including local or nested functions through cloudpickle.
         """
-        from .flow_model import flow_context_transform
+        from .flow_model import _flow_context_transform
 
-        return flow_context_transform(*args, **kwargs)
+        return _flow_context_transform(*args, **kwargs)
 
 
 # *****************************************************************************

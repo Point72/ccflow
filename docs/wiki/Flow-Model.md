@@ -126,15 +126,22 @@ They can be satisfied by:
 
 - runtime context,
 - construction-time keyword arguments, stored as contextual defaults on the model instance,
+- keyword callable literals for `FromContext[Callable[..., T]]` fields,
 - function defaults.
 
-They cannot be satisfied by `CallableModel` values.
+Construction-time contextual defaults cannot be `CallableModel` values, because
+that would be ambiguous with dependency binding. If the contextual field itself
+is typed to accept a `CallableModel`, pass the model as runtime context or via
+`.flow.with_context(...)` as ordinary data. A raw callable passed positionally is
+always treated as a regular argument candidate, not as a contextual default. In
+other words, `FromContext[Callable[..., T]]` allows a callable literal only when
+it is provided by keyword for that contextual field.
 
 A construction-time value for a contextual parameter is still a default, not a
 conversion into a regular bound parameter.
 
 Generated models reserve a few framework attribute names for the model API:
-`flow`, `meta`, `context_type`, and `result_type`. Do not use these as
+`flow`, `meta`, `context_type`, `result_type`, and `type_`. Do not use these as
 `@Flow.model` function parameter names.
 
 ```python
@@ -169,6 +176,12 @@ For generated `@Flow.model` stages it accepts either:
 - one context object.
 
 It does not accept both at the same time.
+
+Plain handwritten `CallableModel` instances also expose `.flow.compute(...)`.
+For those models, keyword arguments build or update the runtime context. If the
+decorated `@Flow.call` method declares a default context object, no-argument
+`.flow.compute()` uses that default, and keyword arguments override fields from
+that default for the `.flow.compute(...)` call.
 
 ```python
 from ccflow import Flow, FlowContext, FromContext
@@ -342,7 +355,11 @@ Key rules:
 - `with_context()` only targets contextual fields,
 - positional arguments must be patch transforms,
 - keyword overrides may be literals or field transforms,
-- raw anonymous callables are rejected; use named `@Flow.context_transform` helpers,
+- raw positional callables are rejected; use named `@Flow.context_transform`
+  helpers for positional patch transforms,
+- keyword callable literals are allowed only when the target field is typed as
+  `FromContext[Callable[..., T]]`; other keyword callables must be field
+  transforms,
 - transforms are branch-local — they only affect the wrapped dependency, not
   the entire pipeline,
 - patch results merge left-to-right, then keyword overrides apply last,
@@ -350,12 +367,13 @@ Key rules:
   multiple fields must move together, put that logic inside one patch
   transform.
 
-Context transforms serialize the analyzed transform contract directly so bound
-models can move through pickle and Ray workers without re-resolving annotations
-from the defining module. This applies to importable module functions, local
-functions, nested functions, `__main__`, and notebook-defined transforms. For
-long-lived YAML/JSON configuration, inspect the generated config shape before
-treating it as a stable hand-written config format.
+Context transforms serialize the analyzed transform contract directly in
+`serialized_config` so bound models can move through pickle and Ray workers
+without re-resolving annotations from the defining module. This applies to
+importable module functions, local functions, nested functions, `__main__`, and
+notebook-defined transforms. Treat that `serialized_config` as an opaque
+generated artifact owned by ccflow, not as a stable hand-written YAML/JSON
+configuration format.
 
 ## `context_type=...`
 
@@ -409,8 +427,10 @@ For bound models, `with_context(...)` bindings are reflected in
 `runtime_inputs`, `required_inputs`, and `bound_inputs`. Literal bindings
 satisfy their target fields. Transform bindings with runtime inputs add those
 source context inputs to the effective runtime view. Static transforms, meaning
-transforms whose inputs are already available, may be evaluated during
-introspection so their output fields can be reported precisely.
+transforms with no contextual parameters, may be evaluated during introspection
+so their output fields can be reported precisely. A transform parameter like
+`seed: FromContext[int] = 0` is still a runtime input; its default only means the
+caller is not required to provide it.
 `required_inputs` is always the required subset of `runtime_inputs`; if multiple
 bindings expose the same runtime context field with conflicting annotations,
 introspection raises an error instead of silently choosing one.
@@ -531,9 +551,9 @@ the caller to provide that field.
 
 Use `runtime_inputs` to see the effective direct runtime context inputs after
 `with_context(...)` bindings. Use `required_inputs` to see what still must be
-provided by the caller. Static transforms may be evaluated during introspection,
-so their output fields can be removed from `runtime_inputs` and
-`required_inputs` or added to `bound_inputs`.
+provided by the caller. Static transforms with no contextual parameters may be
+evaluated during introspection, so their output fields can be removed from
+`runtime_inputs` and `required_inputs` or added to `bound_inputs`.
 
 **A shared dependency runs more than once**
 

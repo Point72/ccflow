@@ -350,7 +350,7 @@ def _effective_evaluation_key(
             raise
         # Effective identity is an optimization/semantic narrowing for opt-in
         # generated models. If deriving it is unclear, do not make cache/graph
-        # key construction a new failure mode; use the old structural key.
+        # key construction a failure mode; fall back to the structural key.
         log.debug("Falling back to structural evaluation key for %s.__call__: %s", type(inner.model).__name__, exc)
         return cache_key(evaluation_context)
     if key is None:
@@ -501,13 +501,11 @@ def _build_dependency_graph(
     if is_new_graph_key:
         graph.graph[key] = set()
 
-    # Main used ``key not in graph.graph`` as the traversal guard. That is no
-    # longer enough once effective identity can merge multiple model objects
-    # to one key: a bound wrapper and its wrapped model may share the graph node,
-    # but the wrapped model still has dependencies that must be traversed.
-    #
-    # Preserve normal graph deduplication by key, and make the only exception
-    # the exact same-key wrapper -> wrapped edge.
+    # Effective identity can merge multiple model objects into one graph key.
+    # A bound wrapper and its wrapped model may share the graph node, but the
+    # wrapped model still has dependencies that must be traversed. Preserve
+    # normal graph deduplication by key, and make the only exception the exact
+    # same-key wrapper -> wrapped edge.
     if not is_new_graph_key and not is_collapsed_wrapper_child:
         return key
 

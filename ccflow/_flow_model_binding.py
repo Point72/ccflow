@@ -64,7 +64,7 @@ class Lazy:
     """Lazy dependency marker used only as ``Lazy[T]`` in type annotations."""
 
     def __new__(cls, *args, **kwargs):
-        raise TypeError("Lazy(model)(...) has been removed. Use model.flow.with_context(...) for contextual rewrites.")
+        raise TypeError("Lazy is an annotation marker; use Lazy[T] in @Flow.model signatures.")
 
     def __class_getitem__(cls, item):
         return Annotated[item, _LazyMarker()]
@@ -399,6 +399,11 @@ def _parse_annotation(annotation: Any) -> _ParsedAnnotation:
                 is_lazy = True
             elif isinstance(metadata, _FromContextMarker):
                 is_from_context = True
+
+    if annotation is FromContext:
+        raise TypeError("FromContext is an annotation marker; use FromContext[T] in @Flow.model signatures.")
+    if annotation is Lazy:
+        raise TypeError("Lazy is an annotation marker; use Lazy[T] in @Flow.model signatures.")
 
     return _ParsedAnnotation(base=annotation, is_lazy=is_lazy, is_from_context=is_from_context)
 

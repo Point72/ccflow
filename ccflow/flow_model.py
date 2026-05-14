@@ -45,9 +45,10 @@ File layout:
 
 import inspect
 import sys
+from abc import update_abstractmethods
 from base64 import b64decode, b64encode
 from collections import OrderedDict
-from functools import lru_cache, singledispatch, wraps
+from functools import lru_cache, wraps
 from typing import (
     Annotated,
     Any,
@@ -69,7 +70,7 @@ from typing import (
     get_type_hints,
 )
 
-from pydantic import BaseModel as PydanticModel, Field, SkipValidation, TypeAdapter, ValidationError, model_validator
+from pydantic import BaseModel as PydanticModel, Field, PrivateAttr, SkipValidation, TypeAdapter, ValidationError, create_model, model_validator
 from pydantic.errors import PydanticSchemaGenerationError, PydanticUndefinedAnnotation
 
 from ._flow_model_binding import (
@@ -193,12 +194,20 @@ class _BoundContextSpec(PydanticModel):
 class _BoundModelContext(FlowContext):
     """Flow.call carrier for BoundModel that preserves existing context objects."""
 
+    _base_context: Optional[ContextBase] = PrivateAttr(default=None)
+
     @model_validator(mode="wrap")
     @classmethod
     def _preserve_context_base(cls, value, handler, info):
         if isinstance(value, ContextBase):
             return value
         return handler(value)
+
+    @classmethod
+    def from_values(cls, values: Dict[str, Any], base_context: Optional[ContextBase] = None) -> "_BoundModelContext":
+        context = cls(**values)
+        context._base_context = base_context
+        return context
 
 
 class _DependencyIdentity(NamedTuple):
@@ -239,16 +248,7 @@ class _GeneratedModelIdentity(NamedTuple):
 class _LocalFlowModelPicklePayload(NamedTuple):
     serialized_config: Any
     factory_kwargs: Dict[str, Any]
-    model_data: Dict[str, Any]
-
-
-class _PortableBaseModelState(NamedTuple):
-    data: Dict[str, Any]
-
-
-class _PortablePydanticModelState(NamedTuple):
-    model_type: str
-    data: Dict[str, Any]
+    state_bytes: bytes
 
 
 # ---------------------------------------------------------------------------
@@ -502,11 +502,11 @@ def _serialize_context_transform_config(config: _FlowModelConfig) -> str:
 def _load_serialized_context_transform_config(serialized_config: str) -> _FlowModelConfig:
     import cloudpickle
 
-    payload = cloudpickle.loads(b64decode(serialized_config.encode("ascii")))
     try:
+        payload = cloudpickle.loads(b64decode(serialized_config.encode("ascii")))
         config = _restore_flow_model_config(payload)
-    except (TypeError, ValueError):
-        raise TypeError("Stored context transform payload does not contain a Flow.context_transform binding.")
+    except Exception as exc:
+        raise TypeError("Stored context transform payload does not contain a Flow.context_transform binding.") from exc
     return config
 
 
@@ -537,9 +537,12 @@ def _is_mapping_annotation(annotation: Any) -> bool:
         return False
 
 
-def _restore_pickled_flow_model(type_path: str, model_data: Dict[str, Any]) -> BaseModel:
-    cls = cast(type[BaseModel], PyObjectPath(type_path).object)
-    return cls.model_validate(_restore_portable_generated_model_state(model_data))
+def _restore_model_from_cloudpickled_state(cls: type[BaseModel], state_bytes: bytes) -> BaseModel:
+    import cloudpickle
+
+    obj = cls.__new__(cls)
+    obj.__setstate__(cloudpickle.loads(state_bytes))
+    return obj
 
 
 def _restore_pickled_local_flow_model(serialized_factory_payload: bytes) -> BaseModel:
@@ -554,141 +557,24 @@ def _restore_pickled_local_flow_model(serialized_factory_payload: bytes) -> Base
     # contract from the defining process; rebuild the generated class from it.
     factory = _build_flow_model_factory_from_config(config, payload.factory_kwargs)
     cls = cast(type[BaseModel], getattr(factory, "_generated_model"))
-    return cls.model_validate(_restore_portable_generated_model_state(payload.model_data))
+    return _restore_model_from_cloudpickled_state(cls, payload.state_bytes)
 
 
-def _restore_generated_flow_model(factory_path: str, model_data: Dict[str, Any]) -> BaseModel:
+def _restore_generated_flow_model(factory_path: str, state_bytes: bytes) -> BaseModel:
     """Restore a generated flow model by importing its factory function.
 
     This is the cross-process-safe restore path: importing the factory's module
     triggers the ``@Flow.model`` decorator, which re-creates the GeneratedModel
-    class.  The instance is reconstructed through normal validation data instead
-    of raw Pydantic state because raw state can embed process-local generic
-    classes.
+    class.  The instance is reconstructed from cloudpickled Pydantic state, not
+    validation data, so private attrs and ordinary user literals survive Ray
+    worker handoff. Runtime-created Pydantic generic specializations still need
+    a base serialization fix before they are portable as loose state.
     """
     factory = PyObjectPath(factory_path).object
     generated_cls = getattr(factory, "_generated_model", None)
     if generated_cls is None:
         raise ImportError(f"Cannot restore generated flow model: '{factory_path}' does not have a _generated_model attribute.")
-    return generated_cls.model_validate(_restore_portable_generated_model_state(model_data))
-
-
-@singledispatch
-def _portable_generated_model_state_value(value: Any) -> Any:
-    """Remove fragile Pydantic generic instance classes from local pickle state."""
-
-    if _is_unset_flow_input(value) or _is_model_dependency(value):
-        return value
-    return value
-
-
-@_portable_generated_model_state_value.register
-def _(value: BaseModel) -> Any:
-    if _is_model_dependency(value):
-        return value
-    return _PortableBaseModelState(data=value.model_dump(mode="python", by_alias=True))
-
-
-@_portable_generated_model_state_value.register
-def _(value: PydanticModel) -> Any:
-    if _is_model_dependency(value):
-        return value
-    return _PortablePydanticModelState(
-        model_type=str(PyObjectPath.validate(type(value))),
-        data=_portable_generated_model_state_value(value.model_dump(mode="python", by_alias=True)),
-    )
-
-
-@_portable_generated_model_state_value.register
-def _(value: tuple) -> tuple:
-    return tuple(_portable_generated_model_state_value(item) for item in value)
-
-
-@_portable_generated_model_state_value.register
-def _(value: list) -> list:
-    return [_portable_generated_model_state_value(item) for item in value]
-
-
-@_portable_generated_model_state_value.register
-def _(value: OrderedDict) -> OrderedDict:
-    return OrderedDict((key, _portable_generated_model_state_value(item)) for key, item in value.items())
-
-
-@_portable_generated_model_state_value.register
-def _(value: dict) -> dict:
-    return {key: _portable_generated_model_state_value(item) for key, item in value.items()}
-
-
-@_portable_generated_model_state_value.register
-def _(value: frozenset) -> frozenset:
-    return frozenset(_portable_generated_model_state_value(item) for item in value)
-
-
-@_portable_generated_model_state_value.register
-def _(value: set) -> set:
-    return {_portable_generated_model_state_value(item) for item in value}
-
-
-def _portable_generated_model_state(model: "_GeneratedFlowModelBase") -> Dict[str, Any]:
-    """Return validation data for a generated model without raw Pydantic state."""
-
-    data: Dict[str, Any] = {}
-    for name in type(model).model_fields:
-        value = getattr(model, name, _UNSET_FLOW_INPUT)
-        if _is_unset_flow_input(value):
-            continue
-        data[name] = _portable_generated_model_state_value(value)
-    return data
-
-
-@singledispatch
-def _restore_portable_generated_model_state_value(value: Any) -> Any:
-    return value
-
-
-@_restore_portable_generated_model_state_value.register
-def _(value: _PortableBaseModelState) -> BaseModel:
-    return BaseModel.model_validate(_restore_portable_generated_model_state_value(value.data))
-
-
-@_restore_portable_generated_model_state_value.register
-def _(value: _PortablePydanticModelState) -> PydanticModel:
-    cls = cast(type[PydanticModel], PyObjectPath(value.model_type).object)
-    return cls.model_validate(_restore_portable_generated_model_state_value(value.data))
-
-
-@_restore_portable_generated_model_state_value.register
-def _(value: tuple) -> tuple:
-    return tuple(_restore_portable_generated_model_state_value(item) for item in value)
-
-
-@_restore_portable_generated_model_state_value.register
-def _(value: list) -> list:
-    return [_restore_portable_generated_model_state_value(item) for item in value]
-
-
-@_restore_portable_generated_model_state_value.register
-def _(value: OrderedDict) -> OrderedDict:
-    return OrderedDict((key, _restore_portable_generated_model_state_value(item)) for key, item in value.items())
-
-
-@_restore_portable_generated_model_state_value.register
-def _(value: dict) -> dict:
-    return {key: _restore_portable_generated_model_state_value(item) for key, item in value.items()}
-
-
-@_restore_portable_generated_model_state_value.register
-def _(value: frozenset) -> frozenset:
-    return frozenset(_restore_portable_generated_model_state_value(item) for item in value)
-
-
-@_restore_portable_generated_model_state_value.register
-def _(value: set) -> set:
-    return {_restore_portable_generated_model_state_value(item) for item in value}
-
-
-def _restore_portable_generated_model_state(data: Dict[str, Any]) -> Dict[str, Any]:
-    return {name: _restore_portable_generated_model_state_value(value) for name, value in data.items()}
+    return _restore_model_from_cloudpickled_state(generated_cls, state_bytes)
 
 
 def _is_importable_function(func: _AnyCallable) -> bool:
@@ -839,16 +725,44 @@ def _dependency_context_for_model(model: CallableModel, context: ContextBase) ->
     return _runtime_context_for_model(model, _project_context_values_for_model(model, _context_values(context)))
 
 
+def _bound_model_default_base_context(bound_model: "BoundModel") -> Optional[ContextBase]:
+    """Return the wrapped plain model's default context object when one exists."""
+
+    contract = _model_context_contract(bound_model.model)
+    if contract.generated_model is not None:
+        return None
+    default_context = _plain_model_default_context(bound_model.model)
+    if default_context is _UNSET or default_context is None:
+        return None
+    if isinstance(default_context, ContextBase) and _context_matches_type(default_context, bound_model.model.context_type):
+        return default_context
+    return contract.runtime_context_type.model_validate(default_context)
+
+
+def _bound_model_ambient_context(bound_model: "BoundModel", values: Dict[str, Any]) -> _BoundModelContext:
+    """Return the ambient carrier a bound wrapper should rewrite."""
+
+    base_context = _bound_model_default_base_context(bound_model)
+    if base_context is not None:
+        ambient = _context_values(base_context)
+        ambient.update(values)
+        return _BoundModelContext.from_values(ambient, base_context=base_context)
+    return _BoundModelContext.from_values(values)
+
+
 def _resolved_dependency_invocation(value: CallableModel, context: ContextBase) -> Tuple[CallableModel, ContextBase]:
     """Return the concrete ``(model, context)`` pair for a dependency call.
 
     Bound models must receive the full ambient ``FlowContext`` so their binding
-    transforms can read source fields before narrowing to the wrapped model's
-    context.  Unbound dependencies can be projected immediately.
+    transforms can read source fields before narrowing to the wrapped model's.
+    If the wrapper targets a handwritten model with a decorated default context,
+    dependency execution uses the same default baseline as ``bound.flow.compute``.
+    Unbound dependencies can be projected immediately.
     """
 
     if isinstance(value, BoundModel):
-        return value, FlowContext(**_context_values(context))
+        values = {} if context is None else _context_values(context)
+        return value, _bound_model_ambient_context(value, values)
     return value, _dependency_context_for_model(value, context)
 
 
@@ -1474,17 +1388,13 @@ def _bound_context_transform_regular_kwargs(config: _FlowModelConfig, binding: C
 
 
 def _evaluate_static_context_transform(binding: ContextTransform) -> Any:
-    """Evaluate a transform at binding time if it has no required contextual inputs."""
+    """Evaluate a transform only when it has no contextual inputs at all."""
 
     config = _load_context_transform_config_from_binding(binding)
-    kwargs = _bound_context_transform_regular_kwargs(config, binding)
-
-    for param in config.contextual_params:
-        if param.has_function_default:
-            kwargs[param.name] = param.function_default
-            continue
+    if config.contextual_params:
         return _UNSET
 
+    kwargs = _bound_context_transform_regular_kwargs(config, binding)
     return config.func(**kwargs)
 
 
@@ -1558,14 +1468,15 @@ def _merge_context_input_types(target: Dict[str, Any], updates: Dict[str, Any]) 
         target[name] = annotation
 
 
-def _merge_dynamic_context_operation_inputs(
-    target: Dict[str, Any], model: CallableModel, context_spec: _BoundContextSpec, *, required_only: bool
-) -> None:
+def _dynamic_context_operation_effects(context_spec: _BoundContextSpec, *, required_only: bool) -> Tuple[Set[str], Dict[str, Any]]:
+    supplied_fields: Set[str] = set()
+    input_types: Dict[str, Any] = {}
+
     for operation in _effective_context_operations(context_spec):
         if isinstance(operation, PatchContextOperation):
             patch_result = _evaluate_static_context_transform(operation.binding)
             if patch_result is _UNSET:
-                _merge_context_input_types(target, _context_transform_input_types(operation.binding, required_only=required_only))
+                _merge_context_input_types(input_types, _context_transform_input_types(operation.binding, required_only=required_only))
                 continue
             continue
 
@@ -1574,9 +1485,11 @@ def _merge_dynamic_context_operation_inputs(
 
         value = _evaluate_static_context_transform(operation.spec)
         if value is _UNSET:
-            target.pop(operation.name, None)
-            _merge_context_input_types(target, _context_transform_input_types(operation.spec, required_only=required_only))
+            supplied_fields.add(operation.name)
+            _merge_context_input_types(input_types, _context_transform_input_types(operation.spec, required_only=required_only))
             continue
+
+    return supplied_fields, input_types
 
 
 def _validate_static_context_spec_declared_context(model: CallableModel, context_spec: _BoundContextSpec) -> _BoundContextSpec:
@@ -1699,6 +1612,18 @@ def _normalize_with_context(model: CallableModel, patches: Tuple[Any, ...], fiel
 # ---------------------------------------------------------------------------
 
 
+def _context_from_values_preserving_private_state(context: ContextBase, values: Dict[str, Any]) -> ContextBase:
+    """Validate updated public values while preserving private context state."""
+
+    if values == _context_values(context):
+        return context
+    validated = type(context).model_validate(values)
+    private = getattr(context, "__pydantic_private__", None)
+    if private is not None:
+        object.__setattr__(validated, "__pydantic_private__", dict(private))
+    return validated
+
+
 def _apply_context_spec_values(model: CallableModel, context_spec: _BoundContextSpec, context: ContextBase) -> Dict[str, Any]:
     """Apply a binding spec at execution time and return rewritten context values."""
 
@@ -1725,6 +1650,9 @@ def _apply_context_spec(model: CallableModel, context_spec: _BoundContextSpec, c
 
     if not context_spec.operations:
         if isinstance(context, _BoundModelContext):
+            if context._base_context is not None:
+                values = _project_context_values_for_model(model, _context_values(context))
+                return _context_from_values_preserving_private_state(context._base_context, values)
             return _dependency_context_for_model(model, context)
         if _context_matches_type(context, model.context_type):
             return context
@@ -1732,10 +1660,63 @@ def _apply_context_spec(model: CallableModel, context_spec: _BoundContextSpec, c
 
     values = _apply_context_spec_values(model, context_spec, context)
     if isinstance(context, _BoundModelContext):
-        return _runtime_context_for_model(model, _project_context_values_for_model(model, values))
+        values = _project_context_values_for_model(model, values)
+        if context._base_context is not None:
+            return _context_from_values_preserving_private_state(context._base_context, values)
+        return _runtime_context_for_model(model, values)
     if _context_matches_type(context, model.context_type):
-        return type(context).model_validate(values)
+        return _context_from_values_preserving_private_state(context, values)
     return _runtime_context_for_model(model, _project_context_values_for_model(model, values))
+
+
+def _plain_model_default_context(model: CallableModel) -> Any:
+    call = getattr(type(model), "__call__", None)
+    wrapped = getattr(call, "__wrapped__", None)
+    if wrapped is None:
+        return _UNSET
+    try:
+        parameter = inspect.signature(wrapped).parameters.get("context")
+    except (TypeError, ValueError):
+        return _UNSET
+    if parameter is None or parameter.default is inspect.Signature.empty:
+        return _UNSET
+    return parameter.default
+
+
+def _plain_model_default_context_values(
+    model: CallableModel,
+    runtime_context_type: Type[ContextBase],
+) -> Optional[Dict[str, Any]]:
+    default_context = _plain_model_default_context(model)
+    if default_context is _UNSET:
+        return None
+    if default_context is None:
+        if _is_optional_context_type(model.context_type):
+            return {}
+        return _context_values(runtime_context_type.model_validate(default_context))
+    if isinstance(default_context, ContextBase):
+        return _context_values(default_context)
+    return _context_values(runtime_context_type.model_validate(default_context))
+
+
+def _plain_model_compute_context_from_default(
+    model: CallableModel,
+    default_context: Any,
+    default_values: Dict[str, Any],
+    kwargs: Dict[str, Any],
+    runtime_context_type: Type[ContextBase],
+) -> Optional[ContextBase]:
+    if default_context is None and not kwargs and _is_optional_context_type(model.context_type):
+        return None
+
+    if isinstance(default_context, ContextBase) and _context_matches_type(default_context, model.context_type):
+        values = dict(default_values)
+        values.update(kwargs)
+        return _context_from_values_preserving_private_state(default_context, values)
+
+    values = dict(default_values)
+    values.update(kwargs)
+    return runtime_context_type.model_validate(values)
 
 
 def _build_compute_context(model: CallableModel, context: Any, kwargs: Dict[str, Any]) -> Optional[ContextBase]:
@@ -1766,6 +1747,10 @@ def _build_compute_context(model: CallableModel, context: Any, kwargs: Dict[str,
         return contract.runtime_context_type.model_validate(context)
 
     if contract.generated_model is None:
+        default_context = _plain_model_default_context(model)
+        if default_context is not _UNSET:
+            default_values = _plain_model_default_context_values(model, contract.runtime_context_type)
+            return _plain_model_compute_context_from_default(model, default_context, default_values, kwargs, contract.runtime_context_type)
         if not kwargs and _ctx_is_optional:
             return None
         return contract.runtime_context_type.model_validate(kwargs)
@@ -1831,7 +1816,7 @@ def _build_bound_compute_context(bound_model: "BoundModel", context: Any, kwargs
         return context
     if not kwargs and _bound_model_preserves_none_context(bound_model):
         return None
-    return FlowContext(**kwargs)
+    return _bound_model_ambient_context(bound_model, kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -1883,7 +1868,14 @@ class FlowAPI:
         if contract.generated_model is None and _is_optional_context_type(self._model.context_type):
             return {}
         if contract.generated_model is None:
-            return {} if contract.input_types is None else {name: contract.input_types[name] for name in contract.required_names}
+            if contract.input_types is None:
+                return {}
+            result = {name: contract.input_types[name] for name in contract.required_names}
+            default_values = _plain_model_default_context_values(self._model, contract.runtime_context_type)
+            if default_values is not None:
+                for name in default_values:
+                    result.pop(name, None)
+            return result
 
         generated = contract.generated_model
         config = type(generated).__flow_model_config__
@@ -1947,9 +1939,6 @@ class BoundModel(WrapperModel):
     """
 
     context_spec: _BoundContextSpec = Field(default_factory=_BoundContextSpec, repr=False)
-
-    def __reduce__(self):
-        return (_restore_pickled_flow_model, (str(PyObjectPath.validate(type(self))), _portable_generated_model_state(self)))
 
     def _rewrite_context(self, context: ContextBase) -> ContextBase:
         """Apply this wrapper's context bindings to an ambient runtime context."""
@@ -2048,7 +2037,10 @@ class _BoundFlowAPI(FlowAPI):
         result = super().context_inputs
         for name in _statically_resolved_context_field_names(self._bound.model, self._bound.context_spec):
             result.pop(name, None)
-        _merge_dynamic_context_operation_inputs(result, self._bound.model, self._bound.context_spec, required_only=False)
+        supplied_fields, dynamic_inputs = _dynamic_context_operation_effects(self._bound.context_spec, required_only=False)
+        for name in supplied_fields:
+            result.pop(name, None)
+        _merge_context_input_types(result, dynamic_inputs)
         return result
 
     @property
@@ -2062,7 +2054,16 @@ class _BoundFlowAPI(FlowAPI):
         result = super().required_inputs
         for name in _statically_resolved_context_field_names(self._bound.model, self._bound.context_spec):
             result.pop(name, None)
-        _merge_dynamic_context_operation_inputs(result, self._bound.model, self._bound.context_spec, required_only=True)
+        supplied_fields, dynamic_inputs = _dynamic_context_operation_effects(self._bound.context_spec, required_only=True)
+        for name in supplied_fields:
+            result.pop(name, None)
+        _merge_context_input_types(result, dynamic_inputs)
+        contract = _model_context_contract(self._bound.model)
+        if contract.generated_model is None:
+            default_values = _plain_model_default_context_values(self._bound.model, contract.runtime_context_type)
+            if default_values is not None:
+                for name in default_values:
+                    result.pop(name, None)
         return result
 
     def with_context(self, *patches, **field_overrides) -> BoundModel:
@@ -2084,19 +2085,25 @@ class _GeneratedFlowModelBase(CallableModel):
         """Prefer import-path restoration, falling back to serialized local factories."""
 
         config = type(self).__flow_model_config__
-        factory_path = _generated_model_factory_path_for_pickle(config, type(self))
-        if factory_path is not None:
-            return (_restore_generated_flow_model, (factory_path, _portable_generated_model_state(self)))
         import cloudpickle
 
+        state_bytes = cloudpickle.dumps(self.__getstate__(), protocol=5)
+        factory_path = _generated_model_factory_path_for_pickle(config, type(self))
+        if factory_path is not None:
+            return (_restore_generated_flow_model, (factory_path, state_bytes))
+
         # Local generated classes are not normal importable class definitions:
-        # plain pickle cannot reconstruct them, and cloudpickle would otherwise
-        # walk generated signatures/model metadata that can contain fragile
-        # runtime-only annotations such as GenericResult[int].
+        # plain pickle cannot reconstruct them, and Ray workers should not
+        # re-run fragile annotation resolution.  Carry the analyzed contract
+        # separately, but keep instance state as Pydantic pickle state so user
+        # literals and private attrs survive cloudpickle.  Runtime-created
+        # Pydantic generic specializations such as GenericResult[int] still need
+        # a base serialization fix before they are portable across fresh
+        # processes when they appear as loose user state.
         payload = _LocalFlowModelPicklePayload(
             serialized_config=_serialize_flow_model_config(config),
             factory_kwargs=type(self).__flow_model_factory_kwargs__,
-            model_data=_portable_generated_model_state(self),
+            state_bytes=state_bytes,
         )
         return (_restore_pickled_local_flow_model, (cloudpickle.dumps(payload, protocol=5),))
 
@@ -2307,7 +2314,7 @@ def _context_transform_factory_signature(config: _FlowModelConfig) -> inspect.Si
                 default=param.function_default if param.has_function_default else inspect.Parameter.empty,
             )
         )
-    return inspect.Signature(parameters=parameters, return_annotation=ContextTransform)
+    return inspect.Signature(parameters=parameters)
 
 
 def _resolve_generated_model_bases(model_base: Type[CallableModel]) -> Tuple[type, ...]:
@@ -2333,35 +2340,37 @@ def _build_flow_model_factory_from_config(config: _FlowModelConfig, factory_kwar
     # restore.  See ``_flow_model_config_identity`` for why this must be fixed at
     # class-construction time instead of recalculated on every cache-key build.
     config_identity = factory_kwargs.setdefault("_flow_model_identity", _flow_model_config_identity(config))
-    annotations: Dict[str, Any] = {}
-    namespace: Dict[str, Any] = {
-        "__module__": getattr(fn, "__module__", __name__),
-        "__qualname__": f"_{_callable_name(fn)}_Model",
-        "__call__": Flow.call(
-            **{
-                name: value
-                for name in ("cacheable", "volatile", "log_level", "validate_result", "verbose", "evaluator")
-                if (value := factory_kwargs.get(name, _UNSET)) is not _UNSET
-            }
-        )(_make_call_impl(config)),
-        "__deps__": Flow.deps(_make_deps_impl(config)),
-    }
+    field_definitions: Dict[str, Any] = {}
 
     for param in config.parameters:
-        annotations[param.name] = _generated_field_annotation(param)
+        annotation = _generated_field_annotation(param)
         if param.is_contextual:
-            namespace[param.name] = Field(default_factory=_unset_flow_input_factory, exclude_if=_is_unset_flow_input)
+            default = Field(default_factory=_unset_flow_input_factory, exclude_if=_is_unset_flow_input)
         elif param.has_function_default:
-            namespace[param.name] = param.function_default
+            default = param.function_default
         else:
-            namespace[param.name] = Field(default_factory=_unset_flow_input_factory, exclude_if=_is_unset_flow_input)
-
-    namespace["__annotations__"] = annotations
+            default = Field(default_factory=_unset_flow_input_factory, exclude_if=_is_unset_flow_input)
+        field_definitions[param.name] = (annotation, default)
 
     GeneratedModel = cast(
         type[_GeneratedFlowModelBase],
-        type(f"_{_callable_name(fn)}_Model", _resolve_generated_model_bases(model_base), namespace),
+        create_model(
+            f"_{_callable_name(fn)}_Model",
+            __base__=_resolve_generated_model_bases(model_base),
+            __module__=getattr(fn, "__module__", __name__),
+            __qualname__=f"_{_callable_name(fn)}_Model",
+            **field_definitions,
+        ),
     )
+    GeneratedModel.__call__ = Flow.call(
+        **{
+            name: value
+            for name in ("cacheable", "volatile", "log_level", "validate_result", "verbose", "evaluator")
+            if (value := factory_kwargs.get(name, _UNSET)) is not _UNSET
+        }
+    )(_make_call_impl(config))
+    GeneratedModel.__deps__ = Flow.deps(_make_deps_impl(config))
+    update_abstractmethods(GeneratedModel)
     GeneratedModel.__flow_model_config__ = config
     GeneratedModel.__flow_model_factory_kwargs__ = factory_kwargs
     GeneratedModel.__flow_model_identity__ = config_identity
@@ -2381,7 +2390,7 @@ def _build_flow_model_factory_from_config(config: _FlowModelConfig, factory_kwar
     return factory
 
 
-def flow_context_transform(func: Optional[_AnyCallable] = None) -> _AnyCallable:
+def _flow_context_transform(func: Optional[_AnyCallable] = None) -> _AnyCallable:
     """Decorator that turns a function into a serializable ``with_context`` transform factory.
 
     Regular parameters are bound when the transform factory is called.

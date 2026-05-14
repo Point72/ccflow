@@ -246,6 +246,45 @@ def test_bound_flow_api_rejects_conflicting_runtime_input_annotations():
         bound.flow.runtime_inputs
 
 
+def test_bound_flow_api_keeps_dynamic_transform_source_inputs_after_later_field_bindings():
+    @Flow.model
+    def add(x: FromContext[int], y: FromContext[int]) -> int:
+        return x + y
+
+    @Flow.context_transform
+    def from_y(y: FromContext[int]) -> int:
+        return y + 1
+
+    @Flow.context_transform
+    def from_x(x: FromContext[int]) -> int:
+        return x + 10
+
+    bound = add().flow.with_context(x=from_y()).flow.with_context(y=from_x())
+
+    assert bound.flow.context_inputs == {"x": int, "y": int}
+    assert bound.flow.runtime_inputs == {"x": int, "y": int}
+    assert bound.flow.required_inputs == {"x": int, "y": int}
+    assert bound.flow.compute(x=1, y=2).value == 14
+
+
+def test_bound_flow_api_reports_optional_transform_context_inputs_as_runtime_only():
+    @Flow.model
+    def add(a: FromContext[int], b: FromContext[int]) -> int:
+        return a + b
+
+    @Flow.context_transform
+    def seed_plus_one(seed: FromContext[int] = 0) -> int:
+        return seed + 1
+
+    bound = add().flow.with_context(b=seed_plus_one())
+
+    assert bound.flow.runtime_inputs == {"a": int, "seed": int}
+    assert bound.flow.required_inputs == {"a": int}
+    assert bound.flow.bound_inputs == {}
+    assert bound.flow.compute(a=10).value == 11
+    assert bound.flow.compute(a=10, seed=5).value == 16
+
+
 def test_bound_model_rejects_regular_field_context_overrides():
     @Flow.model
     def add(a: int, b: FromContext[int]) -> int:
