@@ -350,12 +350,12 @@ Key rules:
   multiple fields must move together, put that logic inside one patch
   transform.
 
-Context transforms serialize enough function metadata for bound models to move
-through pickle and Ray workers. Importable module-level transforms may serialize
-by module path, while local, nested, `__main__`, and notebook-defined transforms
-use an embedded cloudpickle payload. For long-lived YAML/JSON configuration,
-prefer small importable module functions and inspect the generated config shape
-before treating it as a stable hand-written config format.
+Context transforms serialize the analyzed transform contract directly so bound
+models can move through pickle and Ray workers without re-resolving annotations
+from the defining module. This applies to importable module functions, local
+functions, nested functions, `__main__`, and notebook-defined transforms. For
+long-lived YAML/JSON configuration, inspect the generated config shape before
+treating it as a stable hand-written config format.
 
 ## `context_type=...`
 

@@ -247,31 +247,21 @@ def test_module_level_flow_model_examples_and_transforms_execute():
     assert add().flow.with_context(static_patch()).flow.compute(a=1).value == 2
 
 
-def test_context_transform_internal_error_and_repr_paths():
+def test_context_transform_internal_error_and_repr_payloads():
     assert flow_model_module._context_transform_repr(static_patch()) == "static_patch()"
     assert flow_model_module._context_transform_repr(increment_b(amount=2)) == "increment_b(amount=2)"
     assert flow_model_module._context_transform_repr(123) == "123"
     importable_increment_b = Flow.context_transform(increment_b.__wrapped__)
     importable_config = flow_model_module._load_context_transform_config_from_binding(importable_increment_b(amount=1))
-    assert importable_config.path is not None
+    assert importable_config.func.__name__ == "increment_b"
     assert flow_model_module._context_transform_identifier(importable_increment_b(amount=1)) == "increment_b"
 
-    with pytest.raises(ValidationError, match="exactly one"):
+    with pytest.raises(ValidationError, match="serialized_config"):
         flow_model_module.ContextTransform()
-
-    with pytest.raises(ValidationError, match="exactly one"):
-        flow_model_module.ContextTransform(path="ccflow.tests.test_flow_model.increment_b", serialized_config="also-set")
-
-    with pytest.raises(TypeError, match="does not resolve to a Flow.context_transform binding"):
-        flow_model_module._load_context_transform_config("ccflow.tests.test_flow_model.lazy_context_transform_for_rejection")
 
     invalid_payload = base64.b64encode(pickle.dumps({"not": "a config"}, protocol=5)).decode("ascii")
     with pytest.raises(TypeError, match="payload does not contain"):
         flow_model_module._load_serialized_context_transform_config(invalid_payload)
-
-    invalid_binding = flow_model_module.ContextTransform.model_construct(path=None, serialized_config=None, bound_args={})
-    with pytest.raises(TypeError, match="neither path nor serialized_config"):
-        flow_model_module._load_context_transform_config_from_binding(invalid_binding)
 
     with pytest.raises(ImportError, match="does not have a _generated_model"):
         flow_model_module._restore_generated_flow_model("ccflow.tests.test_flow_model.lazy_context_transform_for_rejection", {})
@@ -1710,7 +1700,6 @@ def test_context_transform_serializes_embedded_config_and_bound_args():
     binding = transform_factory(amount=3)
     assert isinstance(binding, flow_model_module.ContextTransform)
     assert binding.kind == "context_transform"
-    assert binding.path is None
     assert binding.serialized_config is not None
     assert binding.bound_args == {"amount": 3}
 
@@ -1739,7 +1728,6 @@ def test_context_transform_direct_call_uses_serialized_payload_when_original_bin
     transform_factory = Flow.context_transform(increment)
     binding = transform_factory()
 
-    assert binding.path is None
     assert binding.serialized_config is not None
 
     @Flow.model
@@ -1779,7 +1767,6 @@ def test_context_transform_supports_nested_functions_with_serialized_payload():
         return b + amount
 
     binding = nested_transform(amount=3)
-    assert binding.path is None
     assert binding.serialized_config is not None
 
     bound = add(a=1).flow.with_context(b=binding)
@@ -1800,7 +1787,6 @@ def test_context_transform_supports_non_importable_main_functions_with_serialize
 
     transformed = Flow.context_transform(main_transform)
     binding = transformed()
-    assert binding.path is None
     assert binding.serialized_config is not None
 
     bound = add(a=1).flow.with_context(b=binding)

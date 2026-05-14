@@ -290,7 +290,7 @@ def test_bound_model_json_roundtrip_preserves_context_transforms():
     bound = add(a=10).flow.with_context(b=offset_b(amount=1))
     dumped = bound.model_dump(mode="json")
     binding = dumped["context_spec"]["operations"][0]["spec"]
-    assert binding["path"] is not None or binding["serialized_config"] is not None
+    assert binding["serialized_config"] is not None
 
     restored = type(bound).model_validate(dumped)
     assert restored.flow.compute(b=4).value == 15

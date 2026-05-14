@@ -14,7 +14,6 @@ from typing import Annotated, Any, Callable, Dict, Literal, NamedTuple, Optional
 
 from .base import ContextBase, ResultBase
 from .context import FlowContext
-from .exttypes import PyObjectPath
 from .local_persistence import create_ccflow_model
 from .result import GenericResult
 
@@ -105,7 +104,6 @@ class _FlowModelConfig:
     auto_unwrap: bool
     parameters: Tuple[_FlowModelParam, ...]
     declared_context_type: Optional[Type[ContextBase]] = None
-    path: Optional[PyObjectPath] = None
     _regular_params: Tuple[_FlowModelParam, ...] = field(init=False, repr=False)
     _contextual_params: Tuple[_FlowModelParam, ...] = field(init=False, repr=False)
     _regular_param_names: Tuple[str, ...] = field(init=False, repr=False)
@@ -182,7 +180,6 @@ class _SerializedFlowModelConfig(NamedTuple):
     auto_unwrap: bool
     parameters: Tuple[_SerializedFlowModelParam, ...]
     declared_context_type: _SerializedAnnotation
-    path: Optional[PyObjectPath]
 
 
 def _callable_name(func: _AnyCallable) -> str:
@@ -336,7 +333,6 @@ def _serialize_flow_model_config(config: _FlowModelConfig) -> _SerializedFlowMod
         auto_unwrap=config.auto_unwrap,
         parameters=tuple(_serialize_flow_model_param(param) for param in config.parameters),
         declared_context_type=_serialize_annotation(config.declared_context_type),
-        path=config.path,
     )
 
 
@@ -352,7 +348,6 @@ def _restore_flow_model_config(payload: _SerializedFlowModelConfig) -> _FlowMode
         auto_unwrap=payload.auto_unwrap,
         parameters=tuple(_restore_flow_model_param(param) for param in payload.parameters),
         declared_context_type=_restore_annotation(payload.declared_context_type),
-        path=payload.path,
     )
 
 
@@ -647,7 +642,6 @@ def _analyze_flow_context_transform(
         auto_wrap_result=False,
         auto_unwrap=False,
         parameters=parameters,
-        path=PyObjectPath(f"{getattr(fn, '__module__', __name__)}.{_callable_name(fn)}"),
     )
 
 

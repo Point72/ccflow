@@ -148,21 +148,14 @@ _ModelContextContract = NamedTuple(
 class ContextTransform(PydanticModel):
     """Serializable binding produced by ``@Flow.context_transform``.
 
-    Transform bindings store either an import path or a cloudpickled config
-    payload so bound models can survive pickle, cloudpickle, and Ray round
-    trips.
+    Transform bindings store the analyzed transform contract directly. We avoid
+    import-path restore here because decorators usually run before the module
+    global points at the returned transform factory.
     """
 
     kind: Literal["context_transform"] = "context_transform"
-    path: Optional[PyObjectPath] = None
-    serialized_config: Optional[str] = None
+    serialized_config: str
     bound_args: Dict[str, Any] = Field(default_factory=dict)
-
-    @model_validator(mode="after")
-    def _validate_location(self):
-        if (self.path is None) == (self.serialized_config is None):
-            raise ValueError("ContextTransform must define exactly one of path or serialized_config.")
-        return self
 
 
 class StaticValueSpec(PydanticModel):
@@ -280,8 +273,6 @@ def _context_transform_repr(transform: Any) -> str:
 
 
 def _context_transform_identifier(binding: ContextTransform) -> str:
-    if binding.path is not None:
-        return str(binding.path)
     return _callable_name(_load_context_transform_config_from_binding(binding).func)
 
 
@@ -502,20 +493,6 @@ def _ensure_named_python_function(fn: _AnyCallable, *, decorator_name: str) -> N
 # ---------------------------------------------------------------------------
 
 
-@lru_cache(maxsize=None)
-def _load_context_transform_factory(path: str) -> _AnyCallable:
-    return PyObjectPath(path).object
-
-
-@lru_cache(maxsize=None)
-def _load_context_transform_config(path: str) -> _FlowModelConfig:
-    factory = _load_context_transform_factory(path)
-    config = getattr(factory, "__flow_context_transform_config__", None)
-    if not isinstance(config, _FlowModelConfig):
-        raise TypeError(f"Stored context transform path '{path}' does not resolve to a Flow.context_transform binding.")
-    return config
-
-
 def _serialize_context_transform_config(config: _FlowModelConfig) -> str:
     import cloudpickle
 
@@ -536,10 +513,6 @@ def _load_serialized_context_transform_config(serialized_config: str) -> _FlowMo
 
 
 def _load_context_transform_config_from_binding(binding: ContextTransform) -> _FlowModelConfig:
-    if binding.path is not None:
-        return _load_context_transform_config(str(binding.path))
-    if binding.serialized_config is None:
-        raise TypeError("ContextTransform has neither path nor serialized_config.")
     return _load_serialized_context_transform_config(binding.serialized_config)
 
 
@@ -548,8 +521,6 @@ def clear_flow_model_caches() -> None:
 
     _HASHABLE_TYPE_ADAPTER_CACHE.clear()
     _UNHASHABLE_TYPE_ADAPTER_CACHE.clear()
-    _load_context_transform_factory.cache_clear()
-    _load_context_transform_config.cache_clear()
     _load_serialized_context_transform_config.cache_clear()
 
 
@@ -2443,7 +2414,6 @@ def flow_context_transform(func: Optional[_AnyCallable] = None) -> _AnyCallable:
             """Bind regular transform arguments into a serializable spec."""
 
             return ContextTransform(
-                path=None,
                 serialized_config=serialized_config,
                 bound_args=_validate_context_transform_factory_kwargs(config, kwargs),
             )
