@@ -114,6 +114,10 @@ model = add(a=load_value(offset=5))
 assert model.flow.compute(value=7, b=12).value == 24
 ```
 
+Only direct regular-parameter values are treated as upstream dependencies in
+this first version. Containers such as `list`, `tuple`, and `dict` are ordinary
+literal values; `@Flow.model` does not scan them for nested models.
+
 ### Contextual Parameters
 
 Contextual parameters are the ones marked with `FromContext[...]`.
@@ -323,7 +327,7 @@ custom = current.flow.with_context(
 )
 
 delta = visitor_delta(current=current, previous=previous)
-result = delta(DateRangeContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31)))
+result = delta.flow.compute(DateRangeContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 31)))
 ```
 
 In this example, `current` and `previous` share the same underlying
@@ -346,11 +350,12 @@ Key rules:
   multiple fields must move together, put that logic inside one patch
   transform.
 
-Importable transform functions are stored by module path. Local, nested,
-`__main__`, and notebook-defined transform functions are stored with an
-embedded cloudpickle payload so bound models can still move through pickle and
-Ray workers. For long-lived YAML/JSON configuration, prefer importable module
-functions so the serialized config stays small and inspectable.
+Context transforms serialize enough function metadata for bound models to move
+through pickle and Ray workers. Importable module-level transforms may serialize
+by module path, while local, nested, `__main__`, and notebook-defined transforms
+use an embedded cloudpickle payload. For long-lived YAML/JSON configuration,
+prefer small importable module functions and inspect the generated config shape
+before treating it as a stable hand-written config format.
 
 ## `context_type=...`
 
@@ -387,12 +392,36 @@ keyword-only parameters, see `Flow.call(auto_context=...)` in
 
 ## Introspection APIs
 
-Generated models expose three useful introspection helpers:
+Flow models expose a few useful introspection helpers:
 
-- `model.flow.context_inputs`: the full contextual contract,
-- `model.flow.unbound_inputs`: the contextual fields still required at runtime,
-- `model.flow.bound_inputs`: regular bound inputs plus any construction-time
-  contextual defaults.
+- `model.flow.context_inputs`: the declared contextual contract for the model
+  or wrapped model,
+- `model.flow.runtime_inputs`: direct runtime context inputs this model or
+  wrapper may read after applying its own bindings,
+- `model.flow.required_inputs`: required direct runtime context inputs that are
+  not already satisfied by defaults or bindings,
+- `model.flow.bound_inputs`: concrete values already fixed on the model, such
+  as regular construction-time inputs, construction-time contextual defaults,
+  and literal keyword `with_context(field=value)` bindings.
+
+`context_inputs` intentionally stays faithful to the model's declared contract.
+For bound models, `with_context(...)` bindings are reflected in
+`runtime_inputs`, `required_inputs`, and `bound_inputs`. Literal bindings
+satisfy their target fields. Transform bindings with runtime inputs add those
+source context inputs to the effective runtime view. Static transforms, meaning
+transforms whose inputs are already available, may be evaluated during
+introspection so their output fields can be reported precisely.
+`required_inputs` is always the required subset of `runtime_inputs`; if multiple
+bindings expose the same runtime context field with conflicting annotations,
+introspection raises an error instead of silently choosing one.
+
+These helpers report the direct API for the current model or wrapper. They do
+not recursively expand every contextual input used by upstream dependencies in a
+larger graph.
+
+Because these helpers may evaluate static `@Flow.context_transform` functions,
+context transforms should be deterministic, side-effect-free, and cheap. This is
+the same practical contract expected by cache identity and dependency analysis.
 
 Example:
 
@@ -407,9 +436,28 @@ def add(a: int, b: FromContext[int], c: FromContext[int] = 5) -> int:
 
 model = add(a=10)
 assert model.flow.context_inputs == {"b": int, "c": int}
-assert model.flow.unbound_inputs == {"b": int}
+assert model.flow.runtime_inputs == {"b": int, "c": int}
+assert model.flow.required_inputs == {"b": int}
 assert model.flow.bound_inputs == {"a": 10}
+
+
+@Flow.context_transform
+def from_seed(seed: FromContext[int]) -> int:
+    return seed + 1
+
+
+bound = add(a=10).flow.with_context(b=from_seed())
+assert bound.flow.context_inputs == {"b": int, "c": int}
+assert bound.flow.runtime_inputs == {"c": int, "seed": int}
+assert bound.flow.required_inputs == {"seed": int}
+assert bound.flow.bound_inputs == {"a": 10}
 ```
+
+In the bound example, `b` remains in `context_inputs` because `add` still
+declares `b` as part of its contextual contract. It is absent from
+`runtime_inputs` because this wrapper supplies `b` from `from_seed()`. `seed`
+appears in `runtime_inputs` because the transform reads it from the caller's
+runtime context.
 
 ## Lazy Dependencies
 
@@ -477,8 +525,15 @@ time.
 
 **A contextual parameter still shows up in `context_inputs` after I bound it**
 
-That is expected. `context_inputs` reports the full contextual contract.
-`unbound_inputs` reports only the contextual values still needed at runtime.
+That is expected. `context_inputs` reports the declared contextual contract of
+the model or wrapped model. It does not mean the current wrapper still requires
+the caller to provide that field.
+
+Use `runtime_inputs` to see the effective direct runtime context inputs after
+`with_context(...)` bindings. Use `required_inputs` to see what still must be
+provided by the caller. Static transforms may be evaluated during introspection,
+so their output fields can be removed from `runtime_inputs` and
+`required_inputs` or added to `bound_inputs`.
 
 **A shared dependency runs more than once**
 

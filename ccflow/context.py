@@ -5,7 +5,7 @@ from datetime import date, datetime
 from typing import Any, Generic, Hashable, Optional, Sequence, Set, TypeVar
 
 from deprecated import deprecated
-from pydantic import ConfigDict, PrivateAttr, field_validator, model_validator
+from pydantic import ConfigDict, field_validator, model_validator
 
 from .base import ContextBase
 from .exttypes import Frequency
@@ -97,7 +97,8 @@ class FlowContext(ContextBase):
 
     Instead of generating a new ContextBase subclass for each @Flow.model,
     this single class with extra="allow" serves as the universal carrier.
-    Validation happens via TypedDict + TypeAdapter at compute() time.
+    Validation happens against the generated model's declared contextual input
+    types at compute() time.
 
     This design avoids:
     - Proliferation of dynamic _funcname_Context classes
@@ -106,13 +107,9 @@ class FlowContext(ContextBase):
     """
 
     model_config = ConfigDict(extra="allow", frozen=True)
-    _frozen_hash_key: Hashable | None = PrivateAttr(default=None)
-    _hash_value: int | None = PrivateAttr(default=None)
 
     def _hash_key(self) -> Hashable:
-        if self._frozen_hash_key is None:
-            self._frozen_hash_key = _freeze_for_hash(self.model_dump(mode="python"))
-        return self._frozen_hash_key
+        return _freeze_for_hash(self.model_dump(mode="python"))
 
     def __eq__(self, other: Any) -> bool:
         if self is other:
@@ -122,9 +119,7 @@ class FlowContext(ContextBase):
         return self._hash_key() == other._hash_key()
 
     def __hash__(self) -> int:
-        if self._hash_value is None:
-            self._hash_value = hash(self._hash_key())
-        return self._hash_value
+        return hash(self._hash_key())
 
 
 def _freeze_for_hash(value: Any) -> Hashable:
@@ -139,8 +134,6 @@ def _freeze_for_hash(value: Any) -> Hashable:
     try:
         hash(value)
     except TypeError as exc:
-        if hasattr(value, "__dict__"):
-            return (type(value), _freeze_for_hash(vars(value)))
         raise TypeError(f"FlowContext contains an unhashable value of type {type(value).__name__}: {value!r}") from exc
     return value
 

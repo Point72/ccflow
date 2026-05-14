@@ -432,7 +432,11 @@ class FlowOptionsOverride(BaseModel):
 class Flow(PydanticBaseModel):
     @staticmethod
     def call(*args, **kwargs):
-        """Decorator for methods on callable models"""
+        """Decorator for methods on callable models.
+
+        Pass ``auto_context=True`` or a ``ContextBase`` subclass to derive the
+        method context from annotated parameters.
+        """
         auto_context = kwargs.pop("auto_context", False)
 
         if auto_context is not False:
@@ -477,65 +481,23 @@ class Flow(PydanticBaseModel):
 
     @staticmethod
     def model(*args, **kwargs):
-        """Decorator that generates a CallableModel class from a plain Python function.
+        """Generate a ``CallableModel`` factory from a typed Python function.
 
-        The generated model participates in the normal CallableModel execution
-        path, including evaluation, caching, dependency discovery, registry use,
-        and serialization. The function signature declares both the model's
-        construction-time inputs and its runtime/contextual inputs.
+        Unmarked function parameters become construction-time model inputs.
+        They can be bound to literal values or to upstream ``CallableModel``
+        dependencies. Parameters annotated as ``FromContext[T]`` are runtime
+        inputs supplied by ``model.flow.compute(...)``, a context object,
+        construction-time contextual defaults, or ``with_context(...)``.
 
-        Args:
-            context_type: Optional ContextBase subclass used only to validate/coerce
-                `FromContext[...]` inputs against an existing nominal context shape
-            auto_unwrap: When True, `.flow.compute(...)` unwraps auto-wrapped
-                `GenericResult(value=...)` outputs back to the annotated return type.
-                Explicit `ResultBase` returns are left unchanged. Default: False.
-            model_base: Optional custom `CallableModel` subclass to use as an
-                additional base for the generated model class.
-            cacheable: Enable caching of results (default: False)
-            volatile: Mark as volatile (default: False)
-            log_level: Logging verbosity (default: logging.DEBUG)
-            validate_result: Validate return type (default: True)
-            verbose: Verbose logging output (default: True)
-            evaluator: Custom evaluator (default: None)
+        Plain return annotations are wrapped in ``GenericResult`` so generated
+        models still follow the normal ccflow result/evaluator/cache path.
+        Functions that already return a ``ResultBase`` subclass are left as-is.
 
-        Primary authoring model:
-            Mark runtime/contextual inputs explicitly with `FromContext[...]`.
-            Ordinary unmarked parameters are regular bound inputs and are never
-            read implicitly from the runtime context.
-
-            @Flow.model
-            def greeting(prefix: str, name: FromContext[str]) -> str:
-                return f"{prefix}, {name}"
-
-            model = greeting(prefix="Hello")
-            assert model.flow.compute(name="Ada").value == "Hello, Ada"
-
-        Dependencies:
-            Any ordinary parameter can be bound either to a literal value or
-            to another CallableModel. When a CallableModel is supplied, the
-            generated model treats it as an upstream dependency and resolves it
-            with the current context before calling the underlying function.
-
-            `FromContext[...]` parameters are different: they may be satisfied by
-            runtime context, construction-time contextual defaults, or function
-            defaults, but not by CallableModel values.
-
-        Usage:
-            @Flow.model
-            def length(text: FromContext[str]) -> int:
-                return len(text)
-
-            @Flow.model
-            def score(base: int, bonus: FromContext[int]) -> int:
-                return base + bonus
-
-            model = score(base=length())
-            result = model.flow.compute(text="abcd", bonus=3)
-            assert result.value == 7
-
-        Returns:
-            A factory function that creates CallableModel instances
+        Common options mirror ``Flow.call``: ``cacheable``, ``volatile``,
+        ``log_level``, ``validate_result``, ``verbose``, and ``evaluator``.
+        Generated-model options also include ``context_type`` for validating
+        contextual fields, ``auto_unwrap`` for ergonomic compute results, and
+        ``model_base`` for custom ``CallableModel`` bases.
         """
         from .flow_model import flow_model
 
@@ -543,7 +505,20 @@ class Flow(PydanticBaseModel):
 
     @staticmethod
     def context_transform(*args, **kwargs):
-        """Decorator that turns a top-level function into a serializable with_context() transform factory."""
+        """Create a serializable transform factory for ``model.flow.with_context``.
+
+        Mark transform inputs with ``FromContext[T]`` when they should be read
+        from the caller's runtime context. Unmarked parameters are regular
+        arguments bound when the transform factory is called.
+
+        Mapping-returning transforms are patch transforms and are passed
+        positionally to ``with_context(...)``. Scalar-returning transforms are
+        field transforms and are passed as keyword overrides, for example
+        ``model.flow.with_context(score=shift_score(amount=1))``.
+
+        Transform bindings serialize enough function metadata to survive model
+        serialization, including local or nested functions through cloudpickle.
+        """
         from .flow_model import flow_context_transform
 
         return flow_context_transform(*args, **kwargs)

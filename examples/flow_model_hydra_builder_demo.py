@@ -24,6 +24,26 @@ from ccflow import CallableModel, DateRangeContext, Flow, FromContext, ModelRegi
 CONFIG_PATH = Path(__file__).with_name("config") / "flow_model_hydra_builder_demo.yaml"
 
 
+def _format_input_names(inputs: dict[str, object]) -> str:
+    """Return a compact comma-separated list for example output."""
+    return ", ".join(inputs) or "(none)"
+
+
+def _format_bound_inputs(inputs: dict[str, object]) -> str:
+    parts = []
+    for name, value in inputs.items():
+        display = "model" if hasattr(value, "flow") else repr(value)
+        parts.append(f"{name}={display}")
+    return ", ".join(parts) or "(none)"
+
+
+def _print_model_summary(label: str, model: CallableModel) -> None:
+    print(f"  {label}:")
+    print(f"    bound inputs: {_format_bound_inputs(model.flow.bound_inputs)}")
+    print(f"    declared context inputs: {_format_input_names(model.flow.context_inputs)}")
+    print(f"    runtime inputs: {_format_input_names(model.flow.runtime_inputs)}")
+
+
 @Flow.model(context_type=DateRangeContext)
 def count_visitors(location: str, start_date: FromContext[date], end_date: FromContext[date]) -> int:
     """Return a deterministic visitor count for one date window."""
@@ -40,7 +60,7 @@ def visitor_delta(
     label: str,
     start_date: FromContext[date],
     end_date: FromContext[date],
-) -> dict:
+) -> dict[str, object]:
     """Return both visitor counts plus their difference."""
     return {
         "label": label,
@@ -88,15 +108,15 @@ def main() -> None:
         print("Hydra + Flow.model Builder Demo")
         print("=" * 68)
         print("\nLoaded from config:")
-        print("  library_visitors:", registry["library_visitors"])
-        print("  previous_week:", previous_week)
-        print("  previous_two_weeks:", previous_two_weeks)
+        _print_model_summary("library_visitors", registry["library_visitors"])
+        _print_model_summary("previous_week", previous_week)
+        _print_model_summary("previous_two_weeks", previous_two_weeks)
 
         previous_week_result = previous_week.flow.compute(
             start_date=ctx.start_date,
             end_date=ctx.end_date,
         ).value
-        previous_two_weeks_result = previous_two_weeks(ctx).value
+        previous_two_weeks_result = previous_two_weeks.flow.compute(ctx).value
 
         print("\nPrevious week:")
         for key, value in previous_week_result.items():

@@ -6,7 +6,7 @@ Shows how to:
 1. define stages as plain Python functions,
 2. compose stages by passing upstream models as ordinary arguments,
 3. rewrite contextual inputs on one dependency edge with `.flow.with_context(...)`,
-4. execute either as `model(context)` or `model.flow.compute(...)`.
+4. execute the configured graph with `model.flow.compute(...)`.
 
 Run with:
     python examples/flow_model_example.py
@@ -15,6 +15,19 @@ Run with:
 from datetime import date, timedelta
 
 from ccflow import DateRangeContext, Flow, FromContext
+
+
+def _format_input_names(inputs: dict[str, object]) -> str:
+    """Return a compact comma-separated list for example output."""
+    return ", ".join(inputs) or "(none)"
+
+
+def _format_bound_inputs(inputs: dict[str, object]) -> str:
+    parts = []
+    for name, value in inputs.items():
+        display = "model" if hasattr(value, "flow") else repr(value)
+        parts.append(f"{name}={display}")
+    return ", ".join(parts) or "(none)"
 
 
 @Flow.model(context_type=DateRangeContext)
@@ -79,21 +92,25 @@ def main() -> None:
         end_date=date(2024, 3, 7),
     )
 
-    direct = pipeline(ctx)
-    computed = pipeline.flow.compute(
+    computed_from_context = pipeline.flow.compute(ctx)
+    computed_from_kwargs = pipeline.flow.compute(
         start_date=ctx.start_date,
         end_date=ctx.end_date,
     )
 
     print("\nPipeline:")
-    print("  current input:", pipeline.current)
-    print("  previous input:", pipeline.previous)
+    print("  model: visitor_delta")
+    print(f"  bound inputs: {_format_bound_inputs(pipeline.flow.bound_inputs)}")
+    print(f"  declared context inputs: {_format_input_names(pipeline.flow.context_inputs)}")
+    print(f"  runtime inputs: {_format_input_names(pipeline.flow.runtime_inputs)}")
+    print(f"  current runtime inputs: {_format_input_names(pipeline.current.flow.runtime_inputs)}")
+    print(f"  previous runtime inputs: {_format_input_names(pipeline.previous.flow.runtime_inputs)}")
 
     print("\nExecution:")
-    print(f"  direct == computed: {direct == computed}")
+    print(f"  context object == kwargs: {computed_from_context == computed_from_kwargs}")
 
     print("\nResult:")
-    for key, value in computed.value.items():
+    for key, value in computed_from_kwargs.value.items():
         print(f"  {key}: {value}")
 
 

@@ -548,11 +548,16 @@ For a direct `CallableModel` call, the cache key depends on:
 - `model.model_dump(mode="python")`
 - `compute_behavior_token(type(model))`
 
-For a `ModelEvaluationContext`, the cache key depends on:
+For a `ModelEvaluationContext`, the default structural cache key depends on:
 
 - the underlying context payload plus the function name being evaluated (`__call__` vs `__deps__`)
 - the behavior token of the underlying model class
 - the data and behavior tokens of any **non-transparent** evaluators in the chain
+
+`MemoryCacheEvaluator` and graph construction request an effective key for
+generated `@Flow.model` nodes. That effective key can project a runtime
+`FlowContext` down to the contextual fields a generated node actually reads, so
+unused ambient fields do not necessarily split memory-cache or graph identity.
 
 Transparent evaluators are skipped, so wrapping a model with logging or other pass-through evaluators does not change its cache identity.
 

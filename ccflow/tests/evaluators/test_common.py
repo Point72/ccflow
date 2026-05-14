@@ -10,7 +10,10 @@ from ccflow import (
     DateRangeContext,
     Evaluator,
     EvaluatorBase,
+    Flow,
+    FlowContext,
     FlowOptionsOverride,
+    FromContext,
     ModelEvaluationContext,
     NullContext,
     TransparentModelEvaluationContext,
@@ -406,8 +409,8 @@ class TestMemoryCacheEvaluator(TestCase):
         with self.assertNoLogs("ccflow.evaluators.common", level="DEBUG"):
             self.assertEqual(evaluator.key(model_evaluation_context), cache_key(model_evaluation_context))
 
-    def test_effective_key_exception_fallback_logs_debug(self):
-        """Unexpected effective-identity failures are visible without breaking existing calls."""
+    def test_effective_key_identity_errors_propagate(self):
+        """Unexpected effective-identity failures should not be hidden by structural fallback."""
 
         class BadIdentityCallable(MyDateCallable):
             def _evaluation_identity_payload(self, context):
@@ -418,9 +421,8 @@ class TestMemoryCacheEvaluator(TestCase):
         context = DateContext(date=date(2022, 1, 1))
         model_evaluation_context = ModelEvaluationContext(model=m1, context=context, options=dict(cacheable=True))
 
-        with self.assertLogs("ccflow.evaluators.common", level="DEBUG") as captured:
-            self.assertEqual(evaluator.key(model_evaluation_context), cache_key(model_evaluation_context))
-        self.assertIn("Falling back to structural evaluation key for BadIdentityCallable.__call__: identity broke", captured.output[0])
+        with self.assertRaisesRegex(ValueError, "identity broke"):
+            evaluator.key(model_evaluation_context)
 
     def test_plain_callable_deps_key_matches_public_cache_key(self):
         """Non-__call__ evaluations stay structural."""
@@ -645,6 +647,27 @@ class TestGraphEvaluator(TestCase):
         self.assertEqual(graph_calls[-1], ("n2", date(2022, 1, 1)))
         self.assertIn(("n0", date(2022, 1, 1)), graph_calls[:2])
         self.assertIn(("n1", date(2022, 1, 1)), graph_calls[:2])
+
+    def test_graph_evaluator_root_id_uses_built_graph_key(self):
+        calls = 0
+
+        @Flow.context_transform
+        def bump(seed: FromContext[int]) -> int:
+            nonlocal calls
+            calls += 1
+            return seed + calls
+
+        @Flow.model
+        def add(a: FromContext[int]) -> int:
+            return a
+
+        model = add().flow.with_context(a=bump())
+        graph = get_dependency_graph(model.__call__.get_evaluation_context(model, FlowContext(seed=10)))
+        result = model.flow.compute(FlowContext(seed=10), _options={"evaluator": GraphEvaluator()})
+
+        self.assertIn(graph.root_id, graph.ids)
+        self.assertIsNotNone(result)
+        self.assertGreater(result.value, 10)
 
     def test_graph_evaluator_diamond(self):
         n0 = NodeModel(meta=dict(name="n0"))

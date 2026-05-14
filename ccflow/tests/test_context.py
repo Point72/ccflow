@@ -13,6 +13,7 @@ from ccflow.context import (
     DateContext,
     DateRangeContext,
     DatetimeContext,
+    FlowContext,
     FreqContext,
     FreqDateContext,
     FreqDateRangeContext,
@@ -52,6 +53,13 @@ class TestContexts(TestCase):
         self.assertEqual(NullContext.model_validate(None), NullContext())
         self.assertIsInstance(NullContext.model_validate(DateContext(date="0d")), NullContext)
         self.assertRaises(ValueError, NullContext.model_validate, [True])
+
+    def test_flow_context_hash_freezes_nested_pydantic_values(self):
+        c1 = FlowContext(payload=DateContext(date=date(2024, 1, 1)))
+        c2 = FlowContext(payload=DateContext(date="2024-01-01"))
+
+        self.assertEqual(c1, c2)
+        self.assertEqual(hash(c1), hash(c2))
 
     def test_context_with_defaults(self):
         # Contexts may define default values. Extending the assumptions above:

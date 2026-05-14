@@ -68,6 +68,17 @@ def test_flow_context_value_semantics_and_hash():
     assert len({first, second, third}) == 2
 
 
+def test_flow_context_hash_reflects_nested_mutable_changes():
+    ctx = FlowContext(values=[1])
+    assert hash(ctx) == hash(FlowContext(values=[1]))
+
+    ctx.values.append(2)
+
+    assert ctx == FlowContext(values=[1, 2])
+    assert ctx != FlowContext(values=[1])
+    assert hash(ctx) == hash(FlowContext(values=[1, 2]))
+
+
 def test_flow_context_hash_handles_nested_models_and_rejects_opaque_unhashable_values():
     class WithDict:
         __hash__ = None
@@ -85,7 +96,9 @@ def test_flow_context_hash_handles_nested_models_and_rejects_opaque_unhashable_v
     assert nested == nested
     assert nested != {"model": NumberContext(x=1)}
     assert hash(nested) == hash(same)
-    assert hash(FlowContext(value=WithDict())) == hash(FlowContext(value=WithDict()))
+
+    with pytest.raises(TypeError, match="unhashable value"):
+        hash(FlowContext(value=WithDict()))
 
     with pytest.raises(TypeError, match="unhashable value"):
         hash(FlowContext(value=UnhashableNoState()))
@@ -104,7 +117,8 @@ def test_flow_api_introspection_for_from_context_model():
 
     model = add(a=10)
     assert model.flow.context_inputs == {"b": int, "c": int}
-    assert model.flow.unbound_inputs == {"b": int}
+    assert model.flow.runtime_inputs == {"b": int, "c": int}
+    assert model.flow.required_inputs == {"b": int}
     assert model.flow.bound_inputs == {"a": 10}
     assert model.flow.compute(b=2).value == 17
 
@@ -163,10 +177,10 @@ def test_chained_with_context_merges_patch_transforms():
     # First with_context applies a patch, second chains another patch on top
     chained = base.flow.with_context(shift_window(days=7)).flow.with_context(shift_window(days=3))
 
-    # Both patches should be present in the merged context spec.
-    assert len(chained.context_spec.patches) == 2
+    # Both patches should be present in the ordered context spec.
+    assert [operation.kind for operation in chained.context_spec.operations] == ["patch", "patch"]
 
-    # Patches evaluate against the original context, merge left-to-right.
+    # Patches read the original context, then apply writes left-to-right.
     # patch1: start - 7, end - 7  =>  Jan 1, Jan 24
     # patch2: start - 3, end - 3  =>  Jan 5, Jan 28  (overwrites patch1 keys)
     result = chained(FlowContext(start_date=date(2024, 1, 8), end_date=date(2024, 1, 31)))
@@ -189,7 +203,47 @@ def test_compute_kwargs_can_supply_ambient_context_for_upstream_transforms():
     )
 
     assert model.flow.context_inputs == {"bonus": int}
+    assert model.flow.runtime_inputs == {"bonus": int}
     assert model.flow.compute(value=5, bonus=100).value == (6 + 15 + 100)
+
+
+def test_bound_flow_api_separates_declared_and_runtime_context_inputs():
+    @Flow.model
+    def add(a: int, b: FromContext[int], c: FromContext[int] = 5) -> int:
+        return a + b + c
+
+    @Flow.context_transform
+    def from_seed(seed: FromContext[int]) -> int:
+        return seed + 1
+
+    bound = add(a=10).flow.with_context(b=from_seed())
+
+    assert bound.flow.context_inputs == {"b": int, "c": int}
+    assert bound.flow.runtime_inputs == {"c": int, "seed": int}
+    assert bound.flow.required_inputs == {"seed": int}
+    for name, annotation in bound.flow.required_inputs.items():
+        assert bound.flow.runtime_inputs[name] == annotation
+    assert bound.flow.bound_inputs == {"a": 10}
+    assert bound.flow.compute(seed=1).value == 17
+
+
+def test_bound_flow_api_rejects_conflicting_runtime_input_annotations():
+    @Flow.model
+    def add(b: FromContext[int], c: FromContext[int]) -> int:
+        return b + c
+
+    @Flow.context_transform
+    def from_int(seed: FromContext[int]) -> int:
+        return seed + 1
+
+    @Flow.context_transform
+    def from_str(seed: FromContext[str]) -> int:
+        return int(seed) + 1
+
+    bound = add().flow.with_context(b=from_int(), c=from_str())
+
+    with pytest.raises(TypeError, match="Conflicting runtime context annotations for 'seed'"):
+        bound.flow.runtime_inputs
 
 
 def test_bound_model_rejects_regular_field_context_overrides():
@@ -219,7 +273,9 @@ def test_bound_model_serialization_roundtrip_preserves_static_transforms():
     bound = add(a=10).flow.with_context(b=5)
 
     dumped = bound.model_dump(mode="python")
-    assert dumped["context_spec"] == {"patches": [], "field_overrides": {"b": {"kind": "static_value", "value": 5}}}
+    assert dumped["context_spec"] == {
+        "operations": [{"kind": "field", "name": "b", "spec": {"kind": "static_value", "value": 5}}],
+    }
 
     restored = type(bound).model_validate(dumped)
     assert restored.flow.compute().value == 15
@@ -233,7 +289,8 @@ def test_bound_model_json_roundtrip_preserves_context_transforms():
 
     bound = add(a=10).flow.with_context(b=offset_b(amount=1))
     dumped = bound.model_dump(mode="json")
-    assert dumped["context_spec"]["field_overrides"]["b"]["binding"]["path"].endswith(".offset_b")
+    binding = dumped["context_spec"]["operations"][0]["spec"]
+    assert binding["path"] is not None or binding["serialized_config"] is not None
 
     restored = type(bound).model_validate(dumped)
     assert restored.flow.compute(b=4).value == 15
@@ -289,7 +346,7 @@ def test_bound_model_pydantic_roundtrip_preserves_context_transforms():
     assert bound.flow.compute(b=4).value == 15
 
     dumped = bound.model_dump(mode="python")
-    assert dumped["context_spec"]["field_overrides"]["b"]["binding"]["kind"] == "context_transform"
+    assert dumped["context_spec"]["operations"][0]["spec"]["kind"] == "context_transform"
 
     restored = type(bound).model_validate(dumped)
     assert restored.flow.compute(b=4).value == 15
@@ -303,8 +360,9 @@ def test_bound_model_context_spec_dump_contains_patch_and_field_specs():
         return GenericResult(value={"start": start_date, "end": end_date})
 
     dumped = load_window().flow.with_context(shift_window(days=7), start_date=shift_start_date(days=1)).model_dump(mode="json")
-    assert dumped["context_spec"]["patches"][0]["kind"] == "context_patch"
-    assert dumped["context_spec"]["field_overrides"]["start_date"]["kind"] == "context_value"
+    assert dumped["context_spec"]["operations"][0]["binding"]["kind"] == "context_transform"
+    assert dumped["context_spec"]["operations"][1]["name"] == "start_date"
+    assert dumped["context_spec"]["operations"][1]["spec"]["kind"] == "context_transform"
 
 
 def test_regular_callable_models_still_support_with_context():
@@ -317,7 +375,8 @@ def test_flow_api_for_regular_callable_model():
     model = OffsetModel(offset=10)
     assert model.flow.compute(x=5).value == 15
     assert model.flow.context_inputs == {"x": int}
-    assert model.flow.unbound_inputs == {"x": int}
+    assert model.flow.runtime_inputs == {"x": int}
+    assert model.flow.required_inputs == {"x": int}
     assert model.flow.bound_inputs == {"offset": 10}
 
 

@@ -7,7 +7,7 @@ from omegaconf import OmegaConf
 
 from ccflow import CallableModel, DateRangeContext, FlowContext, ModelRegistry
 
-from .test_flow_model import SimpleContext
+from .flow_model_hydra_fixtures import SimpleContext
 
 CONFIG_PATH = str(Path(__file__).parent / "config" / "conf_flow.yaml")
 
@@ -104,12 +104,12 @@ def test_instantiate_with_omegaconf():
     cfg = OmegaConf.create(
         {
             "loader": {
-                "_target_": "ccflow.tests.test_flow_model.basic_loader",
+                "_target_": "ccflow.tests.flow_model_hydra_fixtures.basic_loader",
                 "source": "generated_input",
                 "multiplier": 7,
             },
             "contextual": {
-                "_target_": "ccflow.tests.test_flow_model.contextual_loader",
+                "_target_": "ccflow.tests.flow_model_hydra_fixtures.contextual_loader",
                 "source": "library",
             },
         }

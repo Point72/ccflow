@@ -1,10 +1,16 @@
-"""Shared signature and context-contract analysis for Flow authoring APIs."""
+"""Shared signature and context-contract analysis for Flow authoring APIs.
+
+This module also owns the portable serialization format for an already-analyzed
+``@Flow.model`` contract.  That payload is used by generated-model pickle/Ray
+restore and serialized context transforms so workers do not re-resolve function
+annotations from the original defining scope.
+"""
 
 import inspect
 from dataclasses import dataclass, field
 from functools import wraps
-from types import UnionType
-from typing import Annotated, Any, Callable, Dict, Literal, Optional, Tuple, Type, Union, get_args, get_origin, get_type_hints
+from types import FunctionType, UnionType
+from typing import Annotated, Any, Callable, Dict, Literal, NamedTuple, Optional, Tuple, Type, Union, get_args, get_origin, get_type_hints
 
 from .base import ContextBase, ResultBase
 from .context import FlowContext
@@ -33,19 +39,19 @@ def _get_internal_sentinel(name: str) -> _InternalSentinel:
 
 _INTERNAL_SENTINELS = {
     "_UNSET": _InternalSentinel("_UNSET"),
-    "_REMOVED_CONTEXT_ARGS": _InternalSentinel("_REMOVED_CONTEXT_ARGS"),
 }
 _UNSET = _INTERNAL_SENTINELS["_UNSET"]
-_REMOVED_CONTEXT_ARGS = _INTERNAL_SENTINELS["_REMOVED_CONTEXT_ARGS"]
-_RESERVED_FLOW_MODEL_PARAM_NAMES = frozenset({"flow", "meta", "context_type", "result_type"})
+_RESERVED_FLOW_MODEL_PARAM_NAMES = frozenset({"flow", "meta", "context_type", "result_type", "type_"})
 
 
 class _LazyMarker:
-    pass
+    def __repr__(self) -> str:
+        return "Lazy"
 
 
 class _FromContextMarker:
-    pass
+    def __repr__(self) -> str:
+        return "FromContext"
 
 
 class FromContext:
@@ -76,15 +82,11 @@ class _ParsedAnnotation:
 class _FlowModelParam:
     name: str
     annotation: Any
-    kind: str
+    is_contextual: bool
     is_lazy: bool
     has_function_default: bool
     function_default: Any = _UNSET
     context_validation_annotation: Any = _UNSET
-
-    @property
-    def is_contextual(self) -> bool:
-        return self.kind == "contextual"
 
     @property
     def validation_annotation(self) -> Any:
@@ -155,12 +157,203 @@ class _AutoContextSpec:
     fields: Dict[str, Tuple[Any, Any]]
 
 
+class _SerializedAnnotation(NamedTuple):
+    kind: str
+    value: Any
+    args: Tuple[Any, ...] = ()
+
+
+class _SerializedFlowModelParam(NamedTuple):
+    name: str
+    annotation: _SerializedAnnotation
+    is_contextual: bool
+    is_lazy: bool
+    has_function_default: bool
+    function_default: Any
+    context_validation_annotation: _SerializedAnnotation
+
+
+class _SerializedFlowModelConfig(NamedTuple):
+    func: _AnyCallable
+    return_annotation: _SerializedAnnotation
+    context_type: _SerializedAnnotation
+    result_type: _SerializedAnnotation
+    auto_wrap_result: bool
+    auto_unwrap: bool
+    parameters: Tuple[_SerializedFlowModelParam, ...]
+    declared_context_type: _SerializedAnnotation
+    path: Optional[PyObjectPath]
+
+
 def _callable_name(func: _AnyCallable) -> str:
     return getattr(func, "__name__", type(func).__name__)
 
 
 def _callable_qualname(func: _AnyCallable) -> str:
     return getattr(func, "__qualname__", type(func).__qualname__)
+
+
+def _clone_function_without_annotations(fn: _AnyCallable) -> _AnyCallable:
+    """Return a behavior-equivalent function whose annotations are not a pickle dependency.
+
+    ``@Flow.model`` analyzes annotations eagerly when the decorator runs and
+    stores the resolved contract in ``_FlowModelConfig``.  During local/generated
+    model pickling we want workers to execute the original function body, but we
+    do not want them to re-evaluate or unpickle the original annotations.  Some
+    runtime annotations, notably Pydantic generic specializations such as
+    ``GenericResult[int]``, are valid Python objects in-process but do not have a
+    durable import path for fresh-process cloudpickle restore.
+    """
+
+    if not isinstance(fn, FunctionType):
+        return fn
+
+    clone = FunctionType(fn.__code__, fn.__globals__, fn.__name__, fn.__defaults__, fn.__closure__)
+    clone.__kwdefaults__ = fn.__kwdefaults__
+    clone.__module__ = fn.__module__
+    clone.__qualname__ = fn.__qualname__
+    clone.__doc__ = fn.__doc__
+    clone.__dict__.update(getattr(fn, "__dict__", {}))
+    clone.__annotations__ = {}
+    return clone
+
+
+def _is_pydantic_generic_type(annotation: Any) -> bool:
+    metadata = getattr(annotation, "__pydantic_generic_metadata__", None)
+    return isinstance(annotation, type) and bool(metadata) and metadata.get("origin") is not None
+
+
+def _serialize_annotation(annotation: Any) -> Any:
+    """Serialize the annotation shapes that are part of a Flow.model contract.
+
+    The goal is not to serialize arbitrary Python typing objects perfectly.  It
+    is narrower and deliberate: keep the already-analyzed ``@Flow.model``
+    contract portable across subprocess/Ray restore without asking workers to
+    resolve annotations from the original defining scope again.
+
+    Raw annotations are still allowed as a fallback for ordinary importable
+    objects.  The explicit cases below cover annotation containers that commonly
+    wrap ccflow/Pydantic model types and would otherwise embed fragile runtime
+    objects directly in the cloudpickle payload.
+    """
+
+    if annotation is _UNSET or annotation is inspect.Signature.empty:
+        return _SerializedAnnotation(kind="raw", value=annotation)
+
+    if _is_pydantic_generic_type(annotation):
+        metadata = annotation.__pydantic_generic_metadata__
+        return _SerializedAnnotation(
+            kind="pydantic_generic",
+            value=_serialize_annotation(metadata["origin"]),
+            args=tuple(_serialize_annotation(arg) for arg in metadata["args"]),
+        )
+
+    origin = get_origin(annotation)
+    if origin is Annotated:
+        args = get_args(annotation)
+        return _SerializedAnnotation(kind="annotated", value=_serialize_annotation(args[0]), args=args[1:])
+    if origin in _UNION_ORIGINS:
+        return _SerializedAnnotation(kind="union", value=tuple(_serialize_annotation(arg) for arg in get_args(annotation)))
+    if origin is Literal:
+        return _SerializedAnnotation(kind="literal", value=get_args(annotation))
+    if origin is not None:
+        return _SerializedAnnotation(
+            kind="generic_alias",
+            value=_serialize_annotation(origin),
+            args=tuple(_serialize_annotation(arg) for arg in get_args(annotation)),
+        )
+
+    return _SerializedAnnotation(kind="raw", value=annotation)
+
+
+def _restore_annotation(payload: Any) -> Any:
+    """Restore an annotation payload produced by ``_serialize_annotation``."""
+
+    if not isinstance(payload, _SerializedAnnotation):
+        raise TypeError(f"Unknown serialized annotation payload: {payload!r}")
+    value = payload.value
+    if payload.kind == "raw":
+        return value
+    if payload.kind == "pydantic_generic":
+        origin = _restore_annotation(value)
+        args = tuple(_restore_annotation(arg) for arg in payload.args)
+        return origin[args[0] if len(args) == 1 else args]
+    if payload.kind == "annotated":
+        return Annotated.__class_getitem__((_restore_annotation(value), *payload.args))
+    if payload.kind == "union":
+        return Union.__getitem__(tuple(_restore_annotation(arg) for arg in value))
+    if payload.kind == "literal":
+        return Literal.__getitem__(value)
+    if payload.kind == "generic_alias":
+        origin = _restore_annotation(value)
+        args = tuple(_restore_annotation(arg) for arg in payload.args)
+        return origin[args[0] if len(args) == 1 else args]
+    raise TypeError(f"Unknown serialized annotation payload kind: {payload.kind!r}")
+
+
+def _serialize_flow_model_param(param: _FlowModelParam) -> _SerializedFlowModelParam:
+    return _SerializedFlowModelParam(
+        name=param.name,
+        annotation=_serialize_annotation(param.annotation),
+        is_contextual=param.is_contextual,
+        is_lazy=param.is_lazy,
+        has_function_default=param.has_function_default,
+        function_default=param.function_default,
+        context_validation_annotation=_serialize_annotation(param.context_validation_annotation),
+    )
+
+
+def _restore_flow_model_param(payload: _SerializedFlowModelParam) -> _FlowModelParam:
+    if not isinstance(payload, _SerializedFlowModelParam):
+        raise TypeError(f"Unknown Flow.model parameter payload: {payload!r}")
+    return _FlowModelParam(
+        name=payload.name,
+        annotation=_restore_annotation(payload.annotation),
+        is_contextual=payload.is_contextual,
+        is_lazy=payload.is_lazy,
+        has_function_default=payload.has_function_default,
+        function_default=payload.function_default,
+        context_validation_annotation=_restore_annotation(payload.context_validation_annotation),
+    )
+
+
+def _serialize_flow_model_config(config: _FlowModelConfig) -> _SerializedFlowModelConfig:
+    """Return a tagged, portable description of an analyzed Flow.model config.
+
+    This is intentionally explicit instead of relying on ``_FlowModelConfig`` or
+    ``_FlowModelParam`` pickle hooks.  The payload is the persistence boundary
+    for local generated models and serialized context transforms: function
+    behavior plus the resolved contract needed to rebuild the generated
+    ``CallableModel`` class.  It is not a second signature-analysis path.
+    """
+
+    return _SerializedFlowModelConfig(
+        func=_clone_function_without_annotations(config.func),
+        return_annotation=_serialize_annotation(config.return_annotation),
+        context_type=_serialize_annotation(config.context_type),
+        result_type=_serialize_annotation(config.result_type),
+        auto_wrap_result=config.auto_wrap_result,
+        auto_unwrap=config.auto_unwrap,
+        parameters=tuple(_serialize_flow_model_param(param) for param in config.parameters),
+        declared_context_type=_serialize_annotation(config.declared_context_type),
+        path=config.path,
+    )
+
+
+def _restore_flow_model_config(payload: _SerializedFlowModelConfig) -> _FlowModelConfig:
+    if not isinstance(payload, _SerializedFlowModelConfig):
+        raise TypeError(f"Unknown Flow.model config payload: {payload!r}")
+    return _FlowModelConfig(
+        func=payload.func,
+        return_annotation=_restore_annotation(payload.return_annotation),
+        context_type=_restore_annotation(payload.context_type),
+        result_type=_restore_annotation(payload.result_type),
+        auto_wrap_result=payload.auto_wrap_result,
+        auto_unwrap=payload.auto_unwrap,
+        parameters=tuple(_restore_flow_model_param(param) for param in payload.parameters),
+        declared_context_type=_restore_annotation(payload.declared_context_type),
+        path=payload.path,
+    )
 
 
 def _resolved_flow_signature(
@@ -222,15 +415,16 @@ def _strip_annotated(annotation: Any) -> Any:
 
 
 def _is_result_annotation(annotation: Any) -> bool:
+    annotation = _strip_annotated(annotation)
     origin = get_origin(annotation) or annotation
-    if isinstance(origin, type) and issubclass(origin, ResultBase):
-        return True
+    return isinstance(origin, type) and issubclass(origin, ResultBase)
 
-    if get_origin(annotation) in _UNION_ORIGINS:
-        args = tuple(arg for arg in get_args(annotation) if arg is not type(None))
-        return bool(args) and all(_is_result_annotation(arg) for arg in args)
 
-    return False
+def _result_union_members(annotation: Any) -> Tuple[Any, ...]:
+    annotation = _strip_annotated(annotation)
+    if get_origin(annotation) not in _UNION_ORIGINS:
+        return ()
+    return tuple(arg for arg in get_args(annotation) if arg is not type(None))
 
 
 def _context_type_annotations_compatible(func_annotation: Any, context_annotation: Any) -> bool:
@@ -330,7 +524,7 @@ def _analyze_flow_function(
             _FlowModelParam(
                 name=param.name,
                 annotation=parsed.base,
-                kind="contextual" if parsed.is_from_context else "regular",
+                is_contextual=parsed.is_from_context,
                 is_lazy=parsed.is_lazy,
                 has_function_default=has_default,
                 function_default=param.default if has_default else _UNSET,
@@ -403,7 +597,7 @@ def _analyze_flow_model(
                 _FlowModelParam(
                     name=param.name,
                     annotation=param.annotation,
-                    kind=param.kind,
+                    is_contextual=param.is_contextual,
                     is_lazy=param.is_lazy,
                     has_function_default=param.has_function_default,
                     function_default=param.function_default,
@@ -412,8 +606,16 @@ def _analyze_flow_model(
             )
         parameters = tuple(updated_params)
 
-    auto_wrap_result = not _is_result_annotation(sig.return_annotation)
-    result_type = GenericResult[sig.return_annotation] if auto_wrap_result else sig.return_annotation
+    return_annotation = _strip_annotated(sig.return_annotation)
+    union_result_members = _result_union_members(return_annotation)
+    if union_result_members and any(_is_result_annotation(arg) for arg in union_result_members):
+        raise TypeError(
+            "@Flow.model does not support Union or Optional ResultBase return annotations. "
+            "Return one concrete ResultBase subclass, or return an ordinary value and let @Flow.model wrap it."
+        )
+
+    auto_wrap_result = not _is_result_annotation(return_annotation)
+    result_type = GenericResult[return_annotation] if auto_wrap_result else return_annotation
 
     return _FlowModelConfig(
         func=fn,

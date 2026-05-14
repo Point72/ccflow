@@ -789,6 +789,18 @@ class TestCallableModelDeps(TestCase):
 class TestAutoContext(TestCase):
     """Tests for the opt-in @Flow.call(auto_context=...) path."""
 
+    def test_direct_function_call_form(self):
+        class AutoContextCallable(CallableModel):
+            def __call__(self, *, x: int) -> GenericResult:
+                return GenericResult(value=x)
+
+            __call__ = Flow.call(__call__, auto_context=True)
+
+        auto_ctx = AutoContextCallable.__call__.__wrapped__.__auto_context__
+
+        self.assertTrue(issubclass(auto_ctx, ContextBase))
+        self.assertEqual(AutoContextCallable()(auto_ctx(x=3)).value, 3)
+
     def test_basic_usage_with_kwargs(self):
         class AutoContextCallable(CallableModel):
             @Flow.call(auto_context=True)
