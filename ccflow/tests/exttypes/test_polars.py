@@ -2,13 +2,14 @@ import math
 
 import numpy as np
 import polars as pl
+import polars.selectors as cs
 import pytest
 import scipy
 from packaging import version
 from pydantic import TypeAdapter, ValidationError
 
 from ccflow import BaseModel
-from ccflow.exttypes.polars import PolarsExpression
+from ccflow.exttypes.polars import PolarsExpression, PolarsSelector
 
 
 def test_expression_passthrough():
@@ -82,3 +83,80 @@ def test_model_field_and_dataframe_with_columns():
     df = pl.DataFrame({"x": [5, 19, 17, 13, 8, 20], "y": [1, 2, 3, 4, 5, 6]})
     transformed = df.select(m.expr)
     assert transformed.to_series().to_list() == [None, 19, 19, 17, 13, 20]
+
+
+def test_selector_passthrough():
+    adapter = TypeAdapter(PolarsSelector)
+    selector = cs.numeric() - cs.by_name("x")
+    result = adapter.validate_python(selector)
+    assert cs.is_selector(result)
+    assert result.meta.serialize(format="json") == selector.meta.serialize(format="json")
+
+
+def test_selector_from_string():
+    adapter = TypeAdapter(PolarsSelector)
+    expected = cs.numeric() - cs.by_name("x")
+    result = adapter.validate_python("cs.numeric() - cs.by_name('x')")
+    assert cs.is_selector(result)
+    assert result.meta.serialize(format="json") == expected.meta.serialize(format="json")
+
+
+def test_selector_promotes_plain_column_expression():
+    adapter = TypeAdapter(PolarsSelector)
+    result = adapter.validate_python(pl.col("a"))
+    assert cs.is_selector(result)
+
+    result_from_str = adapter.validate_python("pl.col('a')")
+    assert cs.is_selector(result_from_str)
+
+
+def test_selector_rejects_non_selector_expression():
+    adapter = TypeAdapter(PolarsSelector)
+    with pytest.raises(ValidationError):
+        adapter.validate_python(pl.col("a") + 1)
+    with pytest.raises(ValidationError):
+        adapter.validate_python("pl.col('a') + 1")
+
+
+def test_selector_validation_failure():
+    adapter = TypeAdapter(PolarsSelector)
+    with pytest.raises(ValidationError):
+        adapter.validate_python(None)
+    with pytest.raises(ValidationError):
+        adapter.validate_python("pl.DataFrame()")
+    with pytest.raises(ValidationError):
+        adapter.validate_python("invalid_statement")
+
+
+def test_selector_json_roundtrip_preserves_set_op_semantics():
+    adapter = TypeAdapter(PolarsSelector)
+    original = cs.numeric() - cs.by_name("x")
+
+    json_bytes = adapter.dump_json(original)
+    if version.parse(pl.__version__) >= version.parse("1.0.0"):
+        assert json_bytes.decode("utf-8") == original.meta.serialize(format="json")
+
+    restored = adapter.validate_json(json_bytes)
+    assert cs.is_selector(restored)
+
+    # The whole point of this exttype: set-op overloads must still work.
+    combined = restored | cs.string()
+    df = pl.DataFrame({"a": [1], "b": [2.0], "x": [3], "s": ["t"]})
+    assert df.select(restored).columns == df.select(original).columns
+    assert df.select(combined).columns == df.select(original | cs.string()).columns
+
+
+def test_selector_model_field():
+    class DummySelectorModel(BaseModel):
+        sel: PolarsSelector
+
+    m = DummySelectorModel(sel="cs.numeric() - cs.by_name('x')")
+    assert cs.is_selector(m.sel)
+
+    df = pl.DataFrame({"a": [1, 2], "b": [1.0, 2.0], "x": [3, 4], "s": ["p", "q"]})
+    assert df.select(m.sel).columns == ["a", "b"]
+
+    # Round-trip through model_dump_json / model_validate_json.
+    restored = DummySelectorModel.model_validate_json(m.model_dump_json())
+    assert cs.is_selector(restored.sel)
+    assert df.select(restored.sel | cs.string()).columns == ["a", "b", "s"]
