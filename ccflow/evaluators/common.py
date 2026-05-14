@@ -92,22 +92,15 @@ def combine_evaluators(first: Optional[EvaluatorBase], second: Optional[Evaluato
         return MultiEvaluator(evaluators=[first, second])
 
 
-def _flatten_cache_key_context(evaluation_context: ModelEvaluationContext) -> tuple[ModelEvaluationContext, str, List[CallableModel]]:
-    """Strip transparent evaluator wrappers and keep opaque wrappers in order.
-
-    This preserves the structural cache-key behavior: transparent evaluators are
-    ignored, while non-transparent evaluators remain part of the identity. The
-    returned function name is the innermost non-``__call__`` name, so
-    ``__deps__`` does not collapse into ``__call__`` when wrapped.
-    """
-    fn = evaluation_context.fn
-    outer_to_inner_evaluators: List[CallableModel] = []
-    while isinstance(evaluation_context.context, ModelEvaluationContext):
-        fn = evaluation_context.fn if evaluation_context.fn != "__call__" else fn
-        if not isinstance(evaluation_context, TransparentModelEvaluationContext):
-            outer_to_inner_evaluators.append(evaluation_context.model)
-        evaluation_context = evaluation_context.context
-    return evaluation_context, fn if fn != "__call__" else evaluation_context.fn, outer_to_inner_evaluators
+def _flatten_cache_key_context(flow_obj: ModelEvaluationContext) -> tuple[ModelEvaluationContext, str, List[EvaluatorBase]]:
+    fn = flow_obj.fn
+    non_transparent: List[EvaluatorBase] = []
+    while isinstance(flow_obj.context, ModelEvaluationContext):
+        fn = flow_obj.fn if flow_obj.fn != "__call__" else fn
+        if not isinstance(flow_obj, TransparentModelEvaluationContext):
+            non_transparent.append(flow_obj.model)
+        flow_obj = flow_obj.context
+    return flow_obj, fn if fn != "__call__" else flow_obj.fn, non_transparent
 
 
 class MultiEvaluator(EvaluatorBase):
@@ -480,13 +473,6 @@ class CallableModelGraph(BaseModel):
     root_id: bytes
 
 
-def _is_wrapper_to_wrapped_edge(parent_model: Optional[CallableModel], current_model: CallableModel) -> bool:
-    # Effective identity can intentionally collapse a wrapper model and its
-    # wrapped model to the same graph/cache key. Only that wrapper-to-wrapped
-    # edge should be treated as a duplicate self-edge.
-    return isinstance(parent_model, WrapperModel) and parent_model.model is current_model
-
-
 def _build_dependency_graph(
     evaluation_context: ModelEvaluationContext,
     graph: CallableModelGraph,
@@ -500,7 +486,7 @@ def _build_dependency_graph(
     unwrapped_evaluation_context, _, _ = _flatten_cache_key_context(evaluation_context)
     current_model = unwrapped_evaluation_context.model
     is_same_evaluation_key = parent_key == key
-    is_collapsed_wrapper_child = is_same_evaluation_key and _is_wrapper_to_wrapped_edge(parent_model, current_model)
+    is_collapsed_wrapper_child = is_same_evaluation_key and isinstance(parent_model, WrapperModel) and parent_model.model is current_model
 
     # Bound/wrapper models can share an effective graph key with their wrapped
     # model after context rewriting. Adding the wrapper -> wrapped edge in that

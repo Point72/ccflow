@@ -3853,4 +3853,8 @@ def test_model_base_fields_rejected_by_compute():
 
 def test_flow_model_public_exports_exclude_context_spec_models():
     assert "StaticValueSpec" not in flow_model_module.__all__
+    assert "ContextTransform" not in flow_model_module.__all__
+    assert "flow_context_transform" not in flow_model_module.__all__
     assert not hasattr(ccflow, "StaticValueSpec")
+    assert not hasattr(ccflow, "ContextTransform")
+    assert not hasattr(ccflow, "flow_context_transform")
