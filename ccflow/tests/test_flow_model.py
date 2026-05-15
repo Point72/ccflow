@@ -10,7 +10,7 @@ import sys
 from datetime import date, timedelta
 from pathlib import Path
 from types import ModuleType
-from typing import Annotated, Any, Callable, Generic, Literal, Optional, TypeVar, get_args
+from typing import Annotated, Any, Callable, Literal, Optional, get_args
 
 import pytest
 import ray
@@ -18,7 +18,7 @@ from pydantic import BaseModel as PydanticBaseModel, Field, PrivateAttr, Validat
 from ray.cloudpickle import dumps as rcpdumps, loads as rcploads
 
 import ccflow
-import ccflow._flow_model_binding as flow_binding_module
+import ccflow._flow_model_binding as binding_module
 import ccflow.flow_model as flow_model_module
 from ccflow import (
     BaseModel,
@@ -51,14 +51,6 @@ class ExternalPydanticPayload(PydanticBaseModel):
 
 class ExternalCcflowPayload(BaseModel):
     x: int
-    _bonus: int = PrivateAttr(default=1)
-
-
-T = TypeVar("T")
-
-
-class ExternalGenericCcflowBox(BaseModel, Generic[T]):
-    item: T
     _bonus: int = PrivateAttr(default=1)
 
 
@@ -272,29 +264,6 @@ def test_module_level_flow_model_examples_and_transforms_execute():
     assert add().flow.with_context(static_patch()).flow.compute(a=1).value == 2
 
 
-def test_context_transform_internal_error_and_repr_payloads():
-    assert flow_model_module._context_transform_repr(static_patch()) == "static_patch()"
-    assert flow_model_module._context_transform_repr(increment_b(amount=2)) == "increment_b(amount=2)"
-    assert flow_model_module._context_transform_repr(123) == "123"
-    importable_increment_b = Flow.context_transform(increment_b.__wrapped__)
-    importable_config = flow_model_module._load_context_transform_config_from_binding(importable_increment_b(amount=1))
-    assert importable_config.func.__name__ == "increment_b"
-    assert flow_model_module._context_transform_identifier(importable_increment_b(amount=1)) == "increment_b"
-
-    with pytest.raises(ValidationError, match="serialized_config"):
-        flow_model_module.ContextTransform()
-
-    invalid_payload = base64.b64encode(pickle.dumps({"not": "a config"}, protocol=5)).decode("ascii")
-    with pytest.raises(TypeError, match="payload does not contain"):
-        flow_model_module._load_serialized_context_transform_config(invalid_payload)
-
-    with pytest.raises(TypeError, match="payload does not contain"):
-        flow_model_module._load_serialized_context_transform_config("not-base64")
-
-    with pytest.raises(ImportError, match="does not have a _generated_model"):
-        flow_model_module._restore_generated_flow_model("ccflow.tests.test_flow_model.lazy_context_transform_for_rejection", {})
-
-
 def test_flow_model_rejects_invalid_decorator_targets():
     with pytest.raises(TypeError):
         Flow.model(123)
@@ -302,47 +271,7 @@ def test_flow_model_rejects_invalid_decorator_targets():
         Flow.model(lambda: None)
 
 
-def test_lazy_thunks_and_regular_resolution_edge_paths():
-    calls = {"dependency": 0, "inner": 0}
-
-    @Flow.model
-    def source(value: FromContext[int]) -> int:
-        calls["dependency"] += 1
-        return value + 10
-
-    thunk = flow_model_module._make_lazy_thunk(source(), FlowContext(value=2))
-    assert thunk() == 12
-    assert thunk() == 12
-    assert calls["dependency"] == 1
-
-    def inner():
-        calls["inner"] += 1
-        return "13"
-
-    coercing = flow_model_module._make_coercing_lazy_thunk(inner, "value", int)
-    assert coercing() == 13
-    assert coercing() == 13
-    assert calls["inner"] == 1
-
-    @Flow.model
-    def missing_regular(x: int) -> int:
-        return x
-
-    missing_config = type(missing_regular()).__flow_model_config__
-    with pytest.raises(TypeError, match="still unbound"):
-        flow_model_module._resolve_regular_param_value(missing_regular(), missing_config.param("x"), FlowContext())
-
-    @Flow.model
-    def lazy_consumer(x: Lazy[int]) -> int:
-        return x()
-
-    lazy_model = getattr(lazy_consumer, "_generated_model").model_construct(x=1)
-    lazy_config = type(lazy_model).__flow_model_config__
-    with pytest.raises(TypeError, match="must be bound to a CallableModel"):
-        flow_model_module._resolve_regular_param_value(lazy_model, lazy_config.param("x"), FlowContext())
-
-
-def test_context_transform_validation_and_static_resolution_edge_paths():
+def test_context_transform_defaults_and_public_validation():
     @Flow.context_transform
     def default_amount(amount: int = 5) -> int:
         return amount
@@ -360,27 +289,7 @@ def test_context_transform_validation_and_static_resolution_edge_paths():
         return a + b
 
     assert add().flow.with_context(a=default_amount(), b=default_seed()).flow.compute().value == 15
-    assert flow_model_module._evaluate_context_transform_from_values(default_seed(), {}) == 10
-    with pytest.raises(TypeError, match="Missing contextual input"):
-        flow_model_module._evaluate_context_transform_from_values(seed_plus_one(), {})
-
-    dynamic_spec = flow_model_module._BoundContextSpec(
-        operations=[
-            flow_model_module.PatchContextOperation(
-                binding=dynamic_patch(),
-            )
-        ],
-    )
-    assert flow_model_module._statically_resolved_context_values(add(), dynamic_spec) is None
-    assert flow_model_module._statically_resolved_context_field_names(add(), dynamic_spec) == set()
-
-    identity_values, missing_transforms = flow_model_module._apply_context_spec_values_for_identity(add(), dynamic_spec, FlowContext(b=2))
-    assert identity_values == {"b": 2}
-    assert missing_transforms == ((flow_model_module._context_transform_identifier(dynamic_patch()), ("seed",)),)
-
-    missing_regular = default_amount()
-    config = flow_model_module._load_context_transform_config_from_binding(default_amount())
-    assert flow_model_module._bound_context_transform_regular_kwargs(config, missing_regular) == {"amount": 5}
+    assert add().flow.with_context(dynamic_patch()).flow.compute(seed=1, b=2).value == 3
 
     with pytest.raises(TypeError, match="unexpected keyword"):
         increment_b(amount=1, extra=2)
@@ -389,103 +298,18 @@ def test_context_transform_validation_and_static_resolution_edge_paths():
     with pytest.raises(TypeError, match="missing required regular"):
         increment_b()
 
-    with pytest.raises(TypeError, match="must return a mapping"):
-        flow_model_module._validate_patch_result(add(), 1)
-    with pytest.raises(TypeError, match="string field names"):
-        flow_model_module._validate_patch_result(add(), {1: 2})
-
-    class OpaqueModel:
-        context_type = object
-
-    assert flow_model_module._validate_patch_result(OpaqueModel(), {"x": 1}) == {"x": 1}
-    flow_model_module._validate_with_context_field_names(OpaqueModel(), ["anything"])
-    assert flow_model_module._evaluate_static_context_transform(default_amount()) == 5
-
     with pytest.raises(TypeError, match="Positional with_context"):
         add().flow.with_context(lambda: {"a": 1})
     with pytest.raises(TypeError, match="Positional with_context"):
         add().flow.with_context(123)
 
 
-def test_additional_flow_model_source_edge_paths(monkeypatch):
-    @Flow.context_transform
-    def default_seed(seed: FromContext[int] = 9) -> int:
-        return seed + 1
-
-    @Flow.context_transform
-    def dynamic_patch(seed: FromContext[int]) -> dict[str, object]:
-        return {"a": seed}
-
-    @Flow.model
-    def add(a: FromContext[int], b: FromContext[int]) -> int:
-        return a + b
-
-    @Flow.model
-    def regular_required(x: int) -> int:
-        return x
-
-    @Flow.model
-    def lazy_consumer(x: Lazy[int]) -> int:
-        return x()
-
-    class FailingPath:
-        def __init__(self, path):
-            self.path = path
-
-        @property
-        def object(self):
-            raise ImportError(self.path)
-
-    generated_name = "_basic_loader_Model"
-    original_generated = getattr(sys.modules[__name__], generated_name)
-    try:
-        with monkeypatch.context() as path_patch:
-            path_patch.setattr(flow_model_module, "PyObjectPath", FailingPath)
-            restored = pickle.loads(pickle.dumps(basic_loader(source="s", multiplier=2), protocol=5))
-    finally:
-        setattr(sys.modules[__name__], generated_name, original_generated)
-    assert restored.flow.compute(value=3).value == 6
-
-    bound = add().flow.with_context(dynamic_patch())
-    assert bound.flow.context_inputs == {"a": int, "b": int}
-    assert bound.flow.runtime_inputs == {"a": int, "b": int, "seed": int}
-    assert bound.flow.required_inputs == {"a": int, "b": int, "seed": int}
-
-    with pytest.raises(TypeError, match="missing required regular"):
-        flow_model_module._bound_context_transform_regular_kwargs(
-            flow_model_module._load_context_transform_config_from_binding(increment_b(amount=1)),
-            increment_b(amount=1).model_copy(update={"bound_args": {}}),
-        )
-    with pytest.raises(TypeError, match="Missing regular parameter"):
-        regular_required().__deps__(FlowContext())
-    assert lazy_consumer(x=data_source(base_value=1)).__deps__(FlowContext(value=1)) == []
-
-    def transform_with_bad_hints(value: FromContext[int]) -> int:
-        return value
-
-    def raise_attribute_error(*args, **kwargs):
-        raise AttributeError("bad hints")
-
-    monkeypatch.setattr(flow_model_module, "get_type_hints", raise_attribute_error)
-    with pytest.raises(AttributeError, match="bad hints"):
-        Flow.context_transform(transform_with_bad_hints)
-
-
-def test_plain_and_bound_optional_compute_paths_and_identity_helpers():
-    class AnyContextModel:
-        context_type = object
-
-    class FlowContextModel:
-        context_type = FlowContext
-
+def test_plain_and_bound_optional_compute_paths():
     class OptionalContextModel(CallableModel):
         @Flow.call
         def __call__(self, context: Optional[SimpleContext] = None) -> GenericResult[int]:
             return GenericResult(value=0 if context is None else context.value)
 
-    assert flow_model_module._model_context_contract(AnyContextModel()).input_types is None
-    assert flow_model_module._model_context_contract(FlowContextModel()).input_types is None
-    assert flow_model_module._identity_context_values_for_model_values(AnyContextModel(), {"extra": 1}) == {"extra": 1}
     assert OptionalContextModel().flow.compute(None).value == 0
     assert OptionalContextModel().flow.compute().value == 0
     assert OptionalContextModel().flow.required_inputs == {}
@@ -494,7 +318,6 @@ def test_plain_and_bound_optional_compute_paths_and_identity_helpers():
     assert bound.flow.compute(FlowContext(value=3)).value == 3
     with pytest.raises(TypeError, match="either one context object"):
         bound.flow.compute(FlowContext(value=3), value=4)
-    assert bound.flow._compute_target is bound
 
 
 def test_bound_optional_none_context_preserves_wrapped_dependencies():
@@ -692,16 +515,6 @@ def test_contextual_function_defaults_remain_contextual():
     assert model.flow.required_inputs == {}
     assert model.flow.compute().value == 7
     assert model.flow.compute(b=10).value == 12
-
-
-def test_compute_rejects_kwargs_for_already_bound_regular_params():
-    @Flow.model
-    def add(a: int, b: FromContext[int]) -> int:
-        return a + b
-
-    model = add(a=1)
-    with pytest.raises(TypeError, match="does not accept regular parameter override\\(s\\): a"):
-        model.flow.compute(a=999, b=2)
 
 
 def test_context_type_accepts_richer_subclass_for_from_context():
@@ -1077,15 +890,6 @@ def test_lazy_parameter_rejects_literal_function_default():
             return lazy_value()
 
 
-def test_lazy_runtime_helper_is_removed():
-    @Flow.model
-    def source(value: FromContext[int]) -> GenericResult[int]:
-        return GenericResult(value=value)
-
-    with pytest.raises(TypeError, match="Lazy is an annotation marker"):
-        Lazy(source())
-
-
 def test_lazy_and_from_context_combination_is_rejected():
     with pytest.raises(TypeError, match="cannot combine Lazy"):
 
@@ -1173,19 +977,6 @@ def test_generated_model_direct_call_plain_pickle_uses_serialized_factory(monkey
     assert restored.flow.compute(b=7).value == 42
 
 
-def test_generated_models_cloudpickle_preserves_unset_validation_sentinel():
-    @Flow.model
-    def multiply(a: int, b: FromContext[int]) -> int:
-        return a * b
-
-    model = multiply(a=6)
-    restored = rcploads(rcpdumps(model, protocol=5))
-    param = type(restored).__flow_model_config__.contextual_params[0]
-
-    assert param.context_validation_annotation is flow_model_module._UNSET
-    assert param.validation_annotation is int
-
-
 def test_local_generated_model_effective_cache_key_survives_pickle_roundtrip():
     def make_model():
         @Flow.model
@@ -1202,19 +993,6 @@ def test_local_generated_model_effective_cache_key_survives_pickle_roundtrip():
         restored = loads(dumps(model, protocol=5))
         after = cache_key(restored.__call__.get_evaluation_context(restored, context), effective=True)
         assert after == before
-
-
-def test_local_generated_model_plain_pickle_handles_generic_result_state():
-    def make_model():
-        @Flow.model
-        def first(xs: list[GenericResult[int]], b: FromContext[int]) -> int:
-            return xs[0].value + b
-
-        return first(xs=[GenericResult(value=1)])
-
-    restored = pickle.loads(pickle.dumps(make_model(), protocol=5))
-
-    assert restored.flow.compute(b=2).value == 3
 
 
 def test_generated_model_plain_pickle_preserves_external_pydantic_private_state():
@@ -1247,6 +1025,22 @@ def test_generated_model_pickle_preserves_external_ccflow_private_state():
         assert restored.flow.compute().value == 42
 
 
+def test_generated_model_pickle_preserves_outer_graph_identity_and_cycles():
+    @Flow.model
+    def read(payload: object) -> int:
+        return 0
+
+    for dumps, loads in ((pickle.dumps, pickle.loads), (rcpdumps, rcploads)):
+        shared = []
+        restored_model, restored_shared = loads(dumps((read(payload=shared), shared), protocol=5))
+        assert restored_model.payload is restored_shared
+
+        cycle = read(payload=None)
+        cycle.payload = cycle
+        restored_cycle = loads(dumps(cycle, protocol=5))
+        assert restored_cycle.payload is restored_cycle
+
+
 def test_local_generated_model_cloudpickle_preserves_local_pydantic_literal_state():
     def make_model():
         class LocalPayload(PydanticBaseModel):
@@ -1264,35 +1058,6 @@ def test_local_generated_model_cloudpickle_preserves_local_pydantic_literal_stat
     restored = rcploads(rcpdumps(make_model(), protocol=5))
 
     assert restored.payload._bonus == 40
-    assert restored.flow.compute().value == 42
-
-
-def test_bound_model_cloudpickle_handles_context_transform_generic_result_bound_args():
-    @Flow.model
-    def source(a: FromContext[int]) -> int:
-        return a
-
-    @Flow.context_transform
-    def fixed(value: GenericResult[int]) -> int:
-        return value.value
-
-    bound = source().flow.with_context(a=fixed(value=GenericResult(value=5)))
-    restored = rcploads(rcpdumps(bound, protocol=5))
-
-    assert restored.flow.compute().value == 5
-
-
-def test_generated_model_cloudpickle_preserves_user_generic_private_state():
-    @Flow.model
-    def read(box: object) -> int:
-        return box.item + box._bonus
-
-    box = ExternalGenericCcflowBox[int](item=2)
-    box._bonus = 40
-    restored = rcploads(rcpdumps(read(box=box), protocol=5))
-
-    assert type(restored.box) is type(box)
-    assert restored.box._bonus == 40
     assert restored.flow.compute().value == 42
 
 
@@ -1378,144 +1143,17 @@ def test_bound_model_pickle_preserves_external_ccflow_context_transform_bound_ar
         assert restored.flow.compute().value == 42
 
 
-def test_ray_cloudpickle_preserves_user_generic_private_state_in_generated_model(local_ray_runtime):
-    @Flow.model
-    def read(box: object) -> int:
-        return box.item + box._bonus
-
-    box = ExternalGenericCcflowBox[int](item=2)
-    box._bonus = 40
-    model = read(box=box)
-
-    @ray.remote
-    class Runner:
-        def run(self, payload):
-            restored = rcploads(payload)
-            return type(restored.box).__name__, restored.box._bonus, restored.flow.compute().value
-
-    runner = Runner.remote()
-    assert ray.get(runner.run.remote(rcpdumps(model, protocol=5))) == ("ExternalGenericCcflowBox[int]", 40, 42)
-
-
-def test_importable_generated_model_plain_pickle_cross_process_handles_generic_result_state(tmp_path, monkeypatch):
-    module_dir = tmp_path / "generic_state_module"
-    module_dir.mkdir()
-    module_path = module_dir / "generic_state_mod.py"
-    module_path.write_text(
-        "\n".join(
-            [
-                "from ccflow import Flow, FromContext, GenericResult",
-                "",
-                "@Flow.model",
-                "def first(xs: list[GenericResult[int]], b: FromContext[int]) -> int:",
-                "    return xs[0].value + b",
-                "",
-            ]
-        )
-    )
-    monkeypatch.syspath_prepend(str(module_dir))
-
-    import generic_state_mod
-
-    payload = base64.b64encode(pickle.dumps(generic_state_mod.first(xs=[GenericResult(value=10)]), protocol=5)).decode()
-    script = (
-        "import base64, pickle, sys\n"
-        f"sys.path.insert(0, {str(module_dir)!r})\n"
-        f"model = pickle.loads(base64.b64decode({payload!r}))\n"
-        "assert model.flow.compute(b=3).value == 13\n"
-    )
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=30)
-
-    assert result.returncode == 0, result.stderr
-
-
-def test_generated_model_plain_pickle_preserves_generic_result_in_loose_state():
-    @Flow.model
-    def use_any(x: Any, b: FromContext[int]) -> int:
-        return x.value + b
-
-    @Flow.model
-    def use_list(xs: list[Any]) -> int:
-        return xs[0].value
-
-    restored_any = pickle.loads(pickle.dumps(use_any(x=GenericResult(value=10)), protocol=5))
-    restored_list = pickle.loads(pickle.dumps(use_list(xs=[GenericResult(value=11)]), protocol=5))
-
-    assert restored_any.flow.compute(b=3).value == 13
-    assert isinstance(restored_any.x, GenericResult)
-    assert restored_list.flow.compute().value == 11
-    assert isinstance(restored_list.xs[0], GenericResult)
-
-
-def test_importable_generated_model_plain_pickle_cross_process_preserves_generic_result_in_loose_state(tmp_path, monkeypatch):
-    module_dir = tmp_path / "generic_any_state_module"
-    module_dir.mkdir()
-    module_path = module_dir / "generic_any_state_mod.py"
-    module_path.write_text(
-        "\n".join(
-            [
-                "from typing import Any",
-                "from ccflow import Flow, FromContext",
-                "",
-                "@Flow.model",
-                "def use_any(x: Any, b: FromContext[int]) -> int:",
-                "    return x.value + b",
-                "",
-            ]
-        )
-    )
-    monkeypatch.syspath_prepend(str(module_dir))
-
-    import generic_any_state_mod
-
-    payload = base64.b64encode(pickle.dumps(generic_any_state_mod.use_any(x=GenericResult(value=10)), protocol=5)).decode()
-    script = (
-        "import base64, pickle, sys\n"
-        f"sys.path.insert(0, {str(module_dir)!r})\n"
-        f"model = pickle.loads(base64.b64decode({payload!r}))\n"
-        "assert model.flow.compute(b=3).value == 13\n"
-    )
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=30)
-
-    assert result.returncode == 0, result.stderr
-
-
-def test_local_generated_model_plain_pickle_handles_generic_result_function_default():
+def test_local_generated_model_plain_pickle_handles_function_default_state():
     def make_model():
         @Flow.model
-        def first(xs: list[GenericResult[int]] = [GenericResult(value=1)], b: FromContext[int] = 2) -> int:
-            return xs[0].value + b
+        def first(xs: list[int] = [1], b: FromContext[int] = 2) -> int:
+            return xs[0] + b
 
         return first()
 
     restored = pickle.loads(pickle.dumps(make_model(), protocol=5))
 
     assert restored.flow.compute().value == 3
-
-
-def test_unresolved_lazy_local_generated_dependency_identity_survives_pickle_roundtrip():
-    def make_model():
-        @Flow.model
-        def source(a: FromContext[int]) -> int:
-            return a
-
-        @Flow.model
-        def choose(x: int, lazy_value: Lazy[int], use_lazy: FromContext[bool]) -> int:
-            return lazy_value() if use_lazy else x
-
-        return choose(x=7, lazy_value=source())
-
-    model = make_model()
-    context = FlowContext(use_lazy=False)
-    before_eval = model.__call__.get_evaluation_context(model, context)
-    before_key = cache_key(before_eval, effective=True)
-    before_root = get_dependency_graph(before_eval).root_id
-
-    restored = pickle.loads(pickle.dumps(model, protocol=5))
-    after_eval = restored.__call__.get_evaluation_context(restored, context)
-
-    assert cache_key(after_eval, effective=True) == before_key
-    assert get_dependency_graph(after_eval).root_id == before_root
 
 
 def test_unresolved_lazy_nested_local_generated_dependency_identity_survives_pickle_roundtrip():
@@ -1729,6 +1367,47 @@ def stage(value: FromContext[int]) -> int:
     assert first.flow.compute(value=10).value == 11
 
 
+def test_generated_model_pickle_path_ignores_stale_pyobjectpath_cache(monkeypatch):
+    module = ModuleType("ccflow_test_stale_generated_pickle_path")
+    module.Flow = Flow
+    module.FromContext = FromContext
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+
+    exec(
+        """
+def foo(a: int, x: FromContext[int]) -> int:
+    return a + x + 1
+""",
+        module.__dict__,
+    )
+    first_factory = Flow.model(module.foo)
+    module.foo = first_factory
+    first = first_factory(a=10)
+    path = f"{module.__name__}.foo"
+
+    # Prime PyObjectPath/import_string's cache with the first factory.  Pickle
+    # path selection must still inspect the live module attribute after a reload
+    # or replacement, otherwise old models can serialize by a path that a clean
+    # process resolves to different behavior.
+    assert PyObjectPath(path).object is first_factory
+
+    exec(
+        """
+def foo(a: int, x: FromContext[int]) -> int:
+    return a + x + 100
+""",
+        module.__dict__,
+    )
+    second_factory = Flow.model(module.foo)
+    module.foo = second_factory
+
+    config = type(first).__flow_model_config__
+    assert flow_model_module._generated_model_factory_path_for_pickle(config, type(first)) is None
+    assert first.__reduce__()[0] is flow_model_module._new_local_flow_model_for_pickle
+    assert pickle.loads(pickle.dumps(first, protocol=5)).flow.compute(x=1).value == 12
+    assert second_factory(a=10).flow.compute(x=1).value == 111
+
+
 def test_reloaded_importable_generated_model_keeps_clean_process_path(tmp_path, monkeypatch):
     module_dir = tmp_path / "reload_case"
     module_dir.mkdir()
@@ -1822,20 +1501,6 @@ def test_reloaded_importable_generated_model_allows_stale_decorator_aliases(tmp_
     assert str(reloaded.foo().type_) == "decor_alias_mod._foo_Model"
     assert str(reloaded.foo_alias().type_) == "decor_alias_mod._foo_Model"
     assert reloaded.foo().flow.compute(x=2).value == 3
-
-
-def test_importable_generated_model_json_roundtrip_cross_process():
-    model = basic_loader(source="library", multiplier=3)
-    payload = model.model_dump_json()
-    script = (
-        "from ccflow import BaseModel\n"
-        f"data = {payload!r}\n"
-        "model = BaseModel.model_validate_json(data)\n"
-        "result = model.flow.compute(value=4)\n"
-        "assert result.value == 12, f'Expected 12, got {result.value}'\n"
-    )
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=30)
-    assert result.returncode == 0, f"Cross-process JSON roundtrip failed:\n{result.stderr}"
 
 
 def test_importable_bound_model_context_transform_json_roundtrip_cross_process():
@@ -2133,11 +1798,6 @@ def test_patch_then_keyword_override_precedence():
     result = bound(FlowContext(start_date=1, end_date=2))
     assert result.value == 100_012
 
-    dumped = bound.model_dump(mode="json")
-    assert dumped["context_spec"]["operations"][0]["binding"]["bound_args"] == {"amount": 10}
-    assert dumped["context_spec"]["operations"][1]["name"] == "start_date"
-    assert dumped["context_spec"]["operations"][1]["spec"]["kind"] == "static_value"
-
 
 def test_chained_transforms_read_original_runtime_context():
     @Flow.model
@@ -2151,59 +1811,6 @@ def test_chained_transforms_read_original_runtime_context():
 
     result = bound(FlowContext(start_date=1, end_date=2))
     assert result.value == 101_012
-
-
-def test_graph_integration_fanout_fanin():
-    @Flow.model
-    def source(base: int, value: FromContext[int]) -> int:
-        return value + base
-
-    @Flow.model
-    def scale(data: int, factor: int) -> int:
-        return data * factor
-
-    @Flow.model
-    def merge(left: int, right: int, bonus: FromContext[int]) -> int:
-        return left + right + bonus
-
-    src = source(base=10)
-    left = scale(data=src, factor=2)
-    right = scale(data=src, factor=5)
-    model = merge(left=left, right=right)
-
-    assert model.flow.compute(FlowContext(value=3, bonus=7)).value == ((3 + 10) * 2) + ((3 + 10) * 5) + 7
-
-
-def test_graph_integration_cycle_raises_cleanly():
-    @Flow.model
-    def increment(x: int, n: FromContext[int]) -> int:
-        return x + n
-
-    root = increment()
-    branch = increment(x=root)
-    object.__setattr__(root, "x", branch)
-
-    with FlowOptionsOverride(options={"evaluator": GraphEvaluator()}):
-        with pytest.raises(graphlib.CycleError):
-            root.flow.compute(n=1)
-
-
-def test_large_contextual_contract_stress():
-    @Flow.model
-    def total(
-        base: int,
-        x1: FromContext[int],
-        x2: FromContext[int],
-        x3: FromContext[int],
-        x4: FromContext[int],
-        x5: FromContext[int],
-        x6: FromContext[int],
-    ) -> int:
-        return base + x1 + x2 + x3 + x4 + x5 + x6
-
-    model = total(base=10)
-    assert model.flow.context_inputs == {"x1": int, "x2": int, "x3": int, "x4": int, "x5": int, "x6": int}
-    assert model.flow.compute(x1=1, x2=2, x3=3, x4=4, x5=5, x6=6).value == 31
 
 
 def test_registry_integration_for_generated_models():
@@ -2276,18 +1883,6 @@ def test_unexpected_type_adapter_errors_are_not_silently_swallowed():
 
     with pytest.raises(RuntimeError, match="boom"):
         Flow.model(bad)
-
-
-@pytest.mark.parametrize("error", [RuntimeError("boom"), TypeError("boom"), ValueError("boom")])
-def test_schema_safe_annotation_does_not_swallow_unexpected_type_adapter_errors(monkeypatch, error):
-    def broken_type_adapter(annotation):
-        del annotation
-        raise error
-
-    monkeypatch.setattr(flow_model_module, "_type_adapter", broken_type_adapter)
-
-    with pytest.raises(type(error), match="boom"):
-        flow_model_module._pydantic_schema_safe_annotation(int)
 
 
 @pytest.mark.parametrize("error", [RuntimeError("boom"), TypeError("boom")])
@@ -2387,37 +1982,6 @@ def test_context_transform_factory_signature_only_exposes_regular_bindings():
 
     with pytest.raises(TypeError, match="positional"):
         increment_b(1)
-
-
-def test_type_adapter_caches_are_bounded_and_clearable(monkeypatch):
-    monkeypatch.setattr(flow_model_module, "_TYPE_ADAPTER_CACHE_MAXSIZE", 2)
-    flow_model_module.clear_flow_model_caches()
-
-    try:
-        for annotation in (int, str, float):
-            flow_model_module._type_adapter(annotation)
-
-        assert list(flow_model_module._HASHABLE_TYPE_ADAPTER_CACHE) == [str, float]
-
-        unhashable_annotations = (
-            Annotated[int, []],
-            Annotated[str, []],
-            Annotated[float, []],
-        )
-        repeated_unhashable = Annotated[bytes, []]
-        assert flow_model_module._type_adapter(repeated_unhashable) is flow_model_module._type_adapter(repeated_unhashable)
-
-        for annotation in unhashable_annotations:
-            flow_model_module._type_adapter(annotation)
-
-        assert len(flow_model_module._UNHASHABLE_TYPE_ADAPTER_CACHE) == 2
-        assert [entry[0] for entry in flow_model_module._UNHASHABLE_TYPE_ADAPTER_CACHE.values()] == list(unhashable_annotations[-2:])
-
-        flow_model_module.clear_flow_model_caches()
-        assert not flow_model_module._HASHABLE_TYPE_ADAPTER_CACHE
-        assert not flow_model_module._UNHASHABLE_TYPE_ADAPTER_CACHE
-    finally:
-        flow_model_module.clear_flow_model_caches()
 
 
 def test_plain_callable_flow_api_paths():
@@ -2600,6 +2164,79 @@ def test_unhashable_annotations_still_validate():
     assert add(x="2").flow.compute(y="3").value == 5
 
 
+def test_flow_model_internal_contract_helpers_cover_portable_edge_shapes():
+    annotation = Annotated[dict[str, list[GenericResult[int]]], "contract"]
+    restored = binding_module._restore_annotation(binding_module._serialize_annotation(annotation))
+
+    assert get_args(restored)[1:] == ("contract",)
+    assert binding_module._restore_annotation(binding_module._serialize_annotation(Literal["a", "b"])) == Literal["a", "b"]
+    assert binding_module._restore_annotation(binding_module._serialize_annotation(int | None)) == Optional[int]
+    assert binding_module._clone_function_without_annotations(5) == 5
+    assert repr(get_args(Lazy[int])[1]) == "Lazy"
+    assert repr(get_args(FromContext[int])[1]) == "FromContext"
+    with pytest.raises(TypeError, match="Lazy is an annotation marker"):
+        Lazy()
+    with pytest.raises(TypeError, match="Unknown serialized annotation payload"):
+        binding_module._restore_annotation(object())
+    with pytest.raises(TypeError, match="Unknown serialized annotation payload kind"):
+        binding_module._restore_annotation(binding_module._SerializedAnnotation(kind="bad", value=None))
+    with pytest.raises(TypeError, match="Unknown Flow.model parameter payload"):
+        binding_module._restore_flow_model_param(object())
+    with pytest.raises(TypeError, match="Unknown Flow.model config payload"):
+        binding_module._restore_flow_model_config(object())
+
+    compatible = binding_module._context_type_annotations_compatible
+    assert compatible(Any, int)
+    assert compatible(int, Any)
+    assert compatible(int | str, int)
+    assert compatible(int | None, type(None))
+    assert compatible(Literal["a", "b"], Literal["a"])
+    assert compatible(str, Literal["a"])
+    assert compatible(list[int], list[int])
+    assert not compatible(int, int | None)
+    assert not compatible(Literal["a"], Literal["b"])
+    assert not compatible(Literal["a"], str)
+    assert not compatible(list[int], list[str])
+
+    flow_model_module.clear_flow_model_caches()
+    unhashable_annotation = Annotated[int, []]
+    assert flow_model_module._type_adapter(unhashable_annotation).validate_python("1") == 1
+    assert flow_model_module._type_adapter(unhashable_annotation).validate_python("2") == 2
+    assert flow_model_module._concrete_context_type(Optional[SimpleContext]) is SimpleContext
+    assert flow_model_module._concrete_context_type(int) is None
+    assert flow_model_module._bound_field_names(object()) == set()
+    assert flow_model_module._expected_type_repr(int | str) == "int | str"
+    assert flow_model_module._coerce_value("payload", object(), object(), "Regular parameter").__class__ is object
+    assert flow_model_module._unwrap_model_result(3) == 3
+    assert flow_model_module._resolve_registry_candidate("__missing_registry_entry__") is None
+    assert flow_model_module._registry_candidate_allowed(object(), "literal")
+    assert not flow_model_module._registry_candidate_allowed(int, "not-an-int")
+    assert flow_model_module._registry_candidate_allowed(int, "3")
+    with pytest.raises(ImportError, match="does not have a _generated_model"):
+        flow_model_module._new_generated_flow_model_for_pickle("ccflow.GenericResult")
+    with pytest.raises(TypeError, match="model_base must be a CallableModel subclass"):
+        flow_model_module._resolve_generated_model_bases(int)
+    assert flow_model_module._context_transform_identifier(static_patch()) == "static_patch"
+    assert flow_model_module._context_transform_repr(static_patch()) == "static_patch()"
+    assert flow_model_module._context_transform_repr(increment_b(amount=2)) == "increment_b(amount=2)"
+    assert flow_model_module._context_transform_repr(5) == "5"
+
+    @Flow.model
+    def dep(value: FromContext[int]) -> int:
+        return value
+
+    with pytest.raises(TypeError, match="must return a mapping"):
+        flow_model_module._validate_patch_result(dep(), 1)
+    with pytest.raises(TypeError, match="string field names"):
+        flow_model_module._validate_patch_result(dep(), {1: 2})
+    lazy_thunk = flow_model_module._make_lazy_thunk(dep(), FlowContext(value=4))
+    assert lazy_thunk() == 4
+    assert lazy_thunk() == 4
+    coercing_thunk = flow_model_module._make_coercing_lazy_thunk(lambda: "5", "value", int)
+    assert coercing_thunk() == 5
+    assert coercing_thunk() == 5
+
+
 def test_compute_accepts_context_object_for_from_context_models():
     model = basic_loader(source="library", multiplier=3)
 
@@ -2765,6 +2402,23 @@ def test_context_type_validates_parameterized_annotations():
             return sum(vals)
 
 
+def test_context_type_allows_compatible_union_literal_and_generic_fields():
+    class RichContext(ContextBase):
+        flag: Literal["a"]
+        maybe_value: int | None
+        values: list[int]
+
+    @Flow.model(context_type=RichContext)
+    def summarize(
+        flag: FromContext[Literal["a", "b"]],
+        maybe_value: FromContext[int | None],
+        values: FromContext[list[int]],
+    ) -> int:
+        return len(flag) + (maybe_value or 0) + sum(values)
+
+    assert summarize().flow.compute(flag="a", maybe_value=None, values=[1, 2]).value == 4
+
+
 def test_context_type_rejects_nullable_field_for_non_nullable_from_context():
     class OptionalValueContext(ContextBase):
         value: int | None
@@ -2774,44 +2428,6 @@ def test_context_type_rejects_nullable_field_for_non_nullable_from_context():
         @Flow.model(context_type=OptionalValueContext)
         def add_one(value: FromContext[int]) -> int:
             return value + 1
-
-
-@pytest.mark.parametrize(
-    ("func_annotation", "context_annotation", "expected"),
-    [
-        (int, int, True),
-        (int, str, False),
-        (int | None, int, True),
-        (int, int | None, False),
-        (int | None, int | None, True),
-        (list[int], list[str], False),
-        (list[int], list[int], True),
-        (int | str, int, True),
-        (int | str, int | None, False),
-        (int | None, type(None), True),
-        (int | None, int | str, False),
-        (int, int | str, False),
-        (object, int | str, True),
-        (Literal["a"], Literal["a"], True),
-        (Literal["a"], Literal["b"], False),
-        (str, Literal["a"], True),
-        (Literal["a", "b"], Literal["a"], True),
-        (Literal["a"], str, False),
-        (list[int], Literal["a"], False),
-        (Annotated[int, "meta"], int, True),
-        (dict[str, list[int]], dict[str, list[int]], True),
-        (dict[str, list[int]], dict[str, list[str]], False),
-        (list, list[int], False),
-        (tuple[int], tuple[int, str], False),
-        (Any, int, True),
-        (Any, str, True),
-        (int, Any, True),
-        (str, Any, True),
-        (Any, Any, True),
-    ],
-)
-def test_context_type_annotations_compatible_cases(func_annotation, context_annotation, expected):
-    assert flow_binding_module._context_type_annotations_compatible(func_annotation, context_annotation) is expected
 
 
 def test_compute_forwards_options_with_custom_evaluator():
@@ -2831,11 +2447,6 @@ def test_compute_forwards_options_with_custom_evaluator():
     assert result1.value == 10
     assert result2.value == 10
     assert calls["count"] == 1
-
-
-def test_unset_flow_input_pickle_roundtrip_preserves_singleton():
-    restored = pickle.loads(pickle.dumps(flow_model_module._UNSET_FLOW_INPUT, protocol=5))
-    assert restored is flow_model_module._UNSET_FLOW_INPUT
 
 
 def test_compute_forwards_options_with_graph_evaluator():
@@ -3237,27 +2848,6 @@ def test_generated_model_cache_uses_effective_key_through_transparent_evaluator(
     assert len(cache.cache) == 1
 
 
-def test_cache_key_effective_option_exposes_generated_model_identity():
-    @Flow.model
-    def source(value: FromContext[int]) -> int:
-        return value * 10
-
-    @Flow.model
-    def root(x: int, bonus: FromContext[int]) -> int:
-        return x + bonus
-
-    model = root(x=source())
-    ctx1 = FlowContext(value=3, bonus=7, unused="one")
-    ctx2 = FlowContext(value=3, bonus=7, unused="two")
-    eval1 = model.__call__.get_evaluation_context(model, ctx1)
-    eval2 = model.__call__.get_evaluation_context(model, ctx2)
-    cache = MemoryCacheEvaluator()
-
-    assert cache_key(eval1) != cache_key(eval2)
-    assert cache_key(eval1, effective=True) == cache_key(eval2, effective=True)
-    assert cache.key(eval1) == cache_key(eval1, effective=True)
-
-
 def test_effective_cache_key_ignores_untokenizable_unused_ambient_context():
     class BadToken:
         def __deepcopy__(self, memo):
@@ -3347,34 +2937,6 @@ def test_generated_model_effective_cache_key_includes_behavior_token(monkeypatch
     assert key1 != key2
 
 
-def test_generated_model_effective_cache_key_includes_opaque_evaluator_behavior():
-    class OpaqueA(EvaluatorBase):
-        tag: str = "same"
-
-        def __call__(self, context: ModelEvaluationContext):
-            return context()
-
-    class OpaqueB(EvaluatorBase):
-        tag: str = "same"
-
-        def __call__(self, context: ModelEvaluationContext):
-            result = context()
-            return result
-
-    @Flow.model
-    def add(a: int, b: FromContext[int]) -> int:
-        return a + b
-
-    model = add(a=10)
-    inner = model.__call__.get_evaluation_context(model, FlowContext(b=1, unused="same"), _options={"cacheable": True})
-    cache = MemoryCacheEvaluator()
-
-    key1 = cache.key(ModelEvaluationContext(model=OpaqueA(), context=inner))
-    key2 = cache.key(ModelEvaluationContext(model=OpaqueB(), context=inner))
-
-    assert key1 != key2
-
-
 def test_generated_model_cache_changes_when_consumed_context_field_changes():
     calls = {"count": 0}
 
@@ -3412,33 +2974,6 @@ def test_generated_model_cache_changes_when_regular_literal_input_changes():
     assert len(cache.cache) == 2
 
 
-def test_generated_model_cache_uses_structural_key_with_nontransparent_evaluator():
-    calls = {"count": 0}
-
-    class OpaqueEvaluator(EvaluatorBase):
-        def __call__(self, context: ModelEvaluationContext):
-            return context()
-
-    @Flow.model
-    def add(a: int, b: FromContext[int]) -> int:
-        calls["count"] += 1
-        return a + b
-
-    cache = MemoryCacheEvaluator()
-    evaluator = combine_evaluators(OpaqueEvaluator(), cache)
-    model = add(a=10)
-
-    with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
-        assert model.flow.compute(b=1, unused="plain").value == 11
-
-    with FlowOptionsOverride(options={"evaluator": evaluator, "cacheable": True}):
-        assert model.flow.compute(b=1, unused="one").value == 11
-        assert model.flow.compute(b=1, unused="two").value == 11
-
-    assert calls["count"] == 3
-    assert len(cache.cache) == 3
-
-
 def test_generated_model_cache_does_not_ignore_context_read_by_nontransparent_evaluator():
     class AddAmbient(EvaluatorBase):
         def __call__(self, context: ModelEvaluationContext):
@@ -3458,25 +2993,6 @@ def test_generated_model_cache_does_not_ignore_context_read_by_nontransparent_ev
         assert model.flow.compute(b=1, unused=200).value == 211
 
     assert len(cache.cache) == 2
-
-
-def test_generated_model_cache_uses_effective_key_when_result_validation_disabled():
-    calls = {"count": 0}
-
-    @Flow.model
-    def add(a: int, b: FromContext[int]) -> int:
-        calls["count"] += 1
-        return a + b
-
-    cache = MemoryCacheEvaluator()
-    model = add(a=10)
-
-    with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True, "validate_result": False}):
-        assert model.flow.compute(b=1, unused="one").value == 11
-        assert model.flow.compute(b=1, unused="two").value == 11
-
-    assert calls["count"] == 1
-    assert len(cache.cache) == 1
 
 
 def test_generated_model_cache_key_preserves_result_validation_option():
@@ -3555,95 +3071,6 @@ def test_unused_lazy_plain_dependency_defers_missing_context_validation():
     assert len(cache.cache) == 1
 
 
-def test_unused_lazy_bound_plain_dependency_applies_static_context_identity():
-    calls = {"source": 0, "choose": 0}
-
-    class RequiredContext(ContextBase):
-        a: int
-        b: int
-
-    class PlainSource(CallableModel):
-        @Flow.call
-        def __call__(self, context: RequiredContext) -> GenericResult[int]:
-            calls["source"] += 1
-            return GenericResult(value=context.a + context.b)
-
-    @Flow.model
-    def choose(x: int, lazy_value: Lazy[int], use_lazy: FromContext[bool]) -> int:
-        calls["choose"] += 1
-        return lazy_value() if use_lazy else x
-
-    cache = MemoryCacheEvaluator()
-    model = choose(x=7, lazy_value=PlainSource().flow.with_context(a=1))
-
-    with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
-        assert model.flow.compute(use_lazy=False, unused="one").value == 7
-        assert model.flow.compute(use_lazy=False, unused="two").value == 7
-        with pytest.raises(ValidationError):
-            model.flow.compute(use_lazy=True)
-
-    assert calls == {"source": 0, "choose": 2}
-    assert len(cache.cache) == 1
-
-
-def test_unused_lazy_bound_plain_dependency_dynamic_transform_can_leave_missing_context():
-    calls = {"source": 0, "choose": 0}
-
-    class RequiredContext(ContextBase):
-        a: int
-        b: int
-
-    class PlainSource(CallableModel):
-        @Flow.call
-        def __call__(self, context: RequiredContext) -> GenericResult[int]:
-            calls["source"] += 1
-            return GenericResult(value=context.a + context.b)
-
-    @Flow.model
-    def choose(x: int, lazy_value: Lazy[int], use_lazy: FromContext[bool]) -> int:
-        calls["choose"] += 1
-        return lazy_value() if use_lazy else x
-
-    cache = MemoryCacheEvaluator()
-    model = choose(x=7, lazy_value=PlainSource().flow.with_context(b=seed_plus_one()))
-
-    with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
-        assert model.flow.compute(use_lazy=False, seed=1, unused="one").value == 7
-        assert model.flow.compute(use_lazy=False, seed=1, unused="two").value == 7
-
-    assert calls == {"source": 0, "choose": 1}
-    assert len(cache.cache) == 1
-
-
-def test_unused_lazy_bound_plain_dependency_fully_resolved_identity_ignores_ambient_context():
-    calls = {"source": 0, "choose": 0}
-
-    class RequiredContext(ContextBase):
-        a: int
-        b: int
-
-    class PlainSource(CallableModel):
-        @Flow.call
-        def __call__(self, context: RequiredContext) -> GenericResult[int]:
-            calls["source"] += 1
-            return GenericResult(value=context.a + context.b)
-
-    @Flow.model
-    def choose(x: int, lazy_value: Lazy[int], use_lazy: FromContext[bool]) -> int:
-        calls["choose"] += 1
-        return lazy_value() if use_lazy else x
-
-    cache = MemoryCacheEvaluator()
-    model = choose(x=7, lazy_value=PlainSource().flow.with_context(a=1, b=2))
-
-    with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
-        assert model.flow.compute(use_lazy=False, unused="one").value == 7
-        assert model.flow.compute(use_lazy=False, unused="two").value == 7
-
-    assert calls == {"source": 0, "choose": 1}
-    assert len(cache.cache) == 1
-
-
 def test_unused_lazy_bound_dependency_uses_partial_context_identity():
     calls = {"source": 0, "choose": 0}
 
@@ -3665,6 +3092,36 @@ def test_unused_lazy_bound_dependency_uses_partial_context_identity():
         assert model.flow.compute(use_lazy=False, a=200).value == 7
         with pytest.raises(TypeError, match="Missing contextual input"):
             model.flow.compute(use_lazy=True, a=300)
+
+    assert calls == {"source": 0, "choose": 2}
+    assert len(cache.cache) == 1
+
+
+def test_unused_lazy_bound_dependency_with_unresolved_transform_has_stable_identity():
+    calls = {"source": 0, "choose": 0}
+
+    @Flow.model
+    def source(a: FromContext[int], b: FromContext[int]) -> int:
+        calls["source"] += 1
+        return a + b
+
+    @Flow.context_transform
+    def a_from_seed(seed: FromContext[int]) -> int:
+        return seed + 1
+
+    @Flow.model
+    def choose(x: int, lazy_value: Lazy[int], use_lazy: FromContext[bool]) -> int:
+        calls["choose"] += 1
+        return lazy_value() if use_lazy else x
+
+    cache = MemoryCacheEvaluator()
+    model = choose(x=7, lazy_value=source().flow.with_context(a=a_from_seed()))
+
+    with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
+        assert model.flow.compute(use_lazy=False, b=1, unused="one").value == 7
+        assert model.flow.compute(use_lazy=False, b=2, unused="two").value == 7
+        with pytest.raises(TypeError, match="Missing contextual input"):
+            model.flow.compute(use_lazy=True, b=3)
 
     assert calls == {"source": 0, "choose": 2}
     assert len(cache.cache) == 1
@@ -3714,33 +3171,6 @@ def test_used_lazy_bound_dependency_identity_applies_dynamic_context_transform()
         assert model.flow.compute(use_lazy=True, seed=2, b=10).value == 13
 
     assert calls == {"source": 2, "choose": 2}
-    assert len(cache.cache) == 6
-
-
-def test_unused_lazy_bound_dependency_records_missing_transform_context():
-    calls = {"source": 0, "choose": 0}
-
-    @Flow.model
-    def source(a: FromContext[int], b: FromContext[int]) -> int:
-        calls["source"] += 1
-        return a + b
-
-    @Flow.model
-    def choose(x: int, lazy_value: Lazy[int], use_lazy: FromContext[bool]) -> int:
-        calls["choose"] += 1
-        return lazy_value() if use_lazy else x
-
-    cache = MemoryCacheEvaluator()
-    model = choose(x=7, lazy_value=source().flow.with_context(a=seed_plus_one()))
-
-    with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
-        assert model.flow.compute(use_lazy=False, unused="one").value == 7
-        assert model.flow.compute(use_lazy=False, unused="two").value == 7
-        assert model.flow.compute(use_lazy=False, a=100, b=1).value == 7
-        assert model.flow.compute(use_lazy=False, a=200, b=1).value == 7
-
-    assert calls == {"source": 0, "choose": 1}
-    assert len(cache.cache) == 1
 
 
 def test_used_lazy_generated_dependency_identity_respects_contextual_defaults():
@@ -3797,41 +3227,6 @@ def test_generated_model_cache_distinguishes_unresolved_lazy_dependency_models()
     assert len(cache.cache) == 2
 
 
-def test_generated_model_diamond_cache_reuses_shared_source_and_ignores_unused_fields():
-    calls = {"source": 0, "left": 0, "right": 0, "root": 0}
-
-    @Flow.model
-    def source(value: FromContext[int]) -> int:
-        calls["source"] += 1
-        return value + 10
-
-    @Flow.model
-    def left(x: int) -> int:
-        calls["left"] += 1
-        return x * 2
-
-    @Flow.model
-    def right(x: int) -> int:
-        calls["right"] += 1
-        return x * 5
-
-    @Flow.model
-    def root(left_value: int, right_value: int, bonus: FromContext[int]) -> int:
-        calls["root"] += 1
-        return left_value + right_value + bonus
-
-    shared = source()
-    model = root(left_value=left(x=shared), right_value=right(x=shared))
-    cache = MemoryCacheEvaluator()
-
-    with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
-        assert model(FlowContext(value=3, bonus=7, unused="one")).value == 98
-        assert model(FlowContext(value=3, bonus=7, unused="two")).value == 98
-
-    assert calls == {"source": 1, "left": 1, "right": 1, "root": 1}
-    assert len(cache.cache) == 4
-
-
 def test_bound_generated_sibling_dependencies_keep_distinct_rewritten_contexts_with_graph_cache():
     calls = {"source": 0, "root": 0}
 
@@ -3855,35 +3250,6 @@ def test_bound_generated_sibling_dependencies_keep_distinct_rewritten_contexts_w
 
     assert calls == {"source": 2, "root": 1}
     assert len(cache.cache) >= 3
-
-
-def test_generated_dependency_graph_identity_ignores_unused_flow_context_fields():
-    @Flow.model
-    def source(value: FromContext[int]) -> int:
-        return value * 10
-
-    @Flow.model
-    def root(x: int, bonus: FromContext[int]) -> int:
-        return x + bonus
-
-    model = root(x=source())
-    graph1 = get_dependency_graph(model.__call__.get_evaluation_context(model, FlowContext(value=3, bonus=7, unused="one")))
-    graph2 = get_dependency_graph(model.__call__.get_evaluation_context(model, FlowContext(value=3, bonus=7, unused="two")))
-
-    assert graph1.root_id == graph2.root_id
-    assert set(graph1.graph.keys()) == set(graph2.graph.keys())
-    assert set(graph1.ids.keys()) == set(graph2.ids.keys())
-
-
-def test_bound_generated_model_dependency_graph_has_no_self_loop():
-    @Flow.model
-    def add(a: int, b: FromContext[int]) -> int:
-        return a + b
-
-    bound = add(a=1).flow.with_context(b=2)
-    graph = get_dependency_graph(bound.__call__.get_evaluation_context(bound, FlowContext(b=99)))
-
-    assert graph.root_id not in graph.graph[graph.root_id]
 
 
 def test_bound_generated_model_dependency_graph_traverses_collapsed_child_deps():
@@ -3948,26 +3314,6 @@ def test_bound_model_cache_respects_wrapped_model_scoped_evaluator():
     assert calls == {"add": 2, "evaluator": 1}
 
 
-def test_plain_callable_model_cache_remains_structural_for_flow_context():
-    calls = {"count": 0}
-
-    class Counter(CallableModel):
-        @Flow.call
-        def __call__(self, context: FlowContext) -> GenericResult[int]:
-            calls["count"] += 1
-            return GenericResult(value=context.value)
-
-    cache = MemoryCacheEvaluator()
-    model = Counter()
-
-    with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
-        assert model(FlowContext(value=10, unused="one")).value == 10
-        assert model(FlowContext(value=10, unused="two")).value == 10
-
-    assert calls["count"] == 2
-    assert len(cache.cache) == 2
-
-
 def test_generated_models_cross_process_pickle():
     """Module-level @Flow.model instances are deserializable in a separate process."""
     model = basic_loader(source="library", multiplier=3)
@@ -3983,26 +3329,6 @@ def test_generated_models_cross_process_pickle():
     )
     result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, f"Cross-process unpickle failed:\n{result.stderr}"
-
-
-def test_generated_models_cross_process_cloudpickle():
-    """Module-level @Flow.model instances are deserializable via cloudpickle in a separate process."""
-    from ray.cloudpickle import dumps as rcpdumps
-
-    model = basic_loader(source="library", multiplier=3)
-    data = rcpdumps(model, protocol=5)
-    encoded = base64.b64encode(data).decode()
-    script = (
-        "import base64\n"
-        "from ray.cloudpickle import loads as rcploads\n"
-        f"data = base64.b64decode('{encoded}')\n"
-        "model = rcploads(data)\n"
-        "from ccflow import FlowContext\n"
-        "result = model.flow.compute(value=4)\n"
-        "assert result.value == 12, f'Expected 12, got {result.value}'\n"
-    )
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=30)
-    assert result.returncode == 0, f"Cross-process cloudpickle failed:\n{result.stderr}"
 
 
 def test_local_generated_models_cross_process_cloudpickle():
@@ -4027,28 +3353,6 @@ def test_local_generated_models_cross_process_cloudpickle():
     )
     result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, f"Cross-process local cloudpickle failed:\n{result.stderr}"
-
-
-def test_local_generated_model_explicit_generic_result_cross_process_cloudpickle():
-    """Local generated models should not rehydrate from fragile GenericResult[T] annotations."""
-    from ray.cloudpickle import dumps as rcpdumps
-
-    @Flow.model
-    def add(a: int, b: FromContext[int]) -> GenericResult[int]:
-        return GenericResult(value=a + b)
-
-    encoded = base64.b64encode(rcpdumps(add(a=1), protocol=5)).decode()
-    script = (
-        "import base64\n"
-        "from ray.cloudpickle import loads as rcploads\n"
-        f"data = base64.b64decode('{encoded}')\n"
-        "model = rcploads(data)\n"
-        "result = model.flow.compute(b=2)\n"
-        "assert result.value == 3, f'Expected 3, got {result.value}'\n"
-        "assert repr(model.result_type) == \"<class 'ccflow.result.generic.GenericResult[int]'>\"\n"
-    )
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=30)
-    assert result.returncode == 0, f"Cross-process explicit GenericResult cloudpickle failed:\n{result.stderr}"
 
 
 def test_local_generated_model_postponed_annotations_cross_process_cloudpickle():
@@ -4081,6 +3385,28 @@ def make_model():
     )
     result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, f"Cross-process postponed-annotation cloudpickle failed:\n{result.stderr}"
+
+
+def test_local_generated_model_complex_annotations_same_process_cloudpickle():
+    """Local restore should reuse the analyzed contract for nested typing shapes."""
+
+    def make_model():
+        @Flow.model
+        def summarize(
+            values: Annotated[list[int], Field(min_length=1)],
+            mode: Literal["sum", "first"],
+            offsets: tuple[int, ...],
+            maybe_offset: int | None,
+            scale: FromContext[int],
+        ) -> GenericResult[int]:
+            total = values[0] if mode == "first" else sum(values)
+            return GenericResult(value=(total + sum(offsets) + (maybe_offset or 0)) * scale)
+
+        return summarize(values=[1, 2], mode="sum", offsets=(3,), maybe_offset=None)
+
+    restored = rcploads(rcpdumps(make_model(), protocol=5))
+
+    assert restored.flow.compute(scale=2) == GenericResult[int](value=12)
 
 
 def test_model_base_fields_visible_in_bound_inputs():

@@ -43,6 +43,7 @@ File layout:
 8. Generated model class construction and decorators.
 """
 
+import importlib
 import inspect
 import sys
 from abc import update_abstractmethods
@@ -70,6 +71,7 @@ from typing import (
     get_type_hints,
 )
 
+import cloudpickle
 from pydantic import BaseModel as PydanticModel, Field, PrivateAttr, SkipValidation, TypeAdapter, ValidationError, create_model, model_validator
 from pydantic.errors import PydanticSchemaGenerationError, PydanticUndefinedAnnotation
 
@@ -248,7 +250,6 @@ class _GeneratedModelIdentity(NamedTuple):
 class _LocalFlowModelPicklePayload(NamedTuple):
     serialized_config: Any
     factory_kwargs: Dict[str, Any]
-    state_bytes: bytes
 
 
 # ---------------------------------------------------------------------------
@@ -492,16 +493,12 @@ def _ensure_named_python_function(fn: _AnyCallable, *, decorator_name: str) -> N
 
 
 def _serialize_context_transform_config(config: _FlowModelConfig) -> str:
-    import cloudpickle
-
     payload = cloudpickle.dumps(_serialize_flow_model_config(config), protocol=5)
     return b64encode(payload).decode("ascii")
 
 
 @lru_cache(maxsize=None)
 def _load_serialized_context_transform_config(serialized_config: str) -> _FlowModelConfig:
-    import cloudpickle
-
     try:
         payload = cloudpickle.loads(b64decode(serialized_config.encode("ascii")))
         config = _restore_flow_model_config(payload)
@@ -537,44 +534,33 @@ def _is_mapping_annotation(annotation: Any) -> bool:
         return False
 
 
-def _restore_model_from_cloudpickled_state(cls: type[BaseModel], state_bytes: bytes) -> BaseModel:
-    import cloudpickle
-
-    obj = cls.__new__(cls)
-    obj.__setstate__(cloudpickle.loads(state_bytes))
-    return obj
-
-
-def _restore_pickled_local_flow_model(serialized_factory_payload: bytes) -> BaseModel:
-    import cloudpickle
-
+def _new_local_flow_model_for_pickle(serialized_factory_payload: bytes) -> BaseModel:
     payload = cloudpickle.loads(serialized_factory_payload)
     config = _restore_flow_model_config(payload.serialized_config)
     # Do not call ``flow_model(config.func, **factory_kwargs)`` here.  That would
-    # re-run type-hint resolution in the receiving process, which is exactly the
-    # path that fails for local/postponed annotations and runtime-only generic
-    # aliases such as GenericResult[int].  The serialized config is the resolved
-    # contract from the defining process; rebuild the generated class from it.
+    # re-run worker-side type-hint resolution for local/postponed annotations.
+    # The serialized config is the resolved contract from the defining process;
+    # rebuild the generated class from it, then let pickle apply the third
+    # reducer element through ``__setstate__``.
     factory = _build_flow_model_factory_from_config(config, payload.factory_kwargs)
     cls = cast(type[BaseModel], getattr(factory, "_generated_model"))
-    return _restore_model_from_cloudpickled_state(cls, payload.state_bytes)
+    return cls.__new__(cls)
 
 
-def _restore_generated_flow_model(factory_path: str, state_bytes: bytes) -> BaseModel:
-    """Restore a generated flow model by importing its factory function.
+def _new_generated_flow_model_for_pickle(factory_path: str) -> BaseModel:
+    """Allocate a generated flow model by importing its factory function.
 
     This is the cross-process-safe restore path: importing the factory's module
     triggers the ``@Flow.model`` decorator, which re-creates the GeneratedModel
-    class.  The instance is reconstructed from cloudpickled Pydantic state, not
-    validation data, so private attrs and ordinary user literals survive Ray
-    worker handoff. Runtime-created Pydantic generic specializations still need
-    a base serialization fix before they are portable as loose state.
+    class.  The reducer returns Pydantic state separately so pickle applies
+    ``__setstate__`` in the outer pickle stream, preserving normal memo
+    semantics for shared references, cycles, and protocol-5 buffers.
     """
-    factory = PyObjectPath(factory_path).object
+    factory = _load_module_attribute_uncached(factory_path)
     generated_cls = getattr(factory, "_generated_model", None)
     if generated_cls is None:
         raise ImportError(f"Cannot restore generated flow model: '{factory_path}' does not have a _generated_model attribute.")
-    return _restore_model_from_cloudpickled_state(generated_cls, state_bytes)
+    return generated_cls.__new__(generated_cls)
 
 
 def _is_importable_function(func: _AnyCallable) -> bool:
@@ -591,13 +577,18 @@ def _importable_function_path(func: _AnyCallable) -> Optional[str]:
     return f"{func.__module__}.{func.__name__}"
 
 
+def _load_module_attribute_uncached(path: str) -> Any:
+    module_name, attribute_name = path.rsplit(".", 1)
+    return getattr(importlib.import_module(module_name), attribute_name)
+
+
 def _generated_model_factory_path_for_pickle(config: _FlowModelConfig, generated_cls: type) -> Optional[str]:
     path = _importable_function_path(config.func)
     if path is None:
         return None
     try:
-        factory = PyObjectPath(path).object
-    except ImportError:
+        factory = _load_module_attribute_uncached(path)
+    except (ImportError, AttributeError, ValueError):
         return None
     if getattr(factory, "_generated_model", None) is generated_cls:
         return path
@@ -2085,27 +2076,22 @@ class _GeneratedFlowModelBase(CallableModel):
         """Prefer import-path restoration, falling back to serialized local factories."""
 
         config = type(self).__flow_model_config__
-        import cloudpickle
 
-        state_bytes = cloudpickle.dumps(self.__getstate__(), protocol=5)
+        state = self.__getstate__()
         factory_path = _generated_model_factory_path_for_pickle(config, type(self))
         if factory_path is not None:
-            return (_restore_generated_flow_model, (factory_path, state_bytes))
+            return (_new_generated_flow_model_for_pickle, (factory_path,), state)
 
         # Local generated classes are not normal importable class definitions:
         # plain pickle cannot reconstruct them, and Ray workers should not
         # re-run fragile annotation resolution.  Carry the analyzed contract
-        # separately, but keep instance state as Pydantic pickle state so user
-        # literals and private attrs survive cloudpickle.  Runtime-created
-        # Pydantic generic specializations such as GenericResult[int] still need
-        # a base serialization fix before they are portable across fresh
-        # processes when they appear as loose user state.
+        # separately, but leave instance state in the outer pickle stream so
+        # normal pickle memo semantics remain intact.
         payload = _LocalFlowModelPicklePayload(
             serialized_config=_serialize_flow_model_config(config),
             factory_kwargs=type(self).__flow_model_factory_kwargs__,
-            state_bytes=state_bytes,
         )
-        return (_restore_pickled_local_flow_model, (cloudpickle.dumps(payload, protocol=5),))
+        return (_new_local_flow_model_for_pickle, (cloudpickle.dumps(payload, protocol=5),), state)
 
     @model_validator(mode="after")
     def _validate_flow_model_fields(self):
