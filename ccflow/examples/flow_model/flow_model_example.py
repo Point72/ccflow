@@ -10,7 +10,7 @@ Shows how to:
 5. execute the configured graph with `model.flow.compute(...)`.
 
 Run with:
-    python ccflow/examples/flow_model/flow_model_example.py
+    python -m ccflow.examples.flow_model.flow_model_example
 """
 
 from datetime import date, timedelta
@@ -29,6 +29,8 @@ def _format_bound_inputs(inputs: dict[str, object]) -> str:
             return "model"
         if isinstance(value, list):
             return "[" + ", ".join(display_value(item) for item in value) + "]"
+        if isinstance(value, tuple):
+            return "(" + ", ".join(display_value(item) for item in value) + ")"
         return repr(value)
 
     parts = []

@@ -14,7 +14,7 @@ The pattern is:
 - let Hydra instantiate that builder and register the returned model.
 
 Run with:
-    python ccflow/examples/flow_model/flow_model_hydra_builder_demo.py
+    python -m ccflow.examples.flow_model.flow_model_hydra_builder_demo
 """
 
 from datetime import date, timedelta
@@ -36,6 +36,8 @@ def _format_bound_inputs(inputs: dict[str, object]) -> str:
             return "model"
         if isinstance(value, list):
             return "[" + ", ".join(display_value(item) for item in value) + "]"
+        if isinstance(value, tuple):
+            return "(" + ", ".join(display_value(item) for item in value) + ")"
         return repr(value)
 
     parts = []

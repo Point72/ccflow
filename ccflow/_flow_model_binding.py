@@ -510,7 +510,8 @@ def _validate_dep_annotation(annotation: Any, *, in_dep: bool = False, dep_allow
     """Validate the deliberately small Dep marker language.
 
     Dep marks exact substitution slots. It is allowed inside container values,
-    but not inside another Dep and not in dict keys.
+    but not inside another Dep, not in dict keys, and not mixed with Lazy or
+    FromContext markers inside a Dep slot.
     """
 
     annotation, has_dep = _pop_dep_marker(annotation)
@@ -522,8 +523,15 @@ def _validate_dep_annotation(annotation: Any, *, in_dep: bool = False, dep_allow
         _validate_dep_annotation(annotation, in_dep=True, dep_allowed=False)
         return
 
+    if in_dep and get_origin(annotation) is Annotated:
+        metadata = get_args(annotation)[1:]
+        if any(isinstance(item, (_LazyMarker, _FromContextMarker)) for item in metadata):
+            raise TypeError("Dep[...] cannot contain Lazy[...] or FromContext[...] markers.")
+
     origin = get_origin(annotation)
     args = get_args(annotation)
+    if origin in _UNION_ORIGINS and any(_annotation_contains_dep(arg) for arg in args):
+        raise TypeError("Dep[...] is not supported inside union annotations.")
     if origin is list and len(args) == 1:
         _validate_dep_annotation(args[0], in_dep=in_dep, dep_allowed=True)
         return

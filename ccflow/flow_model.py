@@ -657,6 +657,21 @@ def _resolve_serialized_dependency_ref(
     return restored if _is_model_dependency(restored) else value
 
 
+def _resolve_whole_param_serialized_dependency_ref(value: Any) -> Any:
+    """Restore serialized whole-parameter dependencies before container walking."""
+
+    restored = _resolve_serialized_dependency_ref(value)
+    if _is_model_dependency(restored):
+        return restored
+    # ``_target_`` is also Hydra syntax. Accept it before literal validation
+    # only for payloads that look like ccflow serialized models.
+    if type(value) is dict and "meta" in value:
+        restored = _resolve_serialized_dependency_ref(value, include_target_alias=True)
+        if _is_model_dependency(restored):
+            return restored
+    return value
+
+
 def _ensure_named_python_function(fn: _AnyCallable, *, decorator_name: str) -> None:
     if not inspect.isfunction(fn):
         raise TypeError(f"{decorator_name} only supports Python functions.")
@@ -1155,21 +1170,42 @@ def _resolve_dep_slot_registry_ref(value: Any, annotation: Any) -> Any:
     return value
 
 
+def _dep_slot_prefers_serialized_dependency(annotation: Any) -> bool:
+    """Return whether literal validation is too broad to preserve serialized deps."""
+
+    annotation = _strip_outer_non_dep_annotated(annotation)
+    if annotation in (Any, object, inspect.Parameter.empty):
+        return True
+    origin, args = _annotation_origin_args(annotation)
+    if origin in _UNION_ORIGINS:
+        return any(_dep_slot_prefers_serialized_dependency(arg) for arg in args)
+    return False
+
+
 def _validate_dep_marked_value(name: str, value: Any, annotation: Any, source: str, path: Tuple[Any, ...] = ()) -> Any:
     """Validate construction values that use explicit nested Dep markers."""
 
     def validate_dep_slot(item: Any, dep_base: Any, item_path: Tuple[Any, ...]) -> Any:
-        if not _is_model_dependency(item):
-            item = _resolve_serialized_dependency_ref(item, include_target_alias=True)
         if _is_model_dependency(item):
             return item
+        tried_serialized_dep = False
+        if _dep_slot_prefers_serialized_dependency(dep_base):
+            tried_serialized_dep = True
+            item_with_serialized_dep = _resolve_serialized_dependency_ref(item, include_target_alias=True)
+            if _is_model_dependency(item_with_serialized_dep):
+                return item_with_serialized_dep
         try:
             return _coerce_value(_path_name(name, item_path), item, dep_base, source)
-        except TypeError:
-            item_with_alias_dep = _resolve_dep_slot_registry_ref(item, dep_base)
-            if item_with_alias_dep is not item and _is_model_dependency(item_with_alias_dep):
-                return item_with_alias_dep
-            raise
+        except TypeError as error:
+            literal_error = error
+        if not tried_serialized_dep:
+            item_with_serialized_dep = _resolve_serialized_dependency_ref(item, include_target_alias=True)
+            if _is_model_dependency(item_with_serialized_dep):
+                return item_with_serialized_dep
+        item_with_alias_dep = _resolve_dep_slot_registry_ref(item, dep_base)
+        if item_with_alias_dep is not item and _is_model_dependency(item_with_alias_dep):
+            return item_with_alias_dep
+        raise literal_error
 
     def validate_literal(item: Any, item_annotation: Any, item_path: Tuple[Any, ...]) -> Any:
         return _coerce_value(_path_name(name, item_path), item, item_annotation, source)
@@ -1714,7 +1750,20 @@ def _validate_bound_param_value(
     if _is_model_dependency(value):
         return value
     if param.has_dep_slots:
-        return _validate_dep_marked_value(param.name, value, param.annotation, source)
+        value_with_serialized_dep = _resolve_whole_param_serialized_dependency_ref(value)
+        if value_with_serialized_dep is not value and _is_model_dependency(value_with_serialized_dep):
+            return value_with_serialized_dep
+        try:
+            return _validate_dep_marked_value(param.name, value, param.annotation, source)
+        except TypeError as error:
+            literal_error = error
+        value_with_alias_deps = _resolve_serialized_dependency_ref(value, include_target_alias=True)
+        if value_with_alias_deps is not value and _is_model_dependency(value_with_alias_deps):
+            return value_with_alias_deps
+        value_with_registry_dep = _resolve_bound_param_registry_ref(param, value)
+        if value_with_registry_dep is not value and _is_model_dependency(value_with_registry_dep):
+            return value_with_registry_dep
+        raise literal_error
     try:
         return _coerce_value(param.name, value, param.annotation, source)
     except TypeError:
