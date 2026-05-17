@@ -59,6 +59,11 @@ class _FromContextMarker:
         return "FromContext"
 
 
+class _DepMarker:
+    def __repr__(self) -> str:
+        return "Dep"
+
+
 class FromContext:
     """Marker used in ``@Flow.model`` signatures for runtime/contextual inputs."""
 
@@ -76,11 +81,22 @@ class Lazy:
         return Annotated[item, _LazyMarker()]
 
 
+class Dep:
+    """Marker used in ``@Flow.model`` signatures for explicit dependency leaves."""
+
+    def __new__(cls, *args, **kwargs):
+        raise TypeError("Dep is an annotation marker; use Dep[T] in @Flow.model signatures.")
+
+    def __class_getitem__(cls, item):
+        return Annotated[item, _DepMarker()]
+
+
 @dataclass(frozen=True)
 class _ParsedAnnotation:
     base: Any
     is_lazy: bool
     is_from_context: bool
+    is_dep: bool
     optional_context: bool = False
 
 
@@ -93,6 +109,7 @@ class _FlowModelParam:
     has_function_default: bool
     function_default: Any = _UNSET
     context_validation_annotation: Any = _UNSET
+    has_dep_slots: bool = False
 
     @property
     def validation_annotation(self) -> Any:
@@ -176,6 +193,7 @@ class _SerializedFlowModelParam(NamedTuple):
     has_function_default: bool
     function_default: Any
     context_validation_annotation: _SerializedAnnotation
+    has_dep_slots: bool = False
 
 
 class _SerializedFlowModelConfig(NamedTuple):
@@ -304,20 +322,24 @@ def _serialize_flow_model_param(param: _FlowModelParam) -> _SerializedFlowModelP
         has_function_default=param.has_function_default,
         function_default=param.function_default,
         context_validation_annotation=_serialize_annotation(param.context_validation_annotation),
+        has_dep_slots=param.has_dep_slots,
     )
 
 
 def _restore_flow_model_param(payload: _SerializedFlowModelParam) -> _FlowModelParam:
     if not isinstance(payload, _SerializedFlowModelParam):
         raise TypeError(f"Unknown Flow.model parameter payload: {payload!r}")
+    annotation = _restore_annotation(payload.annotation)
+    context_validation_annotation = _restore_annotation(payload.context_validation_annotation)
     return _FlowModelParam(
         name=payload.name,
-        annotation=_restore_annotation(payload.annotation),
+        annotation=annotation,
         is_contextual=payload.is_contextual,
         is_lazy=payload.is_lazy,
         has_function_default=payload.has_function_default,
         function_default=payload.function_default,
-        context_validation_annotation=_restore_annotation(payload.context_validation_annotation),
+        context_validation_annotation=context_validation_annotation,
+        has_dep_slots=getattr(payload, "has_dep_slots", _annotation_contains_dep(annotation)),
     )
 
 
@@ -397,6 +419,7 @@ def _resolved_flow_signature(
 def _parse_annotation(annotation: Any) -> _ParsedAnnotation:
     is_lazy = False
     is_from_context = False
+    is_dep = False
     optional_context = False
 
     while get_origin(annotation) is Annotated:
@@ -407,6 +430,8 @@ def _parse_annotation(annotation: Any) -> _ParsedAnnotation:
                 is_lazy = True
             elif isinstance(metadata, _FromContextMarker):
                 is_from_context = True
+            elif isinstance(metadata, _DepMarker):
+                is_dep = True
 
     # Detect markers nested inside a top-level Optional/Union, e.g.
     # ``Optional[FromContext[int]]`` == ``Union[Annotated[int, FromContext], None]``.
@@ -438,14 +463,84 @@ def _parse_annotation(annotation: Any) -> _ParsedAnnotation:
         raise TypeError("FromContext is an annotation marker; use FromContext[T] in @Flow.model signatures.")
     if annotation is Lazy:
         raise TypeError("Lazy is an annotation marker; use Lazy[T] in @Flow.model signatures.")
+    if annotation is Dep:
+        raise TypeError("Dep is an annotation marker; use Dep[T] in @Flow.model signatures.")
 
-    return _ParsedAnnotation(base=annotation, is_lazy=is_lazy, is_from_context=is_from_context, optional_context=optional_context)
+    return _ParsedAnnotation(
+        base=annotation,
+        is_lazy=is_lazy,
+        is_from_context=is_from_context,
+        is_dep=is_dep,
+        optional_context=optional_context,
+    )
 
 
 def _strip_annotated(annotation: Any) -> Any:
     while get_origin(annotation) is Annotated:
         annotation = get_args(annotation)[0]
     return annotation
+
+
+def _pop_dep_marker(annotation: Any) -> Tuple[Any, bool]:
+    """Remove only the outer Dep marker while preserving other Annotated metadata."""
+
+    if get_origin(annotation) is not Annotated:
+        return annotation, False
+
+    args = get_args(annotation)
+    metadata = tuple(item for item in args[1:] if not isinstance(item, _DepMarker))
+    has_dep = len(metadata) != len(args[1:])
+    base = args[0]
+    if not metadata:
+        return base, has_dep
+    # Python 3.10 cannot spell this as ``Annotated[base, *metadata]``. Keep
+    # non-Dep metadata, such as pydantic Field constraints, on the annotation
+    # used to validate literals and resolved dependency results.
+    return Annotated.__class_getitem__((base, *metadata)), has_dep
+
+
+def _annotation_contains_dep(annotation: Any) -> bool:
+    annotation, has_dep = _pop_dep_marker(annotation)
+    if has_dep:
+        return True
+    return any(_annotation_contains_dep(arg) for arg in get_args(annotation))
+
+
+def _validate_dep_annotation(annotation: Any, *, in_dep: bool = False, dep_allowed: bool = False) -> None:
+    """Validate the deliberately small Dep marker language.
+
+    Dep marks exact substitution slots. It is allowed inside container values,
+    but not inside another Dep and not in dict keys.
+    """
+
+    annotation, has_dep = _pop_dep_marker(annotation)
+    if has_dep:
+        if not dep_allowed:
+            raise TypeError("Dep[...] is only supported in regular parameter container values.")
+        if in_dep:
+            raise TypeError("Dep[...] cannot contain another Dep[...] marker.")
+        _validate_dep_annotation(annotation, in_dep=True, dep_allowed=False)
+        return
+
+    origin = get_origin(annotation)
+    args = get_args(annotation)
+    if origin is list and len(args) == 1:
+        _validate_dep_annotation(args[0], in_dep=in_dep, dep_allowed=True)
+        return
+    if origin is tuple and args:
+        item_args = args[:1] if len(args) == 2 and args[1] is Ellipsis else args
+        for arg in item_args:
+            _validate_dep_annotation(arg, in_dep=in_dep, dep_allowed=True)
+        return
+    if origin is dict and len(args) == 2:
+        key_annotation, value_annotation = args
+        if _annotation_contains_dep(key_annotation):
+            raise TypeError("Dep[...] is not supported in dict keys.")
+        _validate_dep_annotation(value_annotation, in_dep=in_dep, dep_allowed=True)
+        return
+
+    for arg in args:
+        _validate_dep_annotation(arg, in_dep=in_dep, dep_allowed=False)
 
 
 def _is_result_annotation(annotation: Any) -> bool:
@@ -548,6 +643,13 @@ def _analyze_flow_function(
         parsed = _parse_annotation(param.annotation)
         if parsed.is_lazy and parsed.is_from_context:
             raise TypeError(f"Parameter '{param.name}' cannot combine Lazy[...] and FromContext[...].")
+        if (parsed.is_dep or _annotation_contains_dep(parsed.base)) and (parsed.is_lazy or parsed.is_from_context):
+            marker = "Lazy" if parsed.is_lazy else "FromContext"
+            raise TypeError(f"Parameter '{param.name}' cannot combine Dep[...] and {marker}[...].")
+        if parsed.is_dep:
+            raise TypeError("Dep[...] is only supported in regular parameter container values.")
+        _validate_dep_annotation(parsed.base)
+        has_dep_slots = _annotation_contains_dep(parsed.base)
         has_default = param.default is not inspect.Parameter.empty
         if parsed.is_lazy and has_default and not is_model_dependency(param.default):
             raise TypeError(f"Parameter '{param.name}' is marked Lazy[...] and must default to a CallableModel dependency.")
@@ -574,6 +676,7 @@ def _analyze_flow_function(
                 is_lazy=parsed.is_lazy,
                 has_function_default=stored_has_default,
                 function_default=stored_default,
+                has_dep_slots=has_dep_slots,
             )
         )
 
