@@ -1,4 +1,4 @@
-# Hydra config for examples/flow_model_hydra_builder_demo.py
+# Hydra config for ccflow/examples/flow_model/flow_model_hydra_builder_demo.py
 #
 # Pattern:
 # - configure static pipeline specs in YAML
@@ -6,11 +6,11 @@
 # - keep runtime context as runtime inputs, supplied later at execution time
 
 library_visitors:
-    _target_: examples.flow_model_hydra_builder_demo.count_visitors
+    _target_: ccflow.examples.flow_model.flow_model_hydra_builder_demo.count_visitors
     location: library
 
 previous_week:
-    _target_: examples.flow_model_hydra_builder_demo.build_visitor_delta
+    _target_: ccflow.examples.flow_model.flow_model_hydra_builder_demo.build_visitor_delta
     current:
         _target_: ccflow.compose.model_alias
         model_name: library_visitors
@@ -18,7 +18,7 @@ previous_week:
     days_back: 7
 
 previous_two_weeks:
-    _target_: examples.flow_model_hydra_builder_demo.build_visitor_delta
+    _target_: ccflow.examples.flow_model.flow_model_hydra_builder_demo.build_visitor_delta
     current:
         _target_: ccflow.compose.model_alias
         model_name: library_visitors

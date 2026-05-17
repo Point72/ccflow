@@ -9,7 +9,7 @@ Shows how to:
 4. execute the configured graph with `model.flow.compute(...)`.
 
 Run with:
-    python examples/flow_model_example.py
+    python ccflow/examples/flow_model/flow_model_example.py
 """
 
 from datetime import date, timedelta

@@ -13,7 +13,7 @@ The pattern is:
 - let Hydra instantiate that builder and register the returned model.
 
 Run with:
-    python examples/flow_model_hydra_builder_demo.py
+    python ccflow/examples/flow_model/flow_model_hydra_builder_demo.py
 """
 
 from datetime import date, timedelta
