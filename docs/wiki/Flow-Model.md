@@ -156,12 +156,32 @@ total(values=source_list())  # valid: source_list supplies the whole list
 So `list[int]` accepts a literal list or a model returning `list[int]`, while
 `list[Dep[int]]` additionally accepts model leaves inside the literal list.
 
+Union annotations are allowed inside the marked slot:
+
+```python
+@Flow.model
+def maybe_source(value: FromContext[int | None]) -> int | None:
+    return value
+
+
+@Flow.model
+def total(values: list[Dep[int | None]]) -> int:
+    return sum(value or 0 for value in values)
+
+
+total(values=[maybe_source(), None, 2])  # valid: each list item is int | None
+```
+
 `Dep[...]` is intentionally narrow:
 
 - it is interpreted only for regular `@Flow.model` parameters,
 - it is supported inside `list`, `tuple`, and `dict` values,
 - top-level `Dep[...]` is rejected because direct whole-parameter dependencies
   already cover that case,
+- union annotations may appear inside the marked slot, such as
+  `list[Dep[int | None]]`,
+- union annotations may not wrap a `Dep` marker, including optional container
+  forms like `list[Dep[int]] | None`,
 - it is not supported in dict keys,
 - nested `Dep[...]` markers are rejected,
 - it does not add automatic behavior to handwritten `CallableModel` fields.
