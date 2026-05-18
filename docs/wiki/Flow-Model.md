@@ -114,8 +114,9 @@ model = add(a=load_value(offset=5))
 assert model.flow.compute(value=7, b=12).value == 24
 ```
 
-Direct regular-parameter values are treated as upstream dependencies. Containers
-are ordinary literal values unless a nested position is explicitly marked with
+Direct `CallableModel` values bound to regular parameters are treated as
+upstream dependencies. Other literal values are bound inputs. Containers are
+ordinary literal values unless a nested position is explicitly marked with
 `Dep[T]`.
 
 ### Explicit Container Dependencies
@@ -508,8 +509,10 @@ that value came from construction, a function default, runtime context, or
 
 Dependency information lives under `inspection.dependencies`. Each dependency
 edge reports the parameter path, target model, projected context values when
-known, and whether the edge is lazy. To inspect a child, inspect that child
-model directly:
+known, and whether the edge is lazy. Direct whole-parameter dependencies use the
+regular parameter name as the path; explicit container dependencies use nested
+paths such as `values[0]` or `items['left']`. To inspect a child, inspect that
+child model directly:
 
 ```python
 inspection = model.flow.inspect(value=3)
