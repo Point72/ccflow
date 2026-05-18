@@ -434,6 +434,8 @@ def test_dep_marker_preserves_whole_parameter_dependency_rule():
 
     model = total(values=list_source())
 
+    assert tuple(dependency.path for dependency in model.flow.inspect(value=4).dependencies) == ("values",)
+    assert len(model.flow.inspect(value=4, dependencies="recursive").dependencies) == 1
     assert model.flow.compute(value=4).value == 12
 
 
@@ -657,6 +659,58 @@ def test_dep_marker_allows_tuple_and_dict_value_slots():
 
     assert len(model.__deps__(FlowContext(value=10))) == 3
     assert model.flow.compute(value=10).value == 48
+
+
+def test_flow_inspect_reports_dep_marker_container_dependencies():
+    @Flow.model
+    def source(value: FromContext[int], offset: int) -> int:
+        return value + offset
+
+    @Flow.model
+    def total(pair: tuple[Dep[int], str], values: dict[str, Dep[int]], many: tuple[Dep[int], ...]) -> int:
+        return pair[0] + sum(values.values()) + sum(many)
+
+    model = total(
+        pair=(source(offset=1), "ignored"),
+        values={"literal": "2", "model": source(offset=3)},
+        many=(source(offset=5), "7"),
+    )
+
+    inspection = model.flow.inspect(value=10)
+
+    assert tuple(dependency.path for dependency in inspection.dependencies) == ("pair[0]", "values['model']", "many[0]")
+    assert tuple(dependency.context for dependency in inspection.dependencies) == (
+        FlowContext(value=10),
+        FlowContext(value=10),
+        FlowContext(value=10),
+    )
+    assert inspection.inputs["pair"].value is model.pair
+    assert model.flow.inspect(dependencies="none").dependencies == ()
+
+
+def test_flow_inspect_recurses_through_dep_marker_dependencies():
+    @Flow.model
+    def leaf(v: FromContext[int]) -> int:
+        return v
+
+    @Flow.model
+    def middle(x: int) -> int:
+        return x
+
+    @Flow.model
+    def total(values: list[Dep[int]]) -> int:
+        return sum(values)
+
+    model = total(values=[middle(x=leaf()), 2])
+
+    missing = model.flow.inspect(dependencies="recursive")
+    assert tuple(dependency.path for dependency in missing.dependencies) == ("values[0]", "values[0].x")
+    assert missing.dependencies[1].model.flow.inspect().required_inputs == {"v": int}
+
+    supplied = model.flow.inspect(v=3, dependencies="recursive")
+    assert tuple(dependency.context for dependency in supplied.dependencies) == (FlowContext(v=3), FlowContext(v=3))
+    leaf_with_context = supplied.dependencies[1].model.flow.inspect(supplied.dependencies[1].context)
+    assert leaf_with_context.inputs["v"].value == 3
 
 
 def test_dep_marker_fixed_tuple_arity_mismatch_does_not_walk_slots():
@@ -2489,7 +2543,7 @@ def test_flow_inspect_with_runtime_values_is_structural_not_a_validator():
     assert flow_model_module._is_unset_flow_input(missing_inspection.inputs["b"].value)
 
 
-def test_flow_inspect_reports_direct_dependencies_and_unused_context():
+def test_flow_inspect_reports_direct_dependencies_and_ignores_unknown_context_fields():
     @Flow.model
     def source(value: FromContext[int]) -> int:
         return value * 2

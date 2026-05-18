@@ -115,9 +115,9 @@ from .utils.tokenize import compute_behavior_token, compute_data_token
 __all__ = (
     "FlowAPI",
     "BoundModel",
+    "Dep",
     "FlowInspection",
     "InputSpec",
-    "Dep",
     "FromContext",
     "Lazy",
 )
@@ -1280,6 +1280,48 @@ def _dep_marked_dependency_entries(value: Any, annotation: Any, context: Context
     )
 
 
+def _dep_marked_dependency_specs(
+    name: str,
+    value: Any,
+    annotation: Any,
+    context: Optional[ContextBase],
+    *,
+    trim_context: bool,
+) -> Tuple[DependencySpec, ...]:
+    """Collect inspect-visible dependency edges from explicit Dep marker slots."""
+
+    def dep_slot_specs(item: Any, _dep_base: Any, item_path: Tuple[Any, ...]) -> Tuple[DependencySpec, ...]:
+        if not _is_model_dependency(item):
+            return ()
+        dependency_model = item
+        dependency_context = None
+        if context is not None:
+            try:
+                dependency_model, dependency_context = _resolved_dependency_invocation(item, context)
+            except (TypeError, ValueError, ValidationError):
+                dependency_model = item
+                dependency_context = _partial_dependency_context_for_inspect(item, context)
+            else:
+                dependency_context = _trim_dependency_context_for_inspect(dependency_model, dependency_context, trim_context=trim_context)
+        return (DependencySpec(_path_name(name, item_path), dependency_model, dependency_context),)
+
+    def merge_items(items: Any) -> Tuple[DependencySpec, ...]:
+        specs: List[DependencySpec] = []
+        for item in items:
+            specs.extend(item)
+        return tuple(specs)
+
+    return _walk_dep_marked_value(
+        value,
+        annotation,
+        on_dep_slot=dep_slot_specs,
+        on_literal=lambda _item, _annotation, _path: (),
+        on_list=lambda _value, items, _annotation, _path: merge_items(items),
+        on_tuple=lambda _value, items, _annotation, _path: merge_items(items),
+        on_dict=lambda _value, items, _key_annotation, _value_annotation, _dict_annotation, _path: merge_items(item for _, item in items),
+    )
+
+
 def _dep_marked_identity_value(value: Any, annotation: Any, context: ContextBase) -> Any:
     """Return an identity payload with explicit Dep leaves replaced by dependencies."""
 
@@ -2354,6 +2396,26 @@ def _project_bound_dependency_context_for_inspect(model: "BoundModel", context: 
     return FlowContext(**projected)
 
 
+def _trim_dependency_context_for_inspect(
+    dependency_model: CallableModel,
+    dependency_context: Optional[ContextBase],
+    *,
+    trim_context: bool,
+) -> Optional[ContextBase]:
+    if not trim_context or dependency_context is None:
+        return dependency_context
+    if isinstance(dependency_model, BoundModel):
+        return _project_bound_dependency_context_for_inspect(dependency_model, dependency_context)
+    contract = _model_context_contract(dependency_model)
+    if contract.input_types is None:
+        return dependency_context
+    values = _context_values(dependency_context)
+    return _runtime_context_for_model(
+        dependency_model,
+        {name: values[name] for name in contract.input_types if name in values},
+    )
+
+
 def _generated_context_argument_specs(generated: "_GeneratedFlowModelBase", input_types: Optional[Dict[str, Any]]) -> Dict[str, InputSpec]:
     config = type(generated).__flow_model_config__
     explicit_fields = _bound_field_names(generated)
@@ -2404,7 +2466,11 @@ def _direct_dependency_specs(
     config = type(generated).__flow_model_config__
     for param in config.regular_params:
         value = getattr(generated, param.name, _UNSET_FLOW_INPUT)
-        if _is_unset_flow_input(value) or not _is_model_dependency(value):
+        if _is_unset_flow_input(value):
+            continue
+        if not _is_model_dependency(value):
+            if param.has_dep_slots:
+                specs.extend(_dep_marked_dependency_specs(param.name, value, param.annotation, context, trim_context=trim_context))
             continue
         dependency_model = value
         dependency_context = None
@@ -2415,16 +2481,7 @@ def _direct_dependency_specs(
                 dependency_model = value
                 dependency_context = _partial_dependency_context_for_inspect(value, context)
             else:
-                contract = _model_context_contract(dependency_model)
-                if trim_context and dependency_context is not None:
-                    if isinstance(dependency_model, BoundModel):
-                        dependency_context = _project_bound_dependency_context_for_inspect(dependency_model, dependency_context)
-                    elif contract.input_types is not None:
-                        values = _context_values(dependency_context)
-                        dependency_context = _runtime_context_for_model(
-                            dependency_model,
-                            {name: values[name] for name in contract.input_types if name in values},
-                        )
+                dependency_context = _trim_dependency_context_for_inspect(dependency_model, dependency_context, trim_context=trim_context)
         specs.append(DependencySpec(param.name, dependency_model, dependency_context, lazy=param.is_lazy))
     return tuple(specs)
 
