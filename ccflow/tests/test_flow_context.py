@@ -116,10 +116,10 @@ def test_flow_api_introspection_for_from_context_model():
         return a + b + c
 
     model = add(a=10)
-    assert model.flow.context_inputs == {"b": int, "c": int}
-    assert model.flow.runtime_inputs == {"b": int, "c": int}
-    assert model.flow.required_inputs == {"b": int}
-    assert model.flow.bound_inputs == {"a": 10}
+    assert model.flow.inspect().context_inputs == {"b": int, "c": int}
+    assert model.flow.inspect().runtime_inputs == {"b": int, "c": int}
+    assert model.flow.inspect().required_inputs == {"b": int}
+    assert model.flow.inspect().bound_inputs == {"a": 10}
     assert model.flow.compute(b=2).value == 17
 
 
@@ -132,7 +132,7 @@ def test_flow_api_compute_accepts_single_context_or_kwargs_but_not_both():
     assert model.flow.compute(b=5).value == 15
     assert model.flow.compute(FlowContext(b=6)).value == 16
 
-    with pytest.raises(TypeError, match="either one context object or contextual keyword arguments"):
+    with pytest.raises(TypeError, match="either one context object or contextual keyword inputs"):
         model.flow.compute(FlowContext(b=5), b=6)
 
 
@@ -202,8 +202,8 @@ def test_compute_kwargs_can_supply_ambient_context_for_upstream_transforms():
         right=base.flow.with_context(value=offset_value(amount=10)),
     )
 
-    assert model.flow.context_inputs == {"bonus": int}
-    assert model.flow.runtime_inputs == {"bonus": int}
+    assert model.flow.inspect().context_inputs == {"bonus": int}
+    assert model.flow.inspect().runtime_inputs == {"bonus": int}
     assert model.flow.compute(value=5, bonus=100).value == (6 + 15 + 100)
 
 
@@ -218,12 +218,12 @@ def test_bound_flow_api_separates_declared_and_runtime_context_inputs():
 
     bound = add(a=10).flow.with_context(b=from_seed())
 
-    assert bound.flow.context_inputs == {"b": int, "c": int}
-    assert bound.flow.runtime_inputs == {"c": int, "seed": int}
-    assert bound.flow.required_inputs == {"seed": int}
-    for name, annotation in bound.flow.required_inputs.items():
-        assert bound.flow.runtime_inputs[name] == annotation
-    assert bound.flow.bound_inputs == {"a": 10}
+    assert bound.flow.inspect().context_inputs == {"b": int, "c": int}
+    assert bound.flow.inspect().runtime_inputs == {"c": int, "seed": int}
+    assert bound.flow.inspect().required_inputs == {"seed": int}
+    for name, annotation in bound.flow.inspect().required_inputs.items():
+        assert bound.flow.inspect().runtime_inputs[name] == annotation
+    assert bound.flow.inspect().bound_inputs == {"a": 10}
     assert bound.flow.compute(seed=1).value == 17
 
 
@@ -243,7 +243,7 @@ def test_bound_flow_api_rejects_conflicting_runtime_input_annotations():
     bound = add().flow.with_context(b=from_int(), c=from_str())
 
     with pytest.raises(TypeError, match="Conflicting runtime context annotations for 'seed'"):
-        bound.flow.runtime_inputs
+        bound.flow.inspect().runtime_inputs
 
 
 def test_bound_flow_api_keeps_dynamic_transform_source_inputs_after_later_field_bindings():
@@ -261,9 +261,9 @@ def test_bound_flow_api_keeps_dynamic_transform_source_inputs_after_later_field_
 
     bound = add().flow.with_context(x=from_y()).flow.with_context(y=from_x())
 
-    assert bound.flow.context_inputs == {"x": int, "y": int}
-    assert bound.flow.runtime_inputs == {"x": int, "y": int}
-    assert bound.flow.required_inputs == {"x": int, "y": int}
+    assert bound.flow.inspect().context_inputs == {"x": int, "y": int}
+    assert bound.flow.inspect().runtime_inputs == {"x": int, "y": int}
+    assert bound.flow.inspect().required_inputs == {"x": int, "y": int}
     assert bound.flow.compute(x=1, y=2).value == 14
 
 
@@ -278,9 +278,9 @@ def test_bound_flow_api_reports_optional_transform_context_inputs_as_runtime_onl
 
     bound = add().flow.with_context(b=seed_plus_one())
 
-    assert bound.flow.runtime_inputs == {"a": int, "seed": int}
-    assert bound.flow.required_inputs == {"a": int}
-    assert bound.flow.bound_inputs == {}
+    assert bound.flow.inspect().runtime_inputs == {"a": int, "seed": int}
+    assert bound.flow.inspect().required_inputs == {"a": int}
+    assert bound.flow.inspect().bound_inputs == {}
     assert bound.flow.compute(a=10).value == 11
     assert bound.flow.compute(a=10, seed=5).value == 16
 
@@ -318,7 +318,7 @@ def test_bound_model_serialization_roundtrip_preserves_static_transforms():
 
     restored = type(bound).model_validate(dumped)
     assert restored.flow.compute().value == 15
-    assert restored.model.flow.bound_inputs == {"a": 10}
+    assert restored.model.flow.inspect().bound_inputs == {"a": 10}
 
 
 def test_bound_model_json_roundtrip_preserves_context_transforms():
@@ -413,10 +413,10 @@ def test_regular_callable_models_still_support_with_context():
 def test_flow_api_for_regular_callable_model():
     model = OffsetModel(offset=10)
     assert model.flow.compute(x=5).value == 15
-    assert model.flow.context_inputs == {"x": int}
-    assert model.flow.runtime_inputs == {"x": int}
-    assert model.flow.required_inputs == {"x": int}
-    assert model.flow.bound_inputs == {"offset": 10}
+    assert model.flow.inspect().context_inputs == {"x": int}
+    assert model.flow.inspect().runtime_inputs == {"x": int}
+    assert model.flow.inspect().required_inputs == {"x": int}
+    assert model.flow.inspect().bound_inputs == {"offset": 10}
 
 
 def test_generated_flow_model_compute_is_thread_safe():

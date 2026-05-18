@@ -312,7 +312,7 @@ def test_plain_and_bound_optional_compute_paths():
 
     assert OptionalContextModel().flow.compute(None).value == 0
     assert OptionalContextModel().flow.compute().value == 0
-    assert OptionalContextModel().flow.required_inputs == {}
+    assert OptionalContextModel().flow.inspect().required_inputs == {}
 
     bound = OptionalContextModel().flow.with_context()
     assert bound.flow.compute(FlowContext(value=3)).value == 3
@@ -498,9 +498,9 @@ def test_contextual_construction_defaults_and_bound_inputs():
         return a + b
 
     model = foo(a=11, b=12)
-    assert model.flow.bound_inputs == {"a": 11, "b": 12}
-    assert model.flow.context_inputs == {"b": int}
-    assert model.flow.required_inputs == {}
+    assert model.flow.inspect().bound_inputs == {"a": 11, "b": 12}
+    assert model.flow.inspect().context_inputs == {"b": int}
+    assert model.flow.inspect().required_inputs == {}
     assert model.flow.compute().value == 23
 
 
@@ -510,9 +510,9 @@ def test_contextual_function_defaults_remain_contextual():
         return a + b
 
     model = foo(a=2)
-    assert model.flow.bound_inputs == {"a": 2}
-    assert model.flow.context_inputs == {"b": int}
-    assert model.flow.required_inputs == {}
+    assert model.flow.inspect().bound_inputs == {"a": 2}
+    assert model.flow.inspect().context_inputs == {"b": int}
+    assert model.flow.inspect().required_inputs == {}
     assert model.flow.compute().value == 7
     assert model.flow.compute(b=10).value == 12
 
@@ -537,8 +537,8 @@ def test_declared_context_type_introspection_reports_effective_field_type():
 
     model = choose()
 
-    assert model.flow.context_inputs == {"mode": Literal["a"]}
-    assert model.flow.required_inputs == {"mode": Literal["a"]}
+    assert model.flow.inspect().context_inputs == {"mode": Literal["a"]}
+    assert model.flow.inspect().required_inputs == {"mode": Literal["a"]}
     assert model.flow.compute(mode="a").value == "a"
     with pytest.raises(ValidationError):
         model.flow.compute(mode="b")
@@ -636,8 +636,8 @@ def test_context_named_parameters_are_just_regular_parameters():
         return GenericResult(value=f"{source}:{context.start_date}:{context.end_date}")
 
     model = loader(context=DateRangeContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 2)), source="api")
-    assert model.flow.bound_inputs["context"] == DateRangeContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 2))
-    assert model.flow.context_inputs == {}
+    assert model.flow.inspect().bound_inputs["context"] == DateRangeContext(start_date=date(2024, 1, 1), end_date=date(2024, 1, 2))
+    assert model.flow.inspect().context_inputs == {}
     assert model.flow.compute().value == "api:2024-01-01:2024-01-02"
 
     with pytest.raises(TypeError, match="Missing regular parameter\\(s\\) for loader: context"):
@@ -819,8 +819,8 @@ def test_context_named_regular_parameter_can_coexist_with_from_context():
         return context.value + y
 
     model = mixed(context=SimpleContext(value=10))
-    assert model.flow.bound_inputs == {"context": SimpleContext(value=10)}
-    assert model.flow.context_inputs == {"y": int}
+    assert model.flow.inspect().bound_inputs == {"context": SimpleContext(value=10)}
+    assert model.flow.inspect().context_inputs == {"y": int}
     assert model.flow.compute(y=5).value == 15
 
 
@@ -933,8 +933,8 @@ def test_auto_wrap_and_serialization_roundtrip():
     dumped = model.model_dump(mode="python")
     restored = type(model).model_validate(dumped)
 
-    assert restored.flow.bound_inputs == {"a": 10}
-    assert restored.flow.required_inputs == {"b": int}
+    assert restored.flow.inspect().bound_inputs == {"a": 10}
+    assert restored.flow.inspect().required_inputs == {"b": int}
     assert restored.flow.compute(b=5).value == 15
 
 
@@ -1757,7 +1757,7 @@ def test_chained_with_context_transform_reads_original_context():
     bound = source().flow.with_context(patch_a()).flow.with_context(b=b_from_a())
 
     assert bound.flow.compute(a=10).value == 15
-    assert bound.flow.required_inputs == {"a": int}
+    assert bound.flow.inspect().required_inputs == {"a": int}
 
 
 def test_chained_with_context_later_field_override_skips_dead_field_transform():
@@ -1767,9 +1767,9 @@ def test_chained_with_context_later_field_override_skips_dead_field_transform():
 
     bound = source().flow.with_context(a=seed_plus_one()).flow.with_context(a=1)
 
-    assert bound.flow.bound_inputs == {"a": 1}
-    assert bound.flow.runtime_inputs == {}
-    assert bound.flow.required_inputs == {}
+    assert bound.flow.inspect().bound_inputs == {"a": 1}
+    assert bound.flow.inspect().runtime_inputs == {}
+    assert bound.flow.inspect().required_inputs == {}
     assert bound.flow.compute().value == 1
 
     for dumps, loads in ((pickle.dumps, pickle.loads), (rcpdumps, rcploads)):
@@ -1935,10 +1935,473 @@ def test_generated_model_flow_api_introspection_and_execution():
         return a + b
 
     model = add(a=10)
-    assert model.flow.context_inputs == {"b": int}
-    assert model.flow.bound_inputs == {"a": 10}
-    assert model.flow.required_inputs == {"b": int}
+    assert model.flow.inspect().context_inputs == {"b": int}
+    assert model.flow.inspect().bound_inputs == {"a": 10}
+    assert model.flow.inspect().required_inputs == {"b": int}
     assert model.flow.compute(b=5).value == 15
+
+
+def test_flow_api_is_self_describing_for_interactive_sessions():
+    @Flow.model
+    def add(a: int, b: FromContext[int]) -> int:
+        return a + b
+
+    flow = add(a=1).flow
+
+    assert dir(flow) == ["compute", "inspect", "with_context"]
+    assert "inspect" in dir(flow)
+    assert "input_specs" not in dir(flow)
+    assert "argument_specs" not in dir(flow)
+    assert "inspect" in repr(flow)
+
+    inspect_signature = inspect.signature(flow.inspect)
+    assert "inputs" not in inspect_signature.parameters
+    assert inspect_signature.parameters["dependencies"].annotation == Literal["direct", "recursive", "none"]
+    assert inspect_signature.return_annotation is flow_model_module.FlowInspection
+
+
+def test_flow_api_completes_after_binding_property_value_in_ipython():
+    pytest.importorskip("IPython")
+    from IPython.core.interactiveshell import InteractiveShell
+
+    @Flow.model
+    def add(a: int, b: FromContext[int]) -> int:
+        return a + b
+
+    shell = InteractiveShell.instance()
+    shell.user_ns["flow_model_completion_target"] = add(a=1)
+    shell.user_ns["flow_model_completion_flow"] = shell.user_ns["flow_model_completion_target"].flow
+
+    matches = shell.Completer.attr_matches("flow_model_completion_flow.")
+    assert "flow_model_completion_flow.compute" in matches
+    assert "flow_model_completion_flow.inspect" in matches
+    assert "flow_model_completion_flow.input_specs" not in matches
+    assert "flow_model_completion_flow.argument_specs" not in matches
+    assert "flow_model_completion_flow.help" not in matches
+    assert "flow_model_completion_flow.validate_inputs" not in matches
+
+
+def test_flow_inspect_inputs_include_defaults_and_sources():
+    @Flow.model
+    def add(a: int, b: FromContext[int], c: FromContext[int] = 5) -> int:
+        return a + b + c
+
+    model = add(a=10)
+    inspection = model.flow.inspect()
+
+    assert inspection.inputs["a"] == flow_model_module.InputSpec("a", int, False, flow_model_module._UNSET_FLOW_INPUT, 10, "construction")
+    assert inspection.inputs["b"] == flow_model_module.InputSpec(
+        "b", int, True, flow_model_module._UNSET_FLOW_INPUT, flow_model_module._UNSET_FLOW_INPUT, "runtime"
+    )
+    assert inspection.inputs["c"] == flow_model_module.InputSpec("c", int, False, 5, 5, "function_default")
+    assert inspection.inputs["b"].required
+    assert not inspection.inputs["c"].required
+    assert model.flow.inspect(b=2).inputs["b"] == flow_model_module.InputSpec("b", int, False, flow_model_module._UNSET_FLOW_INPUT, 2, "runtime")
+
+
+def test_flow_inspect_inputs_keep_dependency_value_but_use_compact_repr():
+    @Flow.model
+    def add(a: int, b: int) -> int:
+        return a + b
+
+    child = add(a=1, b=1)
+    model = add(a=1, b=child)
+
+    spec = model.flow.inspect().inputs["b"]
+    assert spec.value is child
+    assert spec.value_repr == "<dependency _add_Model>"
+    assert "meta=" not in repr(spec)
+    assert "value=<dependency _add_Model>" in repr(spec)
+
+
+def test_flow_inspect_with_runtime_values_is_structural_not_a_validator():
+    @Flow.model
+    def add(a: int, b: FromContext[int]) -> int:
+        return a + b
+
+    model = add(a=10)
+
+    inspection = model.flow.inspect(b=2, unused=1)
+    assert inspection.inputs["b"].value == 2
+    assert inspection.inputs["b"].source == "runtime"
+    assert "unused" not in inspection.inputs
+
+    regular_inspection = model.flow.inspect(a=1, b=2)
+    assert regular_inspection.inputs["b"].value == 2
+    assert regular_inspection.inputs["b"].source == "runtime"
+    assert regular_inspection.inputs["a"].value == 10
+    assert "input check" not in repr(regular_inspection)
+
+    missing_inspection = model.flow.inspect(FlowContext())
+    assert missing_inspection.inputs["b"].required
+    assert flow_model_module._is_unset_flow_input(missing_inspection.inputs["b"].value)
+
+
+def test_flow_inspect_reports_direct_dependencies_and_unused_context():
+    @Flow.model
+    def source(value: FromContext[int]) -> int:
+        return value * 2
+
+    @Flow.model
+    def root(x: int, bonus: FromContext[int]) -> int:
+        return x + bonus
+
+    model = root(x=source())
+    explanation = model.flow.inspect(value=3, bonus=4, unused=5)
+
+    assert explanation.inputs["x"].value is model.flow.inspect().inputs["x"].value
+    assert explanation.required_inputs == {"bonus": int}
+    assert len(explanation.dependencies) == 1
+    assert explanation.dependencies[0].path == "x"
+    assert explanation.dependencies[0].context == FlowContext(value=3)
+    child_inspection = explanation.dependencies[0].model.flow.inspect(explanation.dependencies[0].context)
+    assert child_inspection.runtime_inputs == {"value": int}
+    assert child_inspection.inputs["value"].value == 3
+    assert "dependencies" in str(explanation)
+    assert repr(explanation) == str(explanation)
+    assert "FlowInspection(model=_root_Model)" in repr(explanation)
+    assert "inputs:" in repr(explanation)
+    assert "x -> _source_Model context=FlowContext(value=3)" in repr(explanation)
+
+    assert model.flow.inspect(dependencies="none").dependencies == ()
+    assert model.flow.inspect().runtime_inputs == {"bonus": int}
+    assert set(model.flow.inspect().bound_inputs) == {"x"}
+    with pytest.raises(ValueError, match="dependencies must be one of"):
+        model.flow.inspect(dependencies="full")
+
+
+def test_flow_with_context_returns_new_bound_model_without_mutating_source():
+    @Flow.model(auto_unwrap=False)
+    def add(x: int, y: int, z: FromContext[int] = 2) -> int:
+        return x + y + z
+
+    @Flow.context_transform()
+    def shift_1(z: FromContext[int]) -> int:
+        return z + 1
+
+    model = add(x=1, y=add(x=1, y=1))
+    bound = model.flow.with_context(z=shift_1())
+
+    assert model.flow.compute(z=2).value == 7
+    assert bound.flow.compute(z=2).value == 9
+    assert model.flow.inspect().bound_inputs.keys() == {"x", "y"}
+    assert bound.flow.inspect().runtime_inputs == {"z": int}
+
+
+def test_bound_model_inspect_reports_wrapped_argument_dependencies():
+    @Flow.model(auto_unwrap=False)
+    def add(x: int, y: int, z: FromContext[int] = 2) -> int:
+        return x + y + z
+
+    @Flow.context_transform()
+    def shift_1(z: FromContext[int]) -> int:
+        return z + 1
+
+    bound = add(x=1, y=add(x=1, y=1)).flow.with_context(z=shift_1())
+
+    inspection = bound.flow.inspect(z=2)
+
+    assert "FlowInspection(model=_add_Model.flow.with_context(...))" in repr(inspection)
+    assert inspection.inputs["z"] == flow_model_module.InputSpec("z", int, False, 2, 3, "context_transform")
+    assert len(inspection.dependencies) == 1
+    assert inspection.dependencies[0].path == "y"
+    assert inspection.dependencies[0].context == FlowContext(z=3)
+    assert "<wrapped>" not in repr(inspection)
+
+    root = add(x=1, y=bound)
+    root_inspection = root.flow.inspect()
+    assert root_inspection.required_inputs == {}
+    assert root_inspection.dependencies[0].model.flow.inspect().required_inputs == {"z": int}
+
+    root_with_context = root.flow.inspect(z=2)
+    child_with_context = root_with_context.dependencies[0].model.flow.inspect(root_with_context.dependencies[0].context)
+    assert child_with_context.runtime_inputs == {"z": int}
+    assert child_with_context.inputs["z"].value == 3
+    assert "context=FlowContext(z=2)" in repr(root_with_context)
+
+
+def test_flow_inspect_direct_dependencies_do_not_traverse_grandchildren():
+    @Flow.model
+    def leaf(v: FromContext[int]) -> int:
+        return v
+
+    @Flow.model
+    def middle(x: int) -> int:
+        return x
+
+    @Flow.model
+    def root(x: int) -> int:
+        return x
+
+    model = root(x=middle(x=leaf()))
+
+    root_inspection = model.flow.inspect()
+    child_inspection = root_inspection.dependencies[0].model.flow.inspect()
+
+    assert root_inspection.dependencies[0].path == "x"
+    assert child_inspection.dependencies[0].model.flow.inspect().required_inputs == {"v": int}
+
+
+def test_flow_inspect_recursive_dependencies_report_grandchild_requirements():
+    @Flow.model
+    def leaf(v: FromContext[int]) -> int:
+        return v
+
+    @Flow.model
+    def middle(x: int) -> int:
+        return x
+
+    @Flow.model
+    def root(x: int) -> int:
+        return x
+
+    model = root(x=middle(x=leaf()))
+
+    missing = model.flow.inspect(dependencies="recursive")
+
+    assert tuple(dependency.path for dependency in missing.dependencies) == ("x", "x.x")
+    assert missing.dependencies[1].model.flow.inspect().required_inputs == {"v": int}
+
+    supplied = model.flow.inspect(v=2, dependencies="recursive")
+
+    assert supplied.inputs == model.flow.inspect(v=2, dependencies="none").inputs
+    assert tuple(dependency.path for dependency in model.flow.inspect(v=2, dependencies="direct").dependencies) == ("x",)
+    assert tuple(dependency.context for dependency in supplied.dependencies) == (FlowContext(v=2), FlowContext(v=2))
+    assert "v" not in supplied.inputs
+    leaf_with_context = supplied.dependencies[1].model.flow.inspect(supplied.dependencies[1].context)
+    assert leaf_with_context.inputs["v"].value == 2
+
+
+def test_flow_inspect_recursive_dependencies_treat_bound_transform_inputs_as_used():
+    @Flow.model
+    def leaf(v: FromContext[int]) -> int:
+        return v
+
+    @Flow.model
+    def middle(x: int) -> int:
+        return x
+
+    @Flow.context_transform()
+    def shift(seed: FromContext[int]) -> int:
+        return seed + 1
+
+    model = middle(x=leaf().flow.with_context(v=shift()))
+
+    missing = model.flow.inspect(dependencies="recursive")
+    assert missing.dependencies[0].model.flow.inspect().required_inputs == {"seed": int}
+
+    supplied = model.flow.inspect(seed=1, dependencies="recursive")
+    assert tuple(dependency.path for dependency in supplied.dependencies) == ("x",)
+    assert flow_model_module._context_values(supplied.dependencies[0].context) == {"seed": 1}
+    child = supplied.dependencies[0].model.flow.inspect(supplied.dependencies[0].context)
+    assert child.inputs["v"].value == 2
+
+
+def test_flow_inspect_projects_bound_dependency_context_to_runtime_inputs():
+    @Flow.model
+    def leaf(v: FromContext[int]) -> int:
+        return v
+
+    @Flow.model
+    def root(x: int, bonus: FromContext[int]) -> int:
+        return x + bonus
+
+    @Flow.context_transform()
+    def shift(seed: FromContext[int]) -> int:
+        return seed + 1
+
+    model = root(x=leaf().flow.with_context(v=shift()))
+    inspection = model.flow.inspect(seed=1, bonus=10, unused=99)
+
+    assert flow_model_module._context_values(inspection.dependencies[0].context) == {"seed": 1}
+    child = inspection.dependencies[0].model.flow.inspect(inspection.dependencies[0].context)
+    assert child.inputs["v"].value == 2
+
+
+def test_flow_inspect_dependency_requirements_skip_lazy_edges():
+    @Flow.model
+    def leaf(v: FromContext[int]) -> int:
+        return v
+
+    @Flow.model
+    def root(x: Lazy[int]) -> int:
+        return 0
+
+    inspection = root(x=leaf()).flow.inspect(dependencies="recursive")
+
+    assert inspection.dependencies[0].lazy
+    assert inspection.dependencies[0].model.flow.inspect().required_inputs == {"v": int}
+    assert "x -> _leaf_Model lazy" in repr(inspection)
+
+
+def test_flow_inspect_dependency_requirements_skip_lazy_descendants():
+    @Flow.model
+    def leaf(v: FromContext[int]) -> int:
+        return v
+
+    @Flow.model
+    def middle(x: int) -> int:
+        return x
+
+    @Flow.model
+    def root(x: Lazy[int]) -> int:
+        return 0
+
+    model = root(x=middle(x=leaf()))
+    inspection = model.flow.inspect(dependencies="recursive")
+
+    assert model.flow.compute().value == 0
+    assert tuple(dependency.path for dependency in inspection.dependencies) == ("x", "x.x")
+    assert all(dependency.lazy for dependency in inspection.dependencies)
+    assert inspection.dependencies[1].model.flow.inspect().required_inputs == {"v": int}
+
+
+def test_flow_inspect_recursive_dependencies_tolerates_partial_transform_context():
+    @Flow.model
+    def leaf(v: FromContext[int]) -> int:
+        return v
+
+    @Flow.model
+    def middle(x: int) -> int:
+        return x
+
+    @Flow.context_transform()
+    def shift(seed: FromContext[int], other: FromContext[int]) -> int:
+        return seed + other
+
+    model = middle(x=leaf().flow.with_context(v=shift()))
+
+    inspection = model.flow.inspect(seed=1, dependencies="recursive")
+
+    assert tuple(dependency.path for dependency in inspection.dependencies) == ("x",)
+    child_inspection = inspection.dependencies[0].model.flow.inspect(inspection.dependencies[0].context)
+    assert child_inspection.runtime_inputs == {"seed": int, "other": int}
+    assert child_inspection.inputs["v"].source == "context_transform"
+    assert flow_model_module._is_unset_flow_input(child_inspection.inputs["v"].value)
+
+
+def test_bound_flow_inspect_tolerates_partial_transform_context_without_dependencies():
+    @Flow.model
+    def leaf(v: FromContext[int]) -> int:
+        return v
+
+    @Flow.context_transform()
+    def shift(seed: FromContext[int], other: FromContext[int]) -> int:
+        return seed + other
+
+    bound = leaf().flow.with_context(v=shift())
+
+    inspection = bound.flow.inspect(seed=1, dependencies="none")
+
+    assert inspection.runtime_inputs == {"seed": int, "other": int}
+    assert inspection.required_inputs == {"seed": int, "other": int}
+    assert inspection.inputs["v"].source == "context_transform"
+    assert flow_model_module._is_unset_flow_input(inspection.inputs["v"].value)
+    assert inspection.dependencies == ()
+
+
+def test_flow_inspect_tolerates_partial_plain_callable_dependency_context():
+    class PlainSource(CallableModel):
+        @property
+        def context_type(self):
+            return SimpleContext
+
+        @property
+        def result_type(self):
+            return GenericResult[int]
+
+        @Flow.call
+        def __call__(self, context: SimpleContext) -> GenericResult[int]:
+            return GenericResult(value=context.value)
+
+    @Flow.model
+    def root(x: int, bonus: FromContext[int]) -> int:
+        return x + bonus
+
+    inspection = root(x=PlainSource()).flow.inspect(bonus=1)
+
+    assert len(inspection.dependencies) == 1
+    assert inspection.dependencies[0].context == FlowContext()
+    assert inspection.dependencies[0].model.flow.inspect().required_inputs == {"value": int}
+
+
+def test_plain_callable_flow_inspect_reports_partial_runtime_context():
+    class PairContext(ContextBase):
+        a: int
+        b: int
+
+    class PlainAdder(CallableModel):
+        @property
+        def context_type(self):
+            return PairContext
+
+        @property
+        def result_type(self):
+            return GenericResult[int]
+
+        @Flow.call
+        def __call__(self, context: PairContext) -> GenericResult[int]:
+            return GenericResult(value=context.a + context.b)
+
+    inspection = PlainAdder().flow.inspect(a=1)
+
+    assert inspection.inputs["a"].value == 1
+    assert flow_model_module._is_unset_flow_input(inspection.inputs["b"].value)
+
+
+def test_bound_flow_inspect_uses_static_context_for_dependency_requirements():
+    @Flow.model(auto_unwrap=False)
+    def leaf(v: FromContext[int]) -> int:
+        return v
+
+    @Flow.model(auto_unwrap=False)
+    def root(x: int, v: FromContext[int] = 0) -> int:
+        return x + 1
+
+    bound = root(x=leaf()).flow.with_context(v=1)
+    inspection = bound.flow.inspect()
+
+    assert bound.flow.compute().value == 2
+    assert inspection.dependencies[0].context == FlowContext(v=1)
+    assert inspection.dependencies[0].model.flow.inspect(inspection.dependencies[0].context).inputs["v"].value == 1
+
+
+def test_flow_inspect_recursive_dependencies_do_not_swallow_transform_type_errors():
+    @Flow.model
+    def leaf(v: FromContext[int]) -> int:
+        return v
+
+    @Flow.model
+    def root(x: int) -> int:
+        return x
+
+    @Flow.context_transform()
+    def broken(seed: FromContext[int]) -> int:
+        raise TypeError("transform bug")
+
+    model = root(x=leaf().flow.with_context(v=broken()))
+
+    with pytest.raises(TypeError, match="transform bug"):
+        model.flow.inspect(seed=1, dependencies="recursive")
+
+
+def test_dependency_evaluation_preserves_original_exception_type_with_context_note():
+    class CustomDependencyError(RuntimeError):
+        pass
+
+    @Flow.model
+    def child() -> int:
+        raise CustomDependencyError("boom")
+
+    @Flow.model
+    def root(x: int) -> int:
+        return x
+
+    with pytest.raises(CustomDependencyError) as exc_info:
+        root(x=child()).flow.compute()
+
+    if hasattr(exc_info.value, "__notes__"):
+        assert exc_info.value.__notes__ == ["Error while evaluating dependency root.x -> _child_Model."]
 
 
 def test_generated_factory_signature_is_keyword_only_and_includes_model_base_fields():
@@ -2005,13 +2468,32 @@ def test_plain_callable_flow_api_paths():
 
     model = PlainModel()
 
-    assert model.flow.context_inputs == {"value": int}
-    assert model.flow.required_inputs == {"value": int}
-    assert model.flow.bound_inputs == {}
+    assert dir(model.flow) == ["compute", "inspect", "with_context"]
+    assert not hasattr(model.flow, "context_inputs")
+    assert not hasattr(model.flow, "runtime_inputs")
+    assert not hasattr(model.flow, "required_inputs")
+    assert not hasattr(model.flow, "bound_inputs")
+    assert model.flow.inspect().context_inputs == {"value": int}
+    assert model.flow.inspect().required_inputs == {"value": int}
+    assert model.flow.inspect().bound_inputs == {}
     assert model.flow.compute({"value": 3}).value == 3
 
-    with pytest.raises(TypeError, match="either one context object or contextual keyword arguments"):
+    with pytest.raises(TypeError, match="either one context object or contextual keyword inputs"):
         model.flow.compute(SimpleContext(value=1), value=2)
+
+
+def test_plain_callable_flow_api_is_base_property():
+    class PlainModel(CallableModel):
+        offset: int = 7
+
+        @Flow.call
+        def __call__(self, context: SimpleContext) -> GenericResult[int]:
+            return GenericResult(value=self.offset + context.value)
+
+    model = PlainModel()
+
+    assert dir(model.flow) == ["compute", "inspect", "with_context"]
+    assert model(SimpleContext(value=3)).value == 10
 
 
 def test_plain_callable_flow_compute_preserves_matching_context_subclass():
@@ -2052,17 +2534,17 @@ def test_plain_callable_flow_compute_uses_default_context_when_available():
 
     model = PlainModel()
 
-    assert model.flow.required_inputs == {}
+    assert model.flow.inspect().required_inputs == {}
     assert model.flow.compute().value == (7, "default")
     assert model.flow.compute(value=3).value == (3, "default")
     assert model.flow.compute(tag="runtime").value == (7, "runtime")
 
     empty_bound = model.flow.with_context()
-    assert empty_bound.flow.required_inputs == {}
+    assert empty_bound.flow.inspect().required_inputs == {}
     assert empty_bound.flow.compute().value == (7, "default")
 
     bound = model.flow.with_context(tag="bound")
-    assert bound.flow.required_inputs == {}
+    assert bound.flow.inspect().required_inputs == {}
     assert bound.flow.compute().value == (7, "bound")
     assert bound.flow.compute(value=3).value == (3, "bound")
 
@@ -2104,8 +2586,8 @@ def test_bound_plain_callable_flow_compute_uses_default_context_for_dynamic_tran
 
     bound = PlainModel().flow.with_context(value=from_seed())
 
-    assert bound.flow.required_inputs == {}
-    assert bound.flow.runtime_inputs == {"seed": int}
+    assert bound.flow.inspect().required_inputs == {}
+    assert bound.flow.inspect().runtime_inputs == {"seed": int}
     assert bound.flow.compute().value == (9, 8)
     assert bound.flow.compute(seed=10).value == (11, 10)
 
@@ -2240,12 +2722,12 @@ def test_flow_model_internal_contract_helpers_cover_portable_edge_shapes():
 def test_compute_accepts_context_object_for_from_context_models():
     model = basic_loader(source="library", multiplier=3)
 
-    assert model.flow.context_inputs == {"value": int}
-    assert model.flow.required_inputs == {"value": int}
+    assert model.flow.inspect().context_inputs == {"value": int}
+    assert model.flow.inspect().required_inputs == {"value": int}
     assert model.flow.compute({"value": 4}).value == 12
     assert model.flow.compute(SimpleContext(value=5)).value == 15
 
-    with pytest.raises(TypeError, match="either one context object or contextual keyword arguments"):
+    with pytest.raises(TypeError, match="either one context object or contextual keyword inputs"):
         model.flow.compute(SimpleContext(value=1), value=2)
 
 
@@ -2757,11 +3239,11 @@ def test_bound_flow_required_inputs_subtracts_static_context():
     def add(a: FromContext[int], b: FromContext[int]) -> int:
         return a + b
 
-    assert PlainSource().flow.with_context(a=1).flow.required_inputs == {"b": int}
-    assert add().flow.with_context(a=1).flow.required_inputs == {"b": int}
-    assert add().flow.with_context(a=static_bad()).flow.required_inputs == {"b": int}
-    assert add().flow.with_context(static_patch()).flow.required_inputs == {"b": int}
-    assert add().flow.with_context(a=1, b=2).flow.required_inputs == {}
+    assert PlainSource().flow.with_context(a=1).flow.inspect().required_inputs == {"b": int}
+    assert add().flow.with_context(a=1).flow.inspect().required_inputs == {"b": int}
+    assert add().flow.with_context(a=static_bad()).flow.inspect().required_inputs == {"b": int}
+    assert add().flow.with_context(static_patch()).flow.inspect().required_inputs == {"b": int}
+    assert add().flow.with_context(a=1, b=2).flow.inspect().required_inputs == {}
 
 
 def test_bound_flow_required_inputs_reflects_dynamic_field_transform_inputs():
@@ -2772,9 +3254,9 @@ def test_bound_flow_required_inputs_reflects_dynamic_field_transform_inputs():
     bound = add().flow.with_context(a=seed_plus_one())
 
     assert bound.flow.compute(seed=1, b=10).value == 12
-    assert bound.flow.context_inputs == {"a": int, "b": int}
-    assert bound.flow.runtime_inputs == {"b": int, "seed": int}
-    assert bound.flow.required_inputs == {"b": int, "seed": int}
+    assert bound.flow.inspect().context_inputs == {"a": int, "b": int}
+    assert bound.flow.inspect().runtime_inputs == {"b": int, "seed": int}
+    assert bound.flow.inspect().required_inputs == {"b": int, "seed": int}
 
 
 def test_bound_flow_bound_inputs_include_static_context_bindings():
@@ -2784,10 +3266,10 @@ def test_bound_flow_bound_inputs_include_static_context_bindings():
 
     bound = add(a=1).flow.with_context(b=2)
 
-    assert bound.flow.context_inputs == {"b": int}
-    assert bound.flow.runtime_inputs == {}
-    assert bound.flow.required_inputs == {}
-    assert bound.flow.bound_inputs == {"a": 1, "b": 2}
+    assert bound.flow.inspect().context_inputs == {"b": int}
+    assert bound.flow.inspect().runtime_inputs == {}
+    assert bound.flow.inspect().required_inputs == {}
+    assert bound.flow.inspect().bound_inputs == {"a": 1, "b": 2}
 
 
 def test_bound_flow_bound_inputs_drops_static_patch_after_dynamic_override():
@@ -2798,10 +3280,10 @@ def test_bound_flow_bound_inputs_drops_static_patch_after_dynamic_override():
     bound = add().flow.with_context(static_patch()).flow.with_context(a=seed_plus_one())
 
     assert bound.flow.compute(seed=3, b=10).value == 14
-    assert bound.flow.bound_inputs == {}
-    assert bound.flow.context_inputs == {"a": int, "b": int}
-    assert bound.flow.runtime_inputs == {"b": int, "seed": int}
-    assert bound.flow.required_inputs == {"b": int, "seed": int}
+    assert bound.flow.inspect().bound_inputs == {}
+    assert bound.flow.inspect().context_inputs == {"a": int, "b": int}
+    assert bound.flow.inspect().runtime_inputs == {"b": int, "seed": int}
+    assert bound.flow.inspect().required_inputs == {"b": int, "seed": int}
 
 
 def test_generated_model_cache_ignores_unused_flow_context_fields():
@@ -3424,11 +3906,11 @@ def test_model_base_fields_visible_in_bound_inputs():
         return a + b
 
     model = add(a=10, multiplier=3)
-    assert model.flow.bound_inputs == {"a": 10, "multiplier": 3}
+    assert model.flow.inspect().bound_inputs == {"a": 10, "multiplier": 3}
 
     # Default-only model_base field is NOT in bound_inputs
     model_default = add(a=10)
-    assert model_default.flow.bound_inputs == {"a": 10}
+    assert model_default.flow.inspect().bound_inputs == {"a": 10}
 
 
 def _annotation_contains(annotation: object, expected: object) -> bool:
@@ -3504,7 +3986,12 @@ def test_flow_model_public_exports_exclude_context_spec_models():
     assert "StaticValueSpec" not in flow_model_module.__all__
     assert "ContextTransform" not in flow_model_module.__all__
     assert "flow_context_transform" not in flow_model_module.__all__
+    assert "DependencySpec" not in flow_model_module.__all__
+    assert "InputCheck" not in flow_model_module.__all__
     assert not hasattr(ccflow, "StaticValueSpec")
     assert not hasattr(ccflow, "ContextTransform")
     assert not hasattr(ccflow, "flow_context_transform")
+    assert not hasattr(ccflow, "DependencySpec")
+    assert not hasattr(ccflow, "InputCheck")
     assert not hasattr(flow_model_module, "flow_context_transform")
+    assert not hasattr(flow_model_module, "InputCheck")

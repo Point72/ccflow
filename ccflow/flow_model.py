@@ -101,6 +101,8 @@ from .utils.tokenize import compute_behavior_token, compute_data_token
 __all__ = (
     "FlowAPI",
     "BoundModel",
+    "FlowInspection",
+    "InputSpec",
     "FromContext",
     "Lazy",
 )
@@ -127,12 +129,134 @@ _HASHABLE_TYPE_ADAPTER_CACHE: "OrderedDict[Any, TypeAdapter]" = OrderedDict()
 _UNHASHABLE_TYPE_ADAPTER_CACHE: "OrderedDict[int, Tuple[Any, TypeAdapter]]" = OrderedDict()
 
 
+class InputSpec(NamedTuple):
+    """Richer description of one direct function input in ``FlowInspection``."""
+
+    name: str
+    type: Any
+    required: bool
+    default: Any
+    value: Any
+    source: str
+
+    @property
+    def default_repr(self) -> str:
+        """Compact representation of the declared function default."""
+
+        return _flow_debug_value_repr(self.default)
+
+    @property
+    def value_repr(self) -> str:
+        """Compact representation of the effective direct value."""
+
+        return _flow_debug_value_repr(self.value)
+
+    def __repr__(self) -> str:
+        return (
+            f"InputSpec(name={self.name!r}, type={_expected_type_repr(self.type)}, "
+            f"required={self.required!r}, default={self.default_repr}, "
+            f"value={self.value_repr}, source={self.source!r})"
+        )
+
+
+class DependencySpec(NamedTuple):
+    """User-facing provenance for one direct dependency edge."""
+
+    path: str
+    model: CallableModel
+    context: Optional[ContextBase] = None
+    lazy: bool = False
+
+    def __repr__(self) -> str:
+        return (
+            f"DependencySpec(path={self.path!r}, model={_flow_debug_value_repr(self.model)}, "
+            f"context={_flow_debug_value_repr(self.context)}, lazy={self.lazy!r})"
+        )
+
+
+class FlowInspection(NamedTuple):
+    """Structured current-level debugging summary returned by ``model.flow.inspect()``."""
+
+    model: CallableModel
+    context_inputs: Dict[str, Any]
+    runtime_inputs: Dict[str, Any]
+    required_inputs: Dict[str, Any]
+    bound_inputs: Dict[str, Any]
+    inputs: Dict[str, InputSpec]
+    dependencies: Tuple[DependencySpec, ...]
+
+    def __str__(self) -> str:
+        lines = [f"FlowInspection(model={_flow_debug_model_name(self.model)})"]
+        if self.inputs:
+            lines.append("  inputs:")
+            for spec in self.inputs.values():
+                required = " required" if spec.required else ""
+                lines.append(f"    {spec.name}: {_expected_type_repr(spec.type)} = {spec.value_repr} [{spec.source}{required}]")
+        else:
+            lines.append("  inputs: none")
+        if self.context_inputs:
+            context_inputs = ", ".join(f"{name}: {_expected_type_repr(annotation)}" for name, annotation in self.context_inputs.items())
+        else:
+            context_inputs = "none"
+        lines.append(f"  contextual inputs: {context_inputs}")
+        if self.runtime_inputs:
+            runtime_inputs = ", ".join(f"{name}: {_expected_type_repr(annotation)}" for name, annotation in self.runtime_inputs.items())
+        else:
+            runtime_inputs = "none"
+        lines.append(f"  runtime inputs: {runtime_inputs}")
+        if self.required_inputs:
+            required = ", ".join(f"{name}: {_expected_type_repr(annotation)}" for name, annotation in self.required_inputs.items())
+        else:
+            required = "none"
+        lines.append(f"  required runtime inputs: {required}")
+        lines.append(f"  bound inputs: {', '.join(self.bound_inputs) if self.bound_inputs else 'none'}")
+        if self.dependencies:
+            lines.append("  dependencies:")
+            for dependency in self.dependencies:
+                target = _flow_debug_model_name(dependency.model)
+                suffix = " lazy" if dependency.lazy else ""
+                context = f" context={_flow_debug_value_repr(dependency.context)}" if dependency.context is not None else ""
+                lines.append(f"    {dependency.path} -> {target}{suffix}{context}")
+        else:
+            lines.append("  dependencies: none")
+        return "\n".join(lines)
+
+    def __repr__(self) -> str:
+        return str(self)
+
+    def _repr_pretty_(self, printer, cycle: bool) -> None:
+        printer.text("..." if cycle else str(self))
+
+
 def _unset_flow_input_factory() -> _UnsetFlowInput:
     return _UNSET_FLOW_INPUT
 
 
 def _is_unset_flow_input(value: Any) -> bool:
     return value is _UNSET_FLOW_INPUT
+
+
+def _flow_debug_value_repr(value: Any) -> str:
+    if _is_unset_flow_input(value):
+        return repr(value)
+
+    bound_context_type = globals().get("_BoundModelContext")
+    if bound_context_type is not None and isinstance(value, bound_context_type):
+        return repr(FlowContext(**_context_values(value)))
+
+    callable_model_type = globals().get("CallableModel")
+    if callable_model_type is not None and isinstance(value, callable_model_type):
+        return f"<dependency {_flow_debug_model_name(value)}>"
+
+    return repr(value)
+
+
+def _flow_debug_model_name(model: CallableModel) -> str:
+    if isinstance(model, BoundModel):
+        return f"{_flow_debug_model_name(model.model)}.flow.with_context(...)"
+    name = model.meta.name
+    cls_name = type(model).__name__
+    return f"{name} ({cls_name})" if name else cls_name
 
 
 _ModelContextContract = NamedTuple(
@@ -848,7 +972,15 @@ def _resolve_regular_param_value(model: "_GeneratedFlowModelBase", param: _FlowM
 
     if _is_model_dependency(value):
         dependency_model, dependency_context = _resolved_dependency_invocation(value, context)
-        return _unwrap_model_result(dependency_model(dependency_context))
+        try:
+            return _unwrap_model_result(dependency_model(dependency_context))
+        except Exception as exc:
+            parent = _callable_name(type(model).__flow_model_config__.func)
+            child = dependency_model.meta.name or type(dependency_model).__name__
+            add_note = getattr(exc, "add_note", None)
+            if callable(add_note):
+                add_note(f"Error while evaluating dependency {parent}.{param.name} -> {child}.")
+            raise
     return value
 
 
@@ -1719,7 +1851,7 @@ def _build_compute_context(model: CallableModel, context: Any, kwargs: Dict[str,
     """
 
     if context is not _UNSET and kwargs:
-        raise TypeError("compute() accepts either one context object or contextual keyword arguments, but not both.")
+        raise TypeError("compute() accepts either one context object or contextual keyword inputs, but not both.")
 
     ctx_type = model.context_type
     _ctx_is_optional = _is_optional_context_type(ctx_type)
@@ -1802,12 +1934,186 @@ def _build_bound_compute_context(bound_model: "BoundModel", context: Any, kwargs
     """Construct the ambient context passed into a ``BoundModel`` by ``compute``."""
 
     if context is not _UNSET and kwargs:
-        raise TypeError("compute() accepts either one context object or contextual keyword arguments, but not both.")
+        raise TypeError("compute() accepts either one context object or contextual keyword inputs, but not both.")
     if context is not _UNSET:
         return context
     if not kwargs and _bound_model_preserves_none_context(bound_model):
         return None
     return _bound_model_ambient_context(bound_model, kwargs)
+
+
+def _raw_input_values_for_debug(model: CallableModel, context: Any, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """Return caller-supplied context values without executing the model."""
+
+    if context is not _UNSET and kwargs:
+        raise TypeError("compute() accepts either one context object or contextual keyword inputs, but not both.")
+    if context is _UNSET:
+        return dict(kwargs)
+    if context is None:
+        return {}
+    if isinstance(context, ContextBase):
+        return _context_values(context)
+    if isinstance(context, Mapping):
+        return dict(context)
+    return _context_values(_model_context_contract(model).runtime_context_type.model_validate(context))
+
+
+def _partial_context_for_inspect(model: CallableModel, values: Dict[str, Any]) -> ContextBase:
+    contract = _model_context_contract(model)
+    if contract.input_types is None:
+        return FlowContext(**values)
+    return FlowContext(**{name: values[name] for name in contract.input_types if name in values})
+
+
+def _partial_dependency_context_for_inspect(model: CallableModel, context: ContextBase) -> ContextBase:
+    if isinstance(model, BoundModel):
+        return FlowContext(**_context_values(context))
+    return _partial_context_for_inspect(model, _context_values(context))
+
+
+def _project_bound_dependency_context_for_inspect(model: "BoundModel", context: ContextBase) -> ContextBase:
+    values = _context_values(context)
+    projected = {name: values[name] for name in model.flow._runtime_inputs if name in values}
+    if isinstance(context, _BoundModelContext) and context._base_context is not None:
+        return _BoundModelContext.from_values(projected, base_context=context._base_context)
+    return FlowContext(**projected)
+
+
+def _generated_context_argument_specs(generated: "_GeneratedFlowModelBase", input_types: Optional[Dict[str, Any]]) -> Dict[str, InputSpec]:
+    config = type(generated).__flow_model_config__
+    explicit_fields = _bound_field_names(generated)
+    specs: Dict[str, InputSpec] = {}
+    for param in config.contextual_params:
+        annotation = param.annotation if input_types is None else input_types[param.name]
+        value = getattr(generated, param.name, _UNSET_FLOW_INPUT)
+        if param.name in explicit_fields and not _is_unset_flow_input(value):
+            specs[param.name] = InputSpec(param.name, annotation, False, _UNSET_FLOW_INPUT, value, "construction")
+        elif param.has_function_default:
+            specs[param.name] = InputSpec(param.name, annotation, False, param.function_default, param.function_default, "function_default")
+        else:
+            specs[param.name] = InputSpec(param.name, annotation, True, _UNSET_FLOW_INPUT, _UNSET_FLOW_INPUT, "runtime")
+    return specs
+
+
+def _plain_context_argument_specs(model: CallableModel, contract: _ModelContextContract) -> Dict[str, InputSpec]:
+    if contract.input_types is None:
+        return {}
+    default_values = _plain_model_default_context_values(model, contract.runtime_context_type)
+    required_inputs = set(contract.required_names)
+    if default_values is not None:
+        required_inputs -= set(default_values)
+    specs = {}
+    for name, annotation in contract.input_types.items():
+        if default_values is not None and name in default_values:
+            specs[name] = InputSpec(name, annotation, False, default_values[name], default_values[name], "context_default")
+        else:
+            specs[name] = InputSpec(name, annotation, name in required_inputs, _UNSET_FLOW_INPUT, _UNSET_FLOW_INPUT, "runtime")
+    return specs
+
+
+def _direct_dependency_specs(
+    model: CallableModel,
+    context: Optional[ContextBase] = None,
+    *,
+    trim_context: bool = True,
+) -> Tuple[DependencySpec, ...]:
+    if isinstance(model, BoundModel):
+        rewritten_context = None if context is None else model._rewrite_context(context)
+        return _direct_dependency_specs(model.model, rewritten_context, trim_context=trim_context)
+
+    generated = _generated_model_instance(model)
+    if generated is None:
+        return ()
+
+    specs = []
+    config = type(generated).__flow_model_config__
+    for param in config.regular_params:
+        value = getattr(generated, param.name, _UNSET_FLOW_INPUT)
+        if _is_unset_flow_input(value) or not _is_model_dependency(value):
+            continue
+        dependency_model = value
+        dependency_context = None
+        if context is not None:
+            try:
+                dependency_model, dependency_context = _resolved_dependency_invocation(value, context)
+            except (TypeError, ValueError, ValidationError):
+                dependency_model = value
+                dependency_context = _partial_dependency_context_for_inspect(value, context)
+            else:
+                contract = _model_context_contract(dependency_model)
+                if trim_context and dependency_context is not None:
+                    if isinstance(dependency_model, BoundModel):
+                        dependency_context = _project_bound_dependency_context_for_inspect(dependency_model, dependency_context)
+                    elif contract.input_types is not None:
+                        values = _context_values(dependency_context)
+                        dependency_context = _runtime_context_for_model(
+                            dependency_model,
+                            {name: values[name] for name in contract.input_types if name in values},
+                        )
+        specs.append(DependencySpec(param.name, dependency_model, dependency_context, lazy=param.is_lazy))
+    return tuple(specs)
+
+
+def _normalize_inspect_dependencies(dependencies: str) -> Literal["none", "direct", "recursive"]:
+    if dependencies == "none":
+        return "none"
+    if dependencies == "direct":
+        return "direct"
+    if dependencies == "recursive":
+        return "recursive"
+    raise ValueError("dependencies must be one of: direct, none, recursive")
+
+
+def _is_missing_contextual_input_error(error: TypeError) -> bool:
+    return str(error).startswith("Missing contextual input(s)")
+
+
+def _recursive_dependency_specs_for_flow(
+    flow: "FlowAPI",
+    context: Optional[ContextBase],
+    *,
+    prefix: str = "",
+    lazy_parent: bool = False,
+    active: Optional[Set[int]] = None,
+) -> Tuple[DependencySpec, ...]:
+    """Return inspect-visible dependency specs below ``flow`` with prefixed paths."""
+
+    active = set() if active is None else active
+    model_id = id(flow._compute_target)
+    if model_id in active:
+        return ()
+
+    active.add(model_id)
+    try:
+        try:
+            argument_context = flow._argument_context(context)
+            direct_dependencies = flow._dependency_specs_for_inspect(
+                context,
+                argument_context,
+                preserve_ambient_context=True,
+            )
+        except TypeError as exc:
+            if not _is_missing_contextual_input_error(exc):
+                raise
+            return ()
+        result = []
+        for dependency in direct_dependencies:
+            path = f"{prefix}.{dependency.path}" if prefix else dependency.path
+            lazy = lazy_parent or dependency.lazy
+            prefixed = DependencySpec(path, dependency.model, dependency.context, lazy)
+            result.append(prefixed)
+            result.extend(
+                _recursive_dependency_specs_for_flow(
+                    dependency.model.flow,
+                    dependency.context,
+                    prefix=path,
+                    lazy_parent=lazy,
+                    active=active,
+                )
+            )
+        return tuple(result)
+    finally:
+        active.remove(model_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1824,8 +2130,24 @@ class FlowAPI:
     what can be inferred from their ``context_type`` and pydantic fields.
     """
 
+    _PUBLIC_HELP: ClassVar[Dict[str, str]] = {
+        "compute": "Evaluate the model from a context object or runtime keyword context.",
+        "with_context": "Return a new wrapper that binds or rewrites runtime context before evaluation; it does not mutate this model.",
+        "inspect": "Return a readable debugging summary. Options: dependencies='direct|recursive|none'.",
+    }
+    _PUBLIC_NAMES: ClassVar[Tuple[str, ...]] = tuple(_PUBLIC_HELP)
+
     def __init__(self, model: CallableModel):
         self._model = model
+
+    def __dir__(self) -> List[str]:
+        """Return a focused list of public helpers for interactive autocomplete."""
+
+        return sorted(self._PUBLIC_NAMES)
+
+    def __repr__(self) -> str:
+        helpers = ", ".join(self._PUBLIC_NAMES)
+        return f"{type(self).__name__}(model={self._compute_target!r}, helpers=[{helpers}])"
 
     @property
     def _compute_target(self) -> CallableModel:
@@ -1839,20 +2161,20 @@ class FlowAPI:
         return _maybe_auto_unwrap_external_result(target, target(built_context, _options=_options))
 
     @property
-    def context_inputs(self) -> Dict[str, Any]:
+    def _context_inputs(self) -> Dict[str, Any]:
         """Declared contextual input names and expected types for this model."""
 
         contract = _model_context_contract(self._model)
         return dict(contract.input_types or {})
 
     @property
-    def runtime_inputs(self) -> Dict[str, Any]:
+    def _runtime_inputs(self) -> Dict[str, Any]:
         """Direct runtime context fields this model may read from the caller."""
 
-        return self.context_inputs
+        return self._context_inputs
 
     @property
-    def required_inputs(self) -> Dict[str, Any]:
+    def _required_inputs(self) -> Dict[str, Any]:
         """Required direct runtime context fields still needed from the caller."""
 
         contract = _model_context_contract(self._model)
@@ -1880,7 +2202,172 @@ class FlowAPI:
         return result
 
     @property
-    def bound_inputs(self) -> Dict[str, Any]:
+    def _context_argument_specs(self) -> Dict[str, InputSpec]:
+        """Rich descriptions of declared direct contextual inputs."""
+
+        contract = _model_context_contract(self._model)
+        if contract.generated_model is not None:
+            return _generated_context_argument_specs(contract.generated_model, contract.input_types)
+        return _plain_context_argument_specs(self._model, contract)
+
+    @property
+    def _runtime_argument_specs(self) -> Dict[str, InputSpec]:
+        """Rich descriptions of direct runtime inputs read from the caller."""
+
+        specs = self._context_argument_specs
+        runtime_names = set(self._runtime_inputs)
+        required_names = set(self._required_inputs)
+        result = {}
+        for name in runtime_names:
+            spec = specs.get(name)
+            result[name] = InputSpec(
+                name,
+                self._runtime_inputs[name],
+                name in required_names,
+                spec.default if spec is not None else _UNSET_FLOW_INPUT,
+                spec.value if spec is not None else _UNSET_FLOW_INPUT,
+                spec.source if spec is not None else "runtime",
+            )
+        return result
+
+    @property
+    def _argument_specs(self) -> Dict[str, InputSpec]:
+        """Rich descriptions of direct construction and contextual inputs."""
+
+        generated = _model_context_contract(self._model).generated_model
+        if generated is None:
+            return self._context_argument_specs
+
+        config = type(generated).__flow_model_config__
+        specs: Dict[str, InputSpec] = {}
+        for param in config.regular_params:
+            value = getattr(generated, param.name, _UNSET_FLOW_INPUT)
+            if not _is_unset_flow_input(value):
+                specs[param.name] = InputSpec(param.name, param.annotation, False, _UNSET_FLOW_INPUT, value, "construction")
+            elif param.has_function_default:
+                specs[param.name] = InputSpec(param.name, param.annotation, False, param.function_default, param.function_default, "function_default")
+            else:
+                specs[param.name] = InputSpec(param.name, param.annotation, True, _UNSET_FLOW_INPUT, _UNSET_FLOW_INPUT, "construction")
+        specs.update(self._context_argument_specs)
+        return specs
+
+    def inspect(
+        self,
+        context: Any = _UNSET,
+        /,
+        *,
+        dependencies: Literal["direct", "recursive", "none"] = "direct",
+        **kwargs,
+    ) -> FlowInspection:
+        """Return a readable direct debugging summary for this model.
+
+        Args:
+            context: Optional runtime context object.
+            dependencies: Dependency inspection depth. ``"direct"`` includes
+                only immediate dependencies; ``"recursive"`` follows
+                inspect-visible dependencies recursively; ``"none"`` skips
+                dependency inspection.
+            **kwargs: Runtime context field values.
+        """
+
+        dependency_depth = _normalize_inspect_dependencies(dependencies)
+        dependency_context = None
+        argument_context = None
+        dependency_specs: Tuple[DependencySpec, ...]
+        if context is not _UNSET or kwargs:
+            raw_values = _raw_input_values_for_debug(self._compute_target, context, kwargs)
+            try:
+                dependency_context = _build_compute_context(self._compute_target, context, kwargs)
+            except (TypeError, ValidationError):
+                dependency_context = _partial_context_for_inspect(self._compute_target, raw_values)
+            try:
+                argument_context = self._argument_context(dependency_context)
+            except (TypeError, ValidationError) as exc:
+                if isinstance(exc, TypeError) and not _is_missing_contextual_input_error(exc):
+                    raise
+                argument_context = None
+            dependency_specs = self._dependency_specs_for_inspect(dependency_context, argument_context) if dependency_depth == "direct" else ()
+            if dependency_depth == "recursive":
+                dependency_specs = _recursive_dependency_specs_for_flow(self, dependency_context)
+        else:
+            try:
+                argument_context = self._argument_context(None)
+            except (TypeError, ValidationError) as exc:
+                if isinstance(exc, TypeError) and not _is_missing_contextual_input_error(exc):
+                    raise
+                argument_context = None
+            dependency_specs = self._dependency_specs_for_inspect(None, argument_context) if dependency_depth == "direct" else ()
+            if dependency_depth == "recursive":
+                dependency_specs = _recursive_dependency_specs_for_flow(self, None)
+        return FlowInspection(
+            model=self._compute_target,
+            context_inputs=self._context_inputs,
+            runtime_inputs=self._runtime_inputs,
+            required_inputs=self._required_inputs,
+            bound_inputs=self._bound_inputs,
+            inputs=self._argument_specs_for_context(argument_context),
+            dependencies=dependency_specs,
+        )
+
+    def _argument_context(self, context: Optional[ContextBase]) -> Optional[ContextBase]:
+        return context
+
+    def _dependency_specs_for_inspect(
+        self,
+        dependency_context: Optional[ContextBase],
+        _argument_context: Optional[ContextBase],
+        *,
+        preserve_ambient_context: bool = False,
+    ) -> Tuple[DependencySpec, ...]:
+        return _direct_dependency_specs(self._compute_target, dependency_context, trim_context=not preserve_ambient_context)
+
+    def _context_argument_specs_for_context(self, context: Optional[ContextBase]) -> Dict[str, InputSpec]:
+        result = dict(self._context_argument_specs)
+        if context is None:
+            return result
+        values = _context_values(context)
+        for name, spec in list(result.items()):
+            if name in values:
+                result[name] = InputSpec(name, spec.type, False, spec.default, values[name], "runtime")
+        return result
+
+    def _runtime_argument_specs_for_context(self, context: Optional[ContextBase]) -> Dict[str, InputSpec]:
+        specs = self._context_argument_specs_for_context(context)
+        runtime_names = set(self._runtime_inputs)
+        required_names = set(self._required_inputs)
+        result = {}
+        for name in runtime_names:
+            spec = specs.get(name)
+            result[name] = InputSpec(
+                name,
+                self._runtime_inputs[name],
+                name in required_names,
+                spec.default if spec is not None else _UNSET_FLOW_INPUT,
+                spec.value if spec is not None else _UNSET_FLOW_INPUT,
+                spec.source if spec is not None else "runtime",
+            )
+        return result
+
+    def _argument_specs_for_context(self, context: Optional[ContextBase]) -> Dict[str, InputSpec]:
+        generated = _model_context_contract(self._model).generated_model
+        if generated is None:
+            return self._context_argument_specs_for_context(context)
+
+        config = type(generated).__flow_model_config__
+        specs: Dict[str, InputSpec] = {}
+        for param in config.regular_params:
+            value = getattr(generated, param.name, _UNSET_FLOW_INPUT)
+            if not _is_unset_flow_input(value):
+                specs[param.name] = InputSpec(param.name, param.annotation, False, _UNSET_FLOW_INPUT, value, "construction")
+            elif param.has_function_default:
+                specs[param.name] = InputSpec(param.name, param.annotation, False, param.function_default, param.function_default, "function_default")
+            else:
+                specs[param.name] = InputSpec(param.name, param.annotation, True, _UNSET_FLOW_INPUT, _UNSET_FLOW_INPUT, "construction")
+        specs.update(self._context_argument_specs_for_context(context))
+        return specs
+
+    @property
+    def _bound_inputs(self) -> Dict[str, Any]:
         """Inputs already fixed by construction-time values or static context bindings."""
 
         generated = _model_context_contract(self._model).generated_model
@@ -1981,6 +2468,8 @@ class BoundModel(WrapperModel):
 
     @property
     def flow(self) -> "FlowAPI":
+        """Access bound flow helpers for execution, context transforms, and introspection."""
+
         return _BoundFlowAPI(self)
 
 
@@ -2001,31 +2490,79 @@ class _BoundFlowAPI(FlowAPI):
         built_context = _build_bound_compute_context(self._bound, context, kwargs)
         return _maybe_auto_unwrap_external_result(self._bound, self._bound(built_context, _options=_options))
 
+    def _argument_context(self, context: Optional[ContextBase]) -> Optional[ContextBase]:
+        if context is None:
+            if _bound_model_preserves_none_context(self._bound):
+                return None
+            _supplied_fields, required_dynamic_inputs = _dynamic_context_operation_effects(self._bound.context_spec, required_only=True)
+            if required_dynamic_inputs:
+                return None
+            return self._bound._rewrite_context(_bound_model_ambient_context(self._bound, {}))
+        return self._bound._rewrite_context(context)
+
+    def _dependency_specs_for_inspect(
+        self,
+        _dependency_context: Optional[ContextBase],
+        argument_context: Optional[ContextBase],
+        *,
+        preserve_ambient_context: bool = False,
+    ) -> Tuple[DependencySpec, ...]:
+        return _direct_dependency_specs(self._bound.model, argument_context, trim_context=not preserve_ambient_context)
+
     @property
-    def bound_inputs(self) -> Dict[str, Any]:
+    def _bound_inputs(self) -> Dict[str, Any]:
         """Concrete values already fixed, including statically resolved context bindings."""
 
-        result = super().bound_inputs
-        for name in self.context_inputs:
+        result = super()._bound_inputs
+        for name in self._context_inputs:
             result.pop(name, None)
         result.update(_statically_resolved_context_field_values(self._bound.model, self._bound.context_spec))
         return result
 
     @property
-    def context_inputs(self) -> Dict[str, Any]:
+    def _context_inputs(self) -> Dict[str, Any]:
         """Declared contextual inputs of the wrapped model."""
 
-        return super().context_inputs
+        return super()._context_inputs
 
     @property
-    def runtime_inputs(self) -> Dict[str, Any]:
+    def _context_argument_specs(self) -> Dict[str, InputSpec]:
+        """Rich descriptions of wrapped-model contextual inputs after bindings."""
+
+        result = dict(super()._context_argument_specs)
+        for name, value in _statically_resolved_context_field_values(self._bound.model, self._bound.context_spec).items():
+            if name in result:
+                spec = result[name]
+                result[name] = InputSpec(name, spec.type, False, spec.default, value, "with_context")
+
+        supplied_fields, _dynamic_inputs = _dynamic_context_operation_effects(self._bound.context_spec, required_only=False)
+        for name in supplied_fields:
+            if name in result:
+                spec = result[name]
+                result[name] = InputSpec(name, spec.type, False, spec.default, _UNSET_FLOW_INPUT, "context_transform")
+        return result
+
+    def _context_argument_specs_for_context(self, context: Optional[ContextBase]) -> Dict[str, InputSpec]:
+        result = dict(self._context_argument_specs)
+        if context is None:
+            return result
+        values = _context_values(context)
+        for name, spec in list(result.items()):
+            if name not in values:
+                continue
+            source = spec.source if spec.source in {"context_transform", "with_context"} else "runtime"
+            result[name] = InputSpec(name, spec.type, False, spec.default, values[name], source)
+        return result
+
+    @property
+    def _runtime_inputs(self) -> Dict[str, Any]:
         """Direct runtime context inputs after applying this wrapper's bindings.
 
         Static context transforms may be evaluated to identify resolved fields.
         Dynamic transforms contribute their own runtime context inputs.
         """
 
-        result = super().context_inputs
+        result = super()._context_inputs
         for name in _statically_resolved_context_field_names(self._bound.model, self._bound.context_spec):
             result.pop(name, None)
         supplied_fields, dynamic_inputs = _dynamic_context_operation_effects(self._bound.context_spec, required_only=False)
@@ -2035,14 +2572,36 @@ class _BoundFlowAPI(FlowAPI):
         return result
 
     @property
-    def required_inputs(self) -> Dict[str, Any]:
+    def _runtime_argument_specs(self) -> Dict[str, InputSpec]:
+        """Rich descriptions of runtime inputs after applying this wrapper's bindings."""
+
+        result = {}
+        base_specs = self._context_argument_specs
+        for name, annotation in self._runtime_inputs.items():
+            base = base_specs.get(name)
+            result[name] = InputSpec(
+                name,
+                annotation,
+                name in self._required_inputs,
+                base.default if base is not None else _UNSET_FLOW_INPUT,
+                base.value if base is not None else _UNSET_FLOW_INPUT,
+                base.source if base is not None else "runtime",
+            )
+        _supplied_fields, dynamic_inputs = _dynamic_context_operation_effects(self._bound.context_spec, required_only=False)
+        required_dynamic = set(_dynamic_context_operation_effects(self._bound.context_spec, required_only=True)[1])
+        for name, annotation in dynamic_inputs.items():
+            result[name] = InputSpec(name, annotation, name in required_dynamic, _UNSET_FLOW_INPUT, _UNSET_FLOW_INPUT, "context_transform")
+        return result
+
+    @property
+    def _required_inputs(self) -> Dict[str, Any]:
         """Required direct runtime context inputs still missing after static bindings.
 
         Static context transforms may be evaluated to identify resolved fields.
         Dynamic transforms contribute their own required runtime context inputs.
         """
 
-        result = super().required_inputs
+        result = super()._required_inputs
         for name in _statically_resolved_context_field_names(self._bound.model, self._bound.context_spec):
             result.pop(name, None)
         supplied_fields, dynamic_inputs = _dynamic_context_operation_effects(self._bound.context_spec, required_only=True)
@@ -2121,10 +2680,6 @@ class _GeneratedFlowModelBase(CallableModel):
     @property
     def result_type(self) -> Type[ResultBase]:
         return self.__class__.__flow_model_config__.result_type
-
-    @property
-    def flow(self) -> FlowAPI:
-        return FlowAPI(self)
 
     def _evaluation_identity_payload(
         self,
@@ -2440,6 +2995,30 @@ def flow_model(
     ``FlowContext``, a declared ``context_type``, ``compute(...)`` kwargs, or
     ``with_context(...)`` bindings.  The returned object is a factory that
     creates instances of the generated model class.
+
+    Args:
+        func: The function being decorated. This is passed automatically in
+            bare decorator form, for example ``@Flow.model``. When using
+            options, for example ``@Flow.model(auto_unwrap=True)``, Python first
+            calls ``Flow.model(...)`` without a function and then applies the
+            returned decorator.
+        context_type: Optional ``ContextBase`` subclass used to validate all
+            contextual inputs together after individual ``FromContext[...]``
+            fields are resolved.
+        auto_unwrap: When ``True`` and ccflow auto-wraps a plain return
+            annotation in ``GenericResult[T]``, external
+            ``model.flow.compute(...)`` calls return the raw ``T`` value instead
+            of ``GenericResult[T]``. Dependency evaluation and direct model calls
+            keep the normal ccflow result contract.
+        model_base: Custom ``CallableModel`` subclass to use as the base class
+            for the generated model.
+        cacheable: Optional generated-model default for ``FlowOptions.cacheable``.
+        volatile: Optional generated-model default for ``FlowOptions.volatile``.
+        log_level: Optional generated-model default for ``FlowOptions.log_level``.
+        validate_result: Optional generated-model default for
+            ``FlowOptions.validate_result``.
+        verbose: Optional generated-model default for ``FlowOptions.verbose``.
+        evaluator: Optional generated-model default evaluator.
     """
 
     def decorator(fn: _AnyCallable) -> _AnyCallable:

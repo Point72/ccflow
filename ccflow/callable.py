@@ -498,6 +498,22 @@ class Flow(PydanticBaseModel):
         Generated-model options also include ``context_type`` for validating
         contextual fields, ``auto_unwrap`` for ergonomic compute results, and
         ``model_base`` for custom ``CallableModel`` bases.
+
+        Args:
+            func: The function being decorated. This is passed automatically in
+                bare decorator form, for example ``@Flow.model``. When using
+                options, for example ``@Flow.model(auto_unwrap=True)``, Python
+                first calls ``Flow.model(...)`` without a function and then
+                applies the returned decorator.
+            context_type: Optional ``ContextBase`` subclass used to validate
+                ``FromContext[...]`` fields together.
+            auto_unwrap: When ``True`` and the function's plain return value is
+                auto-wrapped in ``GenericResult[T]``, external
+                ``model.flow.compute(...)`` calls return the raw ``T`` value
+                instead of ``GenericResult[T]``. Internal model dependencies
+                still use normal ccflow result objects.
+            model_base: Custom ``CallableModel`` subclass to use as the base
+                class for the generated model.
         """
         from .flow_model import flow_model
 

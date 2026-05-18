@@ -38,10 +38,11 @@ def _format_bound_inputs(inputs: dict[str, object]) -> str:
 
 
 def _print_model_summary(label: str, model: CallableModel) -> None:
+    inspection = model.flow.inspect()
     print(f"  {label}:")
-    print(f"    bound inputs: {_format_bound_inputs(model.flow.bound_inputs)}")
-    print(f"    declared context inputs: {_format_input_names(model.flow.context_inputs)}")
-    print(f"    runtime inputs: {_format_input_names(model.flow.runtime_inputs)}")
+    print(f"    bound inputs: {_format_bound_inputs(inspection.bound_inputs)}")
+    print(f"    declared context inputs: {_format_input_names(inspection.context_inputs)}")
+    print(f"    runtime inputs: {_format_input_names(inspection.runtime_inputs)}")
 
 
 @Flow.model(context_type=DateRangeContext)

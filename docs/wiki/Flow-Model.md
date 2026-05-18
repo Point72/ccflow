@@ -9,7 +9,7 @@ The design is intentionally narrow:
 - `@Flow.context_transform` defines reusable contextual rewrites,
 - `.flow.compute(...)` is the execution entry point for the full DAG,
 - `.flow.with_context(*patches, **field_overrides)` rewires contextual inputs on one dependency edge,
-- upstream `CallableModel`s can still be passed as ordinary arguments.
+- upstream `CallableModel`s can still be passed as ordinary inputs.
 
 The goal is that a reader can look at one function signature and immediately
 see:
@@ -125,7 +125,7 @@ Contextual parameters are the ones marked with `FromContext[...]`.
 They can be satisfied by:
 
 - runtime context,
-- construction-time keyword arguments, stored as contextual defaults on the model instance,
+- construction-time keyword inputs, stored as contextual defaults on the model instance,
 - keyword callable literals for `FromContext[Callable[..., T]]` fields,
 - function defaults.
 
@@ -172,15 +172,15 @@ execution of the whole DAG.
 
 For generated `@Flow.model` stages it accepts either:
 
-- keyword arguments that become the ambient runtime context bag, or
+- keyword inputs that become the ambient runtime context bag, or
 - one context object.
 
 It does not accept both at the same time.
 
 Plain handwritten `CallableModel` instances also expose `.flow.compute(...)`.
-For those models, keyword arguments build or update the runtime context. If the
+For those models, keyword inputs build or update the runtime context. If the
 decorated `@Flow.call` method declares a default context object, no-argument
-`.flow.compute()` uses that default, and keyword arguments override fields from
+`.flow.compute()` uses that default, and keyword inputs override fields from
 that default for the `.flow.compute(...)` call.
 
 ```python
@@ -200,7 +200,7 @@ assert model.flow.compute(FlowContext(b=6)).value == 16
 For `@Flow.model` generated models, the kwargs form is intentionally a DAG
 entrypoint: it can include extra fields needed only by upstream transformed
 dependencies. Regular parameters are still never read from runtime context.
-`compute()` enforces two guardrails on keyword arguments:
+`compute()` enforces two guardrails on keyword inputs:
 
 - If a key matches an **unbound** regular parameter, it raises early instead of
   silently treating that value as configuration.
@@ -233,13 +233,13 @@ model = add(
     right=base.flow.with_context(value=add_offset(amount=10)),
 )
 
-assert model.flow.context_inputs == {"bonus": int}
+assert model.flow.inspect().context_inputs == {"bonus": int}
 assert model.flow.compute(value=5, bonus=100).value == 121
 ```
 
 If a regular parameter is already bound on the root model and you need to pass
 an ambient context field with the same name for upstream graph nodes, use a
-context object instead of keyword arguments. The kwargs form rejects keys that
+context object instead of keyword inputs. The kwargs form rejects keys that
 match already-bound regular parameters to prevent accidental rebinding:
 
 ```python
@@ -291,9 +291,9 @@ determines how it can be used in `with_context()`:
 
 - **Patch transforms** return a `Mapping` (e.g. `dict[str, object]`) of
   contextual field names to replacement values. They are passed as **positional
-  arguments** to `with_context()`.
+  inputs** to `with_context()`.
 - **Field transforms** return a single scalar value. They are passed as
-  **keyword arguments** to `with_context()`, keyed by the contextual field they
+  **keyword inputs** to `with_context()`, keyed by the contextual field they
   replace.
 
 ```python
@@ -353,7 +353,7 @@ always apply last.
 Key rules:
 
 - `with_context()` only targets contextual fields,
-- positional arguments must be patch transforms,
+- positional inputs must be patch transforms,
 - keyword overrides may be literals or field transforms,
 - raw positional callables are rejected; use named `@Flow.context_transform`
   helpers for positional patch transforms,
@@ -408,38 +408,90 @@ For class-based `CallableModel` methods that want to declare context fields as
 keyword-only parameters, see `Flow.call(auto_context=...)` in
 [Workflows](Workflows#flow-decorator).
 
-## Introspection APIs
+## Introspection
 
-Flow models expose a few useful introspection helpers:
+The public `.flow` surface is intentionally small:
 
-- `model.flow.context_inputs`: the declared contextual contract for the model
-  or wrapped model,
-- `model.flow.runtime_inputs`: direct runtime context inputs this model or
-  wrapper may read after applying its own bindings,
-- `model.flow.required_inputs`: required direct runtime context inputs that are
-  not already satisfied by defaults or bindings,
-- `model.flow.bound_inputs`: concrete values already fixed on the model, such
-  as regular construction-time inputs, construction-time contextual defaults,
-  and literal keyword `with_context(field=value)` bindings.
+- `model.flow.compute(...)`: evaluate the model,
+- `model.flow.with_context(...)`: return a branch-local contextual wrapper,
+- `model.flow.inspect(...)`: return a structured debugging summary.
+
+Use `inspect(...)` when you want to understand what is bound, what is still
+contextual, and which direct dependencies are attached:
+
+```python
+inspection = model.flow.inspect()
+
+inspection.inputs        # direct function inputs and their sources
+inspection.context_inputs   # declared contextual contract
+inspection.runtime_inputs   # direct runtime inputs after wrapper bindings
+inspection.required_inputs  # required runtime inputs still needed
+inspection.bound_inputs     # construction/static values already fixed
+inspection.dependencies     # dependency edges, controlled by dependencies=...
+```
+
+The top-level input fields are intentionally current-level only. They describe
+the model or wrapper you inspected, not a flattened view of the whole dependency
+graph. `inspection.inputs` is a dict from that model's function input name to an
+`InputSpec`. Each `InputSpec` reports the expected type, whether the input is
+required, the declared default, the effective direct value if known, and whether
+that value came from construction, a function default, runtime context, or
+`with_context(...)`.
+
+Dependency information lives under `inspection.dependencies`. Each dependency
+edge reports the parameter path, target model, projected context values when
+known, and whether the edge is lazy. To inspect a child, inspect that child
+model directly:
+
+```python
+inspection = model.flow.inspect(value=3)
+dependency = inspection.dependencies[0]
+
+if dependency.context is None:
+    child = dependency.model.flow.inspect()
+else:
+    child = dependency.model.flow.inspect(dependency.context)
+
+child.inputs
+child.runtime_inputs
+child.required_inputs
+```
+
+This explicit nesting avoids merging unrelated models into one ambiguous input
+namespace. It also avoids name collisions when multiple dependencies use the
+same context field name for different branches.
 
 `context_inputs` intentionally stays faithful to the model's declared contract.
 For bound models, `with_context(...)` bindings are reflected in
-`runtime_inputs`, `required_inputs`, and `bound_inputs`. Literal bindings
-satisfy their target fields. Transform bindings with runtime inputs add those
-source context inputs to the effective runtime view. Static transforms, meaning
-transforms with no contextual parameters, may be evaluated during introspection
-so their output fields can be reported precisely. A transform parameter like
-`seed: FromContext[int] = 0` is still a runtime input; its default only means the
-caller is not required to provide it.
-`required_inputs` is always the required subset of `runtime_inputs`; if multiple
-bindings expose the same runtime context field with conflicting annotations,
-introspection raises an error instead of silently choosing one.
+`runtime_inputs`, `required_inputs`, `bound_inputs`, and `inputs`. Literal
+bindings satisfy their target fields. Transform bindings with runtime inputs add
+those source context inputs to the effective runtime view. Static transforms,
+meaning transforms with no contextual parameters, may be evaluated during
+introspection so their output fields can be reported precisely. A transform
+parameter like `seed: FromContext[int] = 0` is still a runtime input; its default
+only means the caller is not required to provide it.
 
-These helpers report the direct API for the current model or wrapper. They do
-not recursively expand every contextual input used by upstream dependencies in a
-larger graph.
+`inspect(...)` reports the direct API for the current model or wrapper. By
+default, it also inspects immediate dependencies:
 
-Because these helpers may evaluate static `@Flow.context_transform` functions,
+```python
+model.flow.inspect(dependencies="direct")  # default
+model.flow.inspect(dependencies="recursive")  # follow inspect-visible dependencies
+model.flow.inspect(dependencies="none")    # skip dependency inspection
+```
+
+Recursive inspection follows dependencies visible from constructed
+`@Flow.model` inputs and `with_context(...)` wrappers. It is intended for
+debugging generated-model trees, not as a complete evaluator graph. A
+handwritten `CallableModel` can still appear as a dependency target when it is
+bound to an `@Flow.model` regular input, but `inspect(...)` does not expand that
+handwritten model's custom `CallableModel.__deps__` implementation. Recursive
+mode changes which dependency edges are listed; it does not change the meaning
+of the top-level input fields. Lazy dependency edges are listed as `lazy`;
+inspect the lazy target directly if you want to see what it could require when
+called.
+
+Because introspection may evaluate static `@Flow.context_transform` functions,
 context transforms should be deterministic, side-effect-free, and cheap. This is
 the same practical contract expected by cache identity and dependency analysis.
 
@@ -455,10 +507,12 @@ def add(a: int, b: FromContext[int], c: FromContext[int] = 5) -> int:
 
 
 model = add(a=10)
-assert model.flow.context_inputs == {"b": int, "c": int}
-assert model.flow.runtime_inputs == {"b": int, "c": int}
-assert model.flow.required_inputs == {"b": int}
-assert model.flow.bound_inputs == {"a": 10}
+inspection = model.flow.inspect()
+assert inspection.context_inputs == {"b": int, "c": int}
+assert inspection.runtime_inputs == {"b": int, "c": int}
+assert inspection.required_inputs == {"b": int}
+assert inspection.bound_inputs == {"a": 10}
+assert set(inspection.inputs) == {"a", "b", "c"}
 
 
 @Flow.context_transform
@@ -467,10 +521,11 @@ def from_seed(seed: FromContext[int]) -> int:
 
 
 bound = add(a=10).flow.with_context(b=from_seed())
-assert bound.flow.context_inputs == {"b": int, "c": int}
-assert bound.flow.runtime_inputs == {"c": int, "seed": int}
-assert bound.flow.required_inputs == {"seed": int}
-assert bound.flow.bound_inputs == {"a": 10}
+bound_inspection = bound.flow.inspect()
+assert bound_inspection.context_inputs == {"b": int, "c": int}
+assert bound_inspection.runtime_inputs == {"c": int, "seed": int}
+assert bound_inspection.required_inputs == {"seed": int}
+assert bound_inspection.bound_inputs == {"a": 10}
 ```
 
 In the bound example, `b` remains in `context_inputs` because `add` still
@@ -478,6 +533,20 @@ declares `b` as part of its contextual contract. It is absent from
 `runtime_inputs` because this wrapper supplies `b` from `from_seed()`. `seed`
 appears in `runtime_inputs` because the transform reads it from the caller's
 runtime context.
+
+When you pass a proposed context object or runtime kwargs to `inspect(...)`,
+inspection uses those values to fill known direct `inputs` and project context
+onto dependency edges. It does not validate the proposed context or report
+unused fields:
+
+```python
+inspection = add(a=10).flow.inspect(b=2, unused=1)
+assert inspection.inputs["b"].value == 2
+assert "unused" not in inspection.inputs
+```
+
+This keeps `inspect(...)` structural. A stricter debug-time input checker can be
+added later with explicit current-model versus graph-wide semantics.
 
 ## Lazy Dependencies
 
@@ -519,7 +588,7 @@ controls exactly when (and whether) the dependency executes.
 Use `@Flow.model` when:
 
 - the stage logic is naturally a plain function,
-- you want ordinary arguments to look like ordinary Python function parameters,
+- you want ordinary inputs to look like ordinary Python function parameters,
 - the contextual contract is small and explicit,
 - the main goal is easy graph authoring on top of existing ccflow machinery.
 
@@ -549,11 +618,12 @@ That is expected. `context_inputs` reports the declared contextual contract of
 the model or wrapped model. It does not mean the current wrapper still requires
 the caller to provide that field.
 
-Use `runtime_inputs` to see the effective direct runtime context inputs after
-`with_context(...)` bindings. Use `required_inputs` to see what still must be
-provided by the caller. Static transforms with no contextual parameters may be
-evaluated during introspection, so their output fields can be removed from
-`runtime_inputs` and `required_inputs` or added to `bound_inputs`.
+Use `model.flow.inspect().runtime_inputs` to see the effective direct runtime
+context inputs after `with_context(...)` bindings. Use
+`model.flow.inspect().required_inputs` to see what still must be provided by the
+caller. Static transforms with no contextual parameters may be evaluated during
+introspection, so their output fields can be removed from `runtime_inputs` and
+`required_inputs` or added to `bound_inputs`.
 
 **A shared dependency runs more than once**
 
