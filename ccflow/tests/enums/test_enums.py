@@ -129,5 +129,7 @@ class TestEnum(TestCase):
 
         importlib.reload(ccflow.enums)
 
-        self.assertTrue("csp" in sys.modules)
+        # csp will only be in sys.modules if it's actually installed
+        if importlib.util.find_spec("csp") is not None:
+            self.assertTrue("csp" in sys.modules)
         os.environ.pop("CCFLOW_NO_CSP", None)

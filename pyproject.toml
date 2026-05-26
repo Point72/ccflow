@@ -83,7 +83,7 @@ develop = [
     # Full deps
     "bleach",
     "cexprtk",
-    "csp>=0.8.0,<1",
+    "csp>=0.8.0,<1; python_version < '3.14'",  # TODO: remove when when 3.14 wheels disted
     "duckdb",
     "IPython",
     "panel",
