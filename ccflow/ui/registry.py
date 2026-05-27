@@ -14,8 +14,8 @@ class RegistryBrowser(param.Parameterized):
     selected_model = param.Parameter(default=None)
 
     sort_children = param.Boolean(
-        default=False,
-        doc="If True, sort child entries alphabetically by name at every registry level. Defaults to insertion order.",
+        default=True,
+        doc="If True, sort child entries alphabetically by name at every registry level. Defaults to insertion order when False.",
     )
 
     def __init__(self, registry, **params):
@@ -152,8 +152,8 @@ class ModelRegistryViewer(param.Parameterized):
     )
 
     sort_children = param.Boolean(
-        default=False,
-        doc="If True, sort registry child entries alphabetically by name at every level. Defaults to insertion order.",
+        default=True,
+        doc="If True, sort registry child entries alphabetically by name at every level. Defaults to insertion order when False.",
     )
 
     def __init__(self, registry, **params):
