@@ -106,6 +106,7 @@ class ModelConfigViewer(param.Parameterized):
     def __init__(self, **params):
         super().__init__(**params)
 
+        self.model_path = ""
         self._metadata = pn.pane.HTML("", width=1200)
 
         self._layout = pn.Column(
@@ -152,6 +153,15 @@ class ModelConfigViewer(param.Parameterized):
             self._metadata.object = ""
             return
 
+        path_html = ""
+        if self.model_path:
+            path_html = f"""
+            <div style="margin-bottom:6px;">
+              <div style="font-weight:600;">Registry Path</div>
+              <code>{html.escape(self.model_path)}</code>
+            </div>
+            """
+
         description = model.meta.description.strip() if hasattr(model, "meta") and model.meta.description else ""
 
         desc_html = ""
@@ -169,7 +179,7 @@ class ModelConfigViewer(param.Parameterized):
             </div>
             """
 
-        self._metadata.object = desc_html + self._render_dependencies(model)
+        self._metadata.object = path_html + desc_html + self._render_dependencies(model)
 
 
 class ModelViewer(param.Parameterized):
@@ -181,6 +191,8 @@ class ModelViewer(param.Parameterized):
 
     def __init__(self, **params):
         super().__init__(**params)
+
+        self.model_path = ""
 
         # Sub-viewers (no JSONEditor inside)
         self._config_viewer = ModelConfigViewer()
@@ -231,6 +243,7 @@ class ModelViewer(param.Parameterized):
             return
 
         # Config tab
+        self._config_viewer.model_path = self.model_path
         self._config_viewer.model = model
         self._tabs.append(("Summary", self._config_viewer))
 
