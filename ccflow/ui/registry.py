@@ -60,7 +60,8 @@ class RegistryBrowser(param.Parameterized):
 
         model_items = registry.models.items()
         if self.sort_children:
-            model_items = sorted(model_items, key=lambda kv: kv[0])
+            # Subregistries first, then leaf models; each group sorted alphabetically.
+            model_items = sorted(model_items, key=lambda kv: (not isinstance(kv[1], ccflow.ModelRegistry), kv[0]))
 
         items = []
         for i, (name, model) in enumerate(model_items):
