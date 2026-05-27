@@ -246,26 +246,31 @@ class TestModelRegistryViewer:
         panel = viewer.__panel__()
         assert isinstance(panel, pn.viewable.Viewable)
 
-    def test_panel_is_row_layout(self):
-        """Test that the panel is a Row layout (browser + viewer side by side)."""
+    def test_panel_is_page_layout(self):
+        """Test that the panel is a pmui.Page (viewport-filling layout with resizable sidebar)."""
+        import panel_material_ui as pmui
+
         registry = ModelRegistry(name="test")
         viewer = ModelRegistryViewer(registry)
         panel = viewer.__panel__()
-        assert isinstance(panel, pn.Row)
+        assert isinstance(panel, pmui.Page)
+        assert panel.sidebar_width == viewer.browser_width
+        assert panel.title == viewer.title
 
     def test_init_with_custom_dimensions(self):
-        """Test initialization with custom width/height."""
+        """Test initialization with custom sidebar width and title."""
         registry = ModelRegistry(name="test")
         viewer = ModelRegistryViewer(
             registry,
             browser_width=500,
-            browser_height=800,
-            viewer_width=600,
+            title="My Registry",
         )
 
         assert viewer.browser_width == 500
-        assert viewer.browser_height == 800
-        assert viewer.viewer_width == 600
+        assert viewer.title == "My Registry"
+        panel = viewer.__panel__()
+        assert panel.sidebar_width == 500
+        assert panel.title == "My Registry"
 
     def test_browser_viewer_wiring(self):
         """Test that browser selection updates viewer."""
@@ -282,42 +287,12 @@ class TestModelRegistryViewer:
         assert viewer._viewer.model == model
 
     def test_default_browser_dimensions(self):
-        """Test default browser dimensions."""
+        """Test default browser width and title."""
         registry = ModelRegistry(name="test")
         viewer = ModelRegistryViewer(registry)
 
         assert viewer.browser_width == 400
-        assert viewer.browser_height == 700
-        assert viewer.viewer_width is None
-
-    def test_make_browser_column(self):
-        """Test _make_browser_column creates proper column."""
-        registry = ModelRegistry(name="test")
-        viewer = ModelRegistryViewer(registry)
-
-        column = viewer._make_browser_column()
-        assert isinstance(column, pn.Column)
-        assert column.width == viewer.browser_width
-        assert column.height == viewer.browser_height
-        assert column.scroll is True
-
-    def test_make_viewer_column_with_width(self):
-        """Test _make_viewer_column with specified width."""
-        registry = ModelRegistry(name="test")
-        viewer = ModelRegistryViewer(registry, viewer_width=600)
-
-        column = viewer._make_viewer_column()
-        assert isinstance(column, pn.Column)
-        assert column.width == 600
-
-    def test_make_viewer_column_without_width(self):
-        """Test _make_viewer_column without specified width (stretch)."""
-        registry = ModelRegistry(name="test")
-        viewer = ModelRegistryViewer(registry)
-
-        column = viewer._make_viewer_column()
-        assert isinstance(column, pn.Column)
-        assert column.sizing_mode == "stretch_width"
+        assert viewer.title == "ccflow Model Registry"
 
     def test_model_param_default_none(self):
         """Test that model param starts as None."""

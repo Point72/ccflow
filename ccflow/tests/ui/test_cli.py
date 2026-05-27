@@ -28,8 +28,7 @@ class TestGetUIArgsParser:
 
         # Viewer-specific
         assert hasattr(args, "browser_width")
-        assert hasattr(args, "browser_height")
-        assert hasattr(args, "viewer_width")
+        assert hasattr(args, "title")
 
     def test_viewer_layout_defaults(self):
         """Test default values for viewer-specific arguments."""
@@ -37,8 +36,7 @@ class TestGetUIArgsParser:
         args = parser.parse_args([])
 
         assert args.browser_width == 400
-        assert args.browser_height == 700
-        assert args.viewer_width is None
+        assert args.title == "ccflow Model Registry"
 
     def test_viewer_layout_custom_values(self):
         """Test setting custom values for viewer layout arguments."""
@@ -47,16 +45,13 @@ class TestGetUIArgsParser:
             [
                 "--browser-width",
                 "500",
-                "--browser-height",
-                "800",
-                "--viewer-width",
-                "600",
+                "--title",
+                "My Registry",
             ]
         )
 
         assert args.browser_width == 500
-        assert args.browser_height == 800
-        assert args.viewer_width == 600
+        assert args.title == "My Registry"
 
     def test_overrides_positional(self):
         """Test overrides are captured as positional arguments."""

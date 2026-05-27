@@ -32,9 +32,10 @@ class ModelTypeViewer(param.Parameterized):
     def __init__(self, **params):
         super().__init__(**params)
 
-        self._pane = pn.pane.HTML("", width=1200)
+        self._pane = pn.pane.HTML("", sizing_mode="stretch_width")
         self._layout = pn.Column(
             self._pane,
+            sizing_mode="stretch_width",
         )
 
         self.param.watch(self._on_type_change, "model_type")
@@ -79,7 +80,7 @@ class ModelTypeViewer(param.Parameterized):
             name_html = f'<code style="{_FIELD_STYLES["name"]}">{html.escape(name)}</code>'
             type_html = f'<code style="{_FIELD_STYLES["type"]}">{html.escape(field_type)}</code>'
             desc_html = f' — <span style="{_FIELD_STYLES["description"]}">{html.escape(desc)}</span>' if desc else ""
-            field_items.append(f"<li>{name_html} ({type_html}){desc_html}</li>")
+            field_items.append(f'<li style="overflow-wrap:anywhere;">{name_html} ({type_html}){desc_html}</li>')
 
         fields_html = ""
         if field_items:
@@ -96,7 +97,7 @@ class ModelTypeViewer(param.Parameterized):
         <div>
           <div style="margin-bottom:6px;">
             <span style="font-weight:600;">Type:</span>
-            <code style="{_FIELD_STYLES["type"]}">{html.escape(type_name)}</code>
+            <code style="{_FIELD_STYLES["type"]}overflow-wrap:anywhere;">{html.escape(type_name)}</code>
           </div>
           {docs_html}
           {fields_html}
@@ -115,10 +116,11 @@ class ModelConfigViewer(param.Parameterized):
         super().__init__(**params)
 
         self.model_path = ""
-        self._metadata = pn.pane.HTML("", width=1200)
+        self._metadata = pn.pane.HTML("", sizing_mode="stretch_width")
 
         self._layout = pn.Column(
             self._metadata,
+            sizing_mode="stretch_width",
         )
 
         self.param.watch(self._on_model_change, "model")
@@ -142,7 +144,7 @@ class ModelConfigViewer(param.Parameterized):
         # Unique elements, sorted
         rows = sorted(set(all_paths))
 
-        items = "".join(f"<li><code>{html.escape(row)}</code></li>" for row in rows)
+        items = "".join(f'<li><code style="overflow-wrap:anywhere;">{html.escape(row)}</code></li>' for row in rows)
 
         return f"""
         <div style="margin-top:8px;">
@@ -219,13 +221,15 @@ class ModelViewer(param.Parameterized):
             value={},
             mode="view",
             menu=False,
-            width=600,
+            sizing_mode="stretch_width",
+            min_width=400,
         )
 
         self._json_container = pn.Column(
             "## Parameters",
             self._json_editor,
             visible=False,  # hidden initially
+            sizing_mode="stretch_width",
         )
 
         self._layout = pn.Column(
@@ -233,6 +237,7 @@ class ModelViewer(param.Parameterized):
             self._tabs,
             pn.Spacer(height=12),
             self._json_container,
+            sizing_mode="stretch_width",
         )
 
         self.param.watch(self._on_model_change, "model")
