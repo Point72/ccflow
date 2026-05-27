@@ -13,9 +13,15 @@ __all__ = ("RegistryBrowser", "ModelRegistryViewer")
 class RegistryBrowser(param.Parameterized):
     selected_model = param.Parameter(default=None)
 
+    sort_children = param.Boolean(
+        default=True,
+        doc="If True, sort child entries alphabetically by name at every registry level. Defaults to insertion order when False.",
+    )
+
     def __init__(self, registry, **params):
         super().__init__(**params)
         self._registry = registry
+        self.selected_path = ""
 
         self._tree_items = self._build_tree(registry)
         self._node_index = self._build_node_index(self._tree_items)
@@ -52,8 +58,13 @@ class RegistryBrowser(param.Parameterized):
     def _build_tree(self, registry, index_prefix=()):
         import ccflow
 
+        model_items = registry.models.items()
+        if self.sort_children:
+            # Subregistries first, then leaf models; each group sorted alphabetically.
+            model_items = sorted(model_items, key=lambda kv: (not isinstance(kv[1], ccflow.ModelRegistry), kv[0]))
+
         items = []
-        for i, (name, model) in enumerate(registry.models.items()):
+        for i, (name, model) in enumerate(model_items):
             index_path = index_prefix + (i,)
             entry = {
                 "label": name,
@@ -75,6 +86,7 @@ class RegistryBrowser(param.Parameterized):
         def walk(items, prefix=""):
             for node in items:
                 path = f"{prefix}/{node['label']}" if prefix else node["label"]
+                node["_path"] = path
                 if "model" in node:
                     index[path] = node
                 walk(node.get("items", []), path)
@@ -100,7 +112,14 @@ class RegistryBrowser(param.Parameterized):
         self._search.value = ""
 
     def _on_tree_select(self, event):
-        self.selected_model = event.new[0].get("model") if event.new else None
+        if event.new:
+            node = event.new[0]
+            model = node.get("model")
+            self.selected_path = node.get("_path", "") if model is not None else ""
+            self.selected_model = model
+        else:
+            self.selected_path = ""
+            self.selected_model = None
 
 
 class ModelRegistryViewer(param.Parameterized):
@@ -133,16 +152,22 @@ class ModelRegistryViewer(param.Parameterized):
         doc="The currently selected model from the registry browser",
     )
 
+    sort_children = param.Boolean(
+        default=True,
+        doc="If True, sort registry child entries alphabetically by name at every level. Defaults to insertion order when False.",
+    )
+
     def __init__(self, registry, **params):
         super().__init__(**params)
 
         # Core components
-        self._browser = RegistryBrowser(registry)
+        self._browser = RegistryBrowser(registry, sort_children=self.sort_children)
         self._viewer = ModelViewer()
 
         # Wire browser → viewer and model param
         def _on_selection(e):
             self.model = e.new
+            self._viewer.model_path = self._browser.selected_path
             self._viewer.model = e.new
 
         self._browser.param.watch(_on_selection, "selected_model")
