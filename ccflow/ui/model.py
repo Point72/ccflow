@@ -16,9 +16,9 @@ __all__ = ("ModelTypeViewer", "ModelViewer", "ModelConfigViewer")
 
 
 _FIELD_STYLES = {
-    "name": "color:#0550ae;",
-    "type": "color:#8250df;",
-    "description": "color:#57606a;font-style:italic;",
+    "name": "color:#0550ae;",  # blue
+    "type": "color:#8250df;",  # purple
+    "description": "color:#57606a;font-style:italic;",  # muted gray
 }
 
 
