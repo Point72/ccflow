@@ -125,26 +125,19 @@ class RegistryBrowser(param.Parameterized):
 class ModelRegistryViewer(param.Parameterized):
     """
     Top-level viewer that composes the RegistryBrowser and ModelViewer
-    into a scrollable two-panel layout.
+    into a viewport-filling page with a resizable sidebar.
     """
 
     # Layout parameters
     browser_width = param.Integer(
         default=400,
         bounds=(200, None),
-        doc="Width of the registry browser panel (px)",
+        doc="Initial width of the registry browser sidebar (px). User can drag to resize at runtime.",
     )
 
-    browser_height = param.Integer(
-        default=700,
-        bounds=(300, None),
-        doc="Height of the registry browser panel (px)",
-    )
-
-    viewer_width = param.Integer(
-        default=None,
-        allow_None=True,
-        doc="Optional fixed width for the model viewer panel (px)",
+    title = param.String(
+        default="ccflow Model Registry",
+        doc="Title shown in the page header.",
     )
 
     model = param.Parameter(
@@ -172,33 +165,19 @@ class ModelRegistryViewer(param.Parameterized):
 
         self._browser.param.watch(_on_selection, "selected_model")
 
-        # Build layout
-        self._layout = pn.Row(
-            self._make_browser_column(),
-            self._make_viewer_column(),
+        # Wrap browser in a scrolling Column so large registries remain navigable.
+        sidebar_panel = pn.Column(
+            self._browser,
+            sizing_mode="stretch_both",
+            scroll=True,
+        )
+
+        self._layout = pmui.Page(
+            sidebar=[sidebar_panel],
+            main=[self._viewer],
+            sidebar_width=self.browser_width,
+            title=self.title,
         )
 
     def __panel__(self):
         return self._layout
-
-    # Internal helpers
-
-    def _make_browser_column(self):
-        return pn.Column(
-            self._browser,
-            width=self.browser_width,
-            height=self.browser_height,
-            scroll=True,  # ✅ only left panel scrolls
-        )
-
-    def _make_viewer_column(self):
-        if self.viewer_width is not None:
-            return pn.Column(
-                self._viewer,
-                width=self.viewer_width,
-            )
-        else:
-            return pn.Column(
-                self._viewer,
-                sizing_mode="stretch_width",
-            )
