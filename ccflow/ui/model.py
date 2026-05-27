@@ -142,7 +142,7 @@ class ModelConfigViewer(param.Parameterized):
         # Unique elements, sorted
         rows = sorted(set(all_paths))
 
-        items = "".join(f"<li>{html.escape(row)}</li>" for row in rows)
+        items = "".join(f"<li><code>{html.escape(row)}</code></li>" for row in rows)
 
         return f"""
         <div style="margin-top:8px;">
