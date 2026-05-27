@@ -13,6 +13,11 @@ __all__ = ("RegistryBrowser", "ModelRegistryViewer")
 class RegistryBrowser(param.Parameterized):
     selected_model = param.Parameter(default=None)
 
+    sort_children = param.Boolean(
+        default=False,
+        doc="If True, sort child entries alphabetically by name at every registry level. Defaults to insertion order.",
+    )
+
     def __init__(self, registry, **params):
         super().__init__(**params)
         self._registry = registry
@@ -52,8 +57,12 @@ class RegistryBrowser(param.Parameterized):
     def _build_tree(self, registry, index_prefix=()):
         import ccflow
 
+        model_items = registry.models.items()
+        if self.sort_children:
+            model_items = sorted(model_items, key=lambda kv: kv[0])
+
         items = []
-        for i, (name, model) in enumerate(registry.models.items()):
+        for i, (name, model) in enumerate(model_items):
             index_path = index_prefix + (i,)
             entry = {
                 "label": name,
@@ -133,11 +142,16 @@ class ModelRegistryViewer(param.Parameterized):
         doc="The currently selected model from the registry browser",
     )
 
+    sort_children = param.Boolean(
+        default=False,
+        doc="If True, sort registry child entries alphabetically by name at every level. Defaults to insertion order.",
+    )
+
     def __init__(self, registry, **params):
         super().__init__(**params)
 
         # Core components
-        self._browser = RegistryBrowser(registry)
+        self._browser = RegistryBrowser(registry, sort_children=self.sort_children)
         self._viewer = ModelViewer()
 
         # Wire browser → viewer and model param
