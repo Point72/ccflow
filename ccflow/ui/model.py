@@ -15,6 +15,13 @@ pn.extension("jsoneditor")
 __all__ = ("ModelTypeViewer", "ModelViewer", "ModelConfigViewer")
 
 
+_FIELD_STYLES = {
+    "name": "color:#0550ae;",
+    "type": "color:#8250df;",
+    "description": "color:#57606a;font-style:italic;",
+}
+
+
 class ModelTypeViewer(param.Parameterized):
     """
     Displays type name, class docstring, and fields for a Pydantic model type.
@@ -69,9 +76,10 @@ class ModelTypeViewer(param.Parameterized):
         for name, field in fields.items():
             field_type = display_as_type(field.annotation)
             desc = field.description or ""
-            field_items.append(
-                f"<li><code>{html.escape(name)}</code> (<code>{html.escape(field_type)}</code>){': ' + html.escape(desc) if desc else ''}</li>"
-            )
+            name_html = f'<code style="{_FIELD_STYLES["name"]}">{html.escape(name)}</code>'
+            type_html = f'<code style="{_FIELD_STYLES["type"]}">{html.escape(field_type)}</code>'
+            desc_html = f' — <span style="{_FIELD_STYLES["description"]}">{html.escape(desc)}</span>' if desc else ""
+            field_items.append(f"<li>{name_html} ({type_html}){desc_html}</li>")
 
         fields_html = ""
         if field_items:
@@ -88,7 +96,7 @@ class ModelTypeViewer(param.Parameterized):
         <div>
           <div style="margin-bottom:6px;">
             <span style="font-weight:600;">Type:</span>
-            <code>{html.escape(type_name)}</code>
+            <code style="{_FIELD_STYLES["type"]}">{html.escape(type_name)}</code>
           </div>
           {docs_html}
           {fields_html}
