@@ -20,6 +20,7 @@ Notes for editors:
 - [Configuration](Configuration)
 - [Workflows](Workflows)
 - [ETL](ETL)
+- [Tracing Hydra Config Composition: How to See Variable Origins and Composed Config](Configuration-Explain)
 
 **Developer Guide**
 
