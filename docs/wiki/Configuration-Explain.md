@@ -3,6 +3,7 @@
 Ever stared at a resolved Hydra config and wondered: *where did that value come from?* Which YAML file set it, which override changed it, and in what order did composition happen? This guide shows you how to answer those questions with CCRT's Config Explain app.
 
 By working through the examples below you will learn to:
+
 - Dump a full config explanation to a text file on the CLI
 - Launch an interactive browser UI that lets you explore variable origins visually
 
