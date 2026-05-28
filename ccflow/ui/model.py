@@ -15,6 +15,13 @@ pn.extension("jsoneditor")
 __all__ = ("ModelTypeViewer", "ModelViewer", "ModelConfigViewer")
 
 
+_FIELD_STYLES = {
+    "name": "color:#0550ae;",  # blue
+    "type": "color:#8250df;",  # purple
+    "description": "color:#57606a;font-style:italic;",  # muted gray
+}
+
+
 class ModelTypeViewer(param.Parameterized):
     """
     Displays type name, class docstring, and fields for a Pydantic model type.
@@ -25,9 +32,10 @@ class ModelTypeViewer(param.Parameterized):
     def __init__(self, **params):
         super().__init__(**params)
 
-        self._pane = pn.pane.HTML("", width=1200)
+        self._pane = pn.pane.HTML("", sizing_mode="stretch_width")
         self._layout = pn.Column(
             self._pane,
+            sizing_mode="stretch_width",
         )
 
         self.param.watch(self._on_type_change, "model_type")
@@ -69,9 +77,10 @@ class ModelTypeViewer(param.Parameterized):
         for name, field in fields.items():
             field_type = display_as_type(field.annotation)
             desc = field.description or ""
-            field_items.append(
-                f"<li><code>{html.escape(name)}</code> (<code>{html.escape(field_type)}</code>){': ' + html.escape(desc) if desc else ''}</li>"
-            )
+            name_html = f'<code style="{_FIELD_STYLES["name"]}">{html.escape(name)}</code>'
+            type_html = f'<code style="{_FIELD_STYLES["type"]}">{html.escape(field_type)}</code>'
+            desc_html = f' — <span style="{_FIELD_STYLES["description"]}">{html.escape(desc)}</span>' if desc else ""
+            field_items.append(f'<li style="overflow-wrap:anywhere;">{name_html} ({type_html}){desc_html}</li>')
 
         fields_html = ""
         if field_items:
@@ -88,7 +97,7 @@ class ModelTypeViewer(param.Parameterized):
         <div>
           <div style="margin-bottom:6px;">
             <span style="font-weight:600;">Type:</span>
-            <code>{html.escape(type_name)}</code>
+            <code style="{_FIELD_STYLES["type"]}overflow-wrap:anywhere;">{html.escape(type_name)}</code>
           </div>
           {docs_html}
           {fields_html}
@@ -106,10 +115,12 @@ class ModelConfigViewer(param.Parameterized):
     def __init__(self, **params):
         super().__init__(**params)
 
-        self._metadata = pn.pane.HTML("", width=1200)
+        self.model_path = ""
+        self._metadata = pn.pane.HTML("", sizing_mode="stretch_width")
 
         self._layout = pn.Column(
             self._metadata,
+            sizing_mode="stretch_width",
         )
 
         self.param.watch(self._on_model_change, "model")
@@ -133,7 +144,7 @@ class ModelConfigViewer(param.Parameterized):
         # Unique elements, sorted
         rows = sorted(set(all_paths))
 
-        items = "".join(f"<li>{html.escape(row)}</li>" for row in rows)
+        items = "".join(f'<li><code style="overflow-wrap:anywhere;">{html.escape(row)}</code></li>' for row in rows)
 
         return f"""
         <div style="margin-top:8px;">
@@ -152,6 +163,15 @@ class ModelConfigViewer(param.Parameterized):
             self._metadata.object = ""
             return
 
+        path_html = ""
+        if self.model_path:
+            path_html = f"""
+            <div style="margin-bottom:6px;">
+              <div style="font-weight:600;">Registry Path</div>
+              <code>{html.escape(self.model_path)}</code>
+            </div>
+            """
+
         description = model.meta.description.strip() if hasattr(model, "meta") and model.meta.description else ""
 
         desc_html = ""
@@ -169,7 +189,7 @@ class ModelConfigViewer(param.Parameterized):
             </div>
             """
 
-        self._metadata.object = desc_html + self._render_dependencies(model)
+        self._metadata.object = path_html + desc_html + self._render_dependencies(model)
 
 
 class ModelViewer(param.Parameterized):
@@ -181,6 +201,8 @@ class ModelViewer(param.Parameterized):
 
     def __init__(self, **params):
         super().__init__(**params)
+
+        self.model_path = ""
 
         # Sub-viewers (no JSONEditor inside)
         self._config_viewer = ModelConfigViewer()
@@ -199,13 +221,15 @@ class ModelViewer(param.Parameterized):
             value={},
             mode="view",
             menu=False,
-            width=600,
+            sizing_mode="stretch_width",
+            min_width=400,
         )
 
         self._json_container = pn.Column(
             "## Parameters",
             self._json_editor,
             visible=False,  # hidden initially
+            sizing_mode="stretch_width",
         )
 
         self._layout = pn.Column(
@@ -213,6 +237,7 @@ class ModelViewer(param.Parameterized):
             self._tabs,
             pn.Spacer(height=12),
             self._json_container,
+            sizing_mode="stretch_width",
         )
 
         self.param.watch(self._on_model_change, "model")
@@ -231,6 +256,7 @@ class ModelViewer(param.Parameterized):
             return
 
         # Config tab
+        self._config_viewer.model_path = self.model_path
         self._config_viewer.model = model
         self._tabs.append(("Summary", self._config_viewer))
 

@@ -173,7 +173,7 @@ class TestDictFromTuplesResolver:
 
         with pytest.raises(InterpolationResolutionError) as exc_info:
             OmegaConf.to_container(config, resolve=True)
-        assert "too many values to unpack (expected 2)" in str(exc_info.value)
+        assert "too many values to unpack" in str(exc_info.value)
 
 
 class TestTrimNullValuesResolver:

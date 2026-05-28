@@ -30,6 +30,7 @@ from typing import (
     get_origin,
 )
 
+import pydantic
 from packaging import version
 
 if TYPE_CHECKING:
@@ -125,19 +126,33 @@ class _RegistryMixin:
         return deps
 
 
-# Pydantic 2 has different handling of serialization.
-# This requires some workarounds at the moment until the feature is added to easily get a mode that
-# is compatible with Pydantic 1
-# This is done by adjusting annotations via a MetaClass for any annotation that includes a BaseModel,
-# such that the new annotation contains SerializeAsAny
+# Pydantic 2 changed nested model serialization to use the annotated type by default.
+# For pydantic versions before runtime polymorphic serialization, preserve ccflow's
+# historical duck-typed behavior by adjusting BaseModel annotations via a metaclass.
 # https://docs.pydantic.dev/latest/concepts/serialization/#serializing-with-duck-typing
 # https://github.com/pydantic/pydantic/issues/6423
 # https://github.com/pydantic/pydantic-core/pull/740
 # See https://github.com/pydantic/pydantic/issues/6381 for inspiration on implementation
-# NOTE: For this logic to be removed, require https://github.com/pydantic/pydantic-core/pull/1478
 from pydantic._internal._model_construction import ModelMetaclass  # noqa: E402
 
 _IS_PY39 = version.parse(platform.python_version()) < version.parse("3.10")
+_PYDANTIC_VERSION = version.parse(pydantic.__version__)
+_USE_RUNTIME_POLYMORPHIC_SERIALIZATION = _PYDANTIC_VERSION >= version.parse("2.13")
+
+
+def _namespace_annotations(namespaces: Dict[str, Any]) -> dict:
+    if "__annotations__" in namespaces:
+        return dict(namespaces["__annotations__"])
+
+    try:
+        import annotationlib
+    except ImportError:
+        return {}
+
+    annotate = annotationlib.get_annotate_from_class_namespace(namespaces)
+    if annotate is None:
+        return {}
+    return dict(annotationlib.call_annotate_function(annotate, annotationlib.Format.FORWARDREF))
 
 
 def _adjust_annotations(annotation):
@@ -168,7 +183,7 @@ def _adjust_annotations(annotation):
 
 class _SerializeAsAnyMeta(ModelMetaclass):
     def __new__(self, name: str, bases: Tuple[type], namespaces: Dict[str, Any], **kwargs):
-        annotations: dict = namespaces.get("__annotations__", {})
+        annotations = _namespace_annotations(namespaces)
 
         for base in bases:
             for base_ in base.__mro__:
@@ -333,7 +348,10 @@ def _new_ccflow_generic_model(origin: Type[PydanticBaseModel], args: Tuple[Any, 
     return cls.__new__(cls)
 
 
-class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta):
+_BASE_MODEL_METACLASS = ModelMetaclass if _USE_RUNTIME_POLYMORPHIC_SERIALIZATION else _SerializeAsAnyMeta
+
+
+class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_BASE_MODEL_METACLASS):
     """BaseModel is a base class for all pydantic models within the ccflow framework.
 
     This gives us a way to add functionality to the framework, including
@@ -389,6 +407,7 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
         # where the default behavior is just to drop the mis-named value. This prevents that
         extra="forbid",
         ser_json_timedelta="float",
+        **(dict(polymorphic_serialization=True) if _USE_RUNTIME_POLYMORPHIC_SERIALIZATION else {}),
     )
 
     def __str__(self):
