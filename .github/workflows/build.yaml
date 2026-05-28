@@ -33,11 +33,19 @@ jobs:
           - macos-latest
         python-version:
           - '3.11'
+          - '3.14'
         dependencies:
           - ''
+          - '"pydantic<2.12"'
           - '"pandas<2" "numpy<2" "xarray<2025.09.0" "dask<2024.7.0"'
           - '"pandas<3"'
           - '"pandas<4"'
+        exclude:
+          # pandas<2 and pydantic<2.12 do not support Python 3.14
+          - python-version: '3.14'
+            dependencies: '"pydantic<2.12"'
+          - python-version: '3.14'
+            dependencies: '"pandas<2" "numpy<2" "xarray<2025.09.0" "dask<2024.7.0"'
 
     steps:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6

@@ -104,13 +104,15 @@ class ArrowFileSystem(ObjectConfig, abc.ABC):
     """
 
 
+_LOCAL_FILE_SYSTEM = PyObjectPath("pyarrow.fs.LocalFileSystem")
+_S3_FILE_SYSTEM = PyObjectPath("pyarrow.fs.S3FileSystem")
+
+
 class ArrowLocalFileSystem(ArrowFileSystem):
     """Wrapping of pyarrow.fs.LocalFilesystem as a generic ObjectConfig.
 
     See https://arrow.apache.org/docs/python/generated/pyarrow.fs.LocalFileSystem.html
     """
-
-    _LOCAL_FILE_SYSTEM = PyObjectPath("pyarrow.fs.LocalFileSystem")
 
     object_type: Literal[_LOCAL_FILE_SYSTEM] = _LOCAL_FILE_SYSTEM
 
@@ -119,8 +121,6 @@ class ArrowS3FileSystem(ArrowFileSystem):
     """Wrapping of pyarrow.fs.S3FileSystem as a generic ObjectConfig.
 
     See https://arrow.apache.org/docs/python/generated/pyarrow.fs.S3FileSystem.html"""
-
-    _S3_FILE_SYSTEM = PyObjectPath("pyarrow.fs.S3FileSystem")
 
     object_type: Literal[_S3_FILE_SYSTEM] = _S3_FILE_SYSTEM
 
