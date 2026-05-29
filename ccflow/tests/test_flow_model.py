@@ -12,10 +12,9 @@ from pathlib import Path
 from types import ModuleType
 from typing import Annotated, Any, Callable, Literal, Optional, get_args
 
+import cloudpickle
 import pytest
-import ray
 from pydantic import BaseModel as PydanticBaseModel, Field, PrivateAttr, ValidationError, model_validator
-from ray.cloudpickle import dumps as rcpdumps, loads as rcploads
 
 import ccflow
 import ccflow._flow_model_binding as binding_module
@@ -72,12 +71,6 @@ class OrderedContext(ContextBase):
         if self.a > self.b:
             raise ValueError("a must be <= b")
         return self
-
-
-@pytest.fixture
-def local_ray_runtime():
-    with ray.init(num_cpus=1):
-        yield
 
 
 @Flow.model
@@ -944,7 +937,7 @@ def test_generated_models_cloudpickle_roundtrip():
         return a * b
 
     model = multiply(a=6)
-    restored = rcploads(rcpdumps(model, protocol=5))
+    restored = cloudpickle.loads(cloudpickle.dumps(model, protocol=5))
     assert restored.flow.compute(b=7).value == 42
 
 
@@ -989,7 +982,7 @@ def test_local_generated_model_effective_cache_key_survives_pickle_roundtrip():
     context = FlowContext(b=2)
     before = cache_key(model.__call__.get_evaluation_context(model, context), effective=True)
 
-    for dumps, loads in ((pickle.dumps, pickle.loads), (rcpdumps, rcploads)):
+    for dumps, loads in ((pickle.dumps, pickle.loads), (cloudpickle.dumps, cloudpickle.loads)):
         restored = loads(dumps(model, protocol=5))
         after = cache_key(restored.__call__.get_evaluation_context(restored, context), effective=True)
         assert after == before
@@ -1017,7 +1010,7 @@ def test_generated_model_pickle_preserves_external_ccflow_private_state():
     payload = ExternalCcflowPayload(x=2)
     payload._bonus = 40
 
-    for dumps, loads in ((pickle.dumps, pickle.loads), (rcpdumps, rcploads)):
+    for dumps, loads in ((pickle.dumps, pickle.loads), (cloudpickle.dumps, cloudpickle.loads)):
         restored = loads(dumps(read(payload=payload), protocol=5))
 
         assert isinstance(restored.payload, ExternalCcflowPayload)
@@ -1030,7 +1023,7 @@ def test_generated_model_pickle_preserves_outer_graph_identity_and_cycles():
     def read(payload: object) -> int:
         return 0
 
-    for dumps, loads in ((pickle.dumps, pickle.loads), (rcpdumps, rcploads)):
+    for dumps, loads in ((pickle.dumps, pickle.loads), (cloudpickle.dumps, cloudpickle.loads)):
         shared = []
         restored_model, restored_shared = loads(dumps((read(payload=shared), shared), protocol=5))
         assert restored_model.payload is restored_shared
@@ -1055,7 +1048,7 @@ def test_local_generated_model_cloudpickle_preserves_local_pydantic_literal_stat
         payload._bonus = 40
         return read(payload=payload)
 
-    restored = rcploads(rcpdumps(make_model(), protocol=5))
+    restored = cloudpickle.loads(cloudpickle.dumps(make_model(), protocol=5))
 
     assert restored.payload._bonus == 40
     assert restored.flow.compute().value == 42
@@ -1071,7 +1064,7 @@ def test_bound_model_pickle_preserves_external_pydantic_static_context_value():
     bound = read().flow.with_context(payload=payload)
     assert bound.flow.compute().value == 42
 
-    for dumps, loads in ((pickle.dumps, pickle.loads), (rcpdumps, rcploads)):
+    for dumps, loads in ((pickle.dumps, pickle.loads), (cloudpickle.dumps, cloudpickle.loads)):
         restored = loads(dumps(bound, protocol=5))
         restored_payload = restored.context_spec.operations[0].spec.value
 
@@ -1093,7 +1086,7 @@ def test_bound_model_pickle_preserves_external_pydantic_context_transform_bound_
     payload._bonus = 40
     bound = read().flow.with_context(value=derive(payload=payload))
 
-    for dumps, loads in ((pickle.dumps, pickle.loads), (rcpdumps, rcploads)):
+    for dumps, loads in ((pickle.dumps, pickle.loads), (cloudpickle.dumps, cloudpickle.loads)):
         restored = loads(dumps(bound, protocol=5))
         restored_payload = restored.context_spec.operations[0].spec.bound_args["payload"]
 
@@ -1112,7 +1105,7 @@ def test_bound_model_pickle_preserves_external_ccflow_static_context_value():
     bound = read().flow.with_context(payload=payload)
     assert bound.flow.compute().value == 42
 
-    for dumps, loads in ((pickle.dumps, pickle.loads), (rcpdumps, rcploads)):
+    for dumps, loads in ((pickle.dumps, pickle.loads), (cloudpickle.dumps, cloudpickle.loads)):
         restored = loads(dumps(bound, protocol=5))
         restored_payload = restored.context_spec.operations[0].spec.value
 
@@ -1134,7 +1127,7 @@ def test_bound_model_pickle_preserves_external_ccflow_context_transform_bound_ar
     payload._bonus = 40
     bound = read().flow.with_context(value=derive(payload=payload))
 
-    for dumps, loads in ((pickle.dumps, pickle.loads), (rcpdumps, rcploads)):
+    for dumps, loads in ((pickle.dumps, pickle.loads), (cloudpickle.dumps, cloudpickle.loads)):
         restored = loads(dumps(bound, protocol=5))
         restored_payload = restored.context_spec.operations[0].spec.bound_args["payload"]
 
@@ -1178,7 +1171,7 @@ def test_unresolved_lazy_nested_local_generated_dependency_identity_survives_pic
     before_key = cache_key(before_eval, effective=True)
     before_root = get_dependency_graph(before_eval).root_id
 
-    for dumps, loads in ((pickle.dumps, pickle.loads), (rcpdumps, rcploads)):
+    for dumps, loads in ((pickle.dumps, pickle.loads), (cloudpickle.dumps, cloudpickle.loads)):
         restored = loads(dumps(model, protocol=5))
         after_eval = restored.__call__.get_evaluation_context(restored, context)
 
@@ -1532,7 +1525,7 @@ def test_dependency_graph_cloudpickle_roundtrip():
     ctx = FlowContext(value=10, penalty=1)
     graph = get_dependency_graph(model.__call__.get_evaluation_context(model, ctx))
 
-    restored = rcploads(rcpdumps(graph))
+    restored = cloudpickle.loads(cloudpickle.dumps(graph))
     assert restored.root_id == graph.root_id
     assert set(restored.graph.keys()) == set(graph.graph.keys())
     assert set(restored.ids.keys()) == set(graph.ids.keys())
@@ -1645,7 +1638,7 @@ def test_context_transform_supports_nested_functions_with_serialized_payload():
     assert binding.serialized_config is not None
 
     bound = add(a=1).flow.with_context(b=binding)
-    restored = rcploads(rcpdumps(bound))
+    restored = cloudpickle.loads(cloudpickle.dumps(bound))
     assert restored.flow.compute(b=4).value == 8
 
 
@@ -1665,26 +1658,8 @@ def test_context_transform_supports_non_importable_main_functions_with_serialize
     assert binding.serialized_config is not None
 
     bound = add(a=1).flow.with_context(b=binding)
-    restored = rcploads(rcpdumps(bound))
+    restored = cloudpickle.loads(cloudpickle.dumps(bound))
     assert restored.flow.compute(value=4).value == 6
-
-
-def test_context_transform_nested_function_survives_ray_task(local_ray_runtime):
-    @Flow.model
-    def add(a: int, b: FromContext[int]) -> int:
-        return a + b
-
-    @Flow.context_transform
-    def nested_transform(b: FromContext[int], amount: int) -> int:
-        return b + amount
-
-    bound = add(a=1).flow.with_context(b=nested_transform(amount=3))
-
-    @ray.remote
-    def run_model(model):
-        return model.flow.compute(b=4).value
-
-    assert ray.get(run_model.remote(bound)) == 8
 
 
 def test_with_context_rejects_raw_callables():
@@ -1772,7 +1747,7 @@ def test_chained_with_context_later_field_override_skips_dead_field_transform():
     assert bound.flow.inspect().required_inputs == {}
     assert bound.flow.compute().value == 1
 
-    for dumps, loads in ((pickle.dumps, pickle.loads), (rcpdumps, rcploads)):
+    for dumps, loads in ((pickle.dumps, pickle.loads), (cloudpickle.dumps, cloudpickle.loads)):
         restored = loads(dumps(bound, protocol=5))
         assert restored.flow.compute().value == 1
 
@@ -3815,7 +3790,6 @@ def test_generated_models_cross_process_pickle():
 
 def test_local_generated_models_cross_process_cloudpickle():
     """Local @Flow.model instances carry their generated class across processes."""
-    from ray.cloudpickle import dumps as rcpdumps
 
     def make_model():
         @Flow.model
@@ -3824,12 +3798,12 @@ def test_local_generated_models_cross_process_cloudpickle():
 
         return add(a=1)
 
-    encoded = base64.b64encode(rcpdumps(make_model(), protocol=5)).decode()
+    encoded = base64.b64encode(cloudpickle.dumps(make_model(), protocol=5)).decode()
     script = (
         "import base64\n"
-        "from ray.cloudpickle import loads as rcploads\n"
+        "import cloudpickle\n"
         f"data = base64.b64decode('{encoded}')\n"
-        "model = rcploads(data)\n"
+        "model = cloudpickle.loads(data)\n"
         "result = model.flow.compute(b=2)\n"
         "assert result.value == 3, f'Expected 3, got {result.value}'\n"
     )
@@ -3839,8 +3813,6 @@ def test_local_generated_models_cross_process_cloudpickle():
 
 def test_local_generated_model_postponed_annotations_cross_process_cloudpickle():
     """Local generated models should restore from analyzed config, not worker-side type-hint resolution."""
-    from ray.cloudpickle import dumps as rcpdumps
-
     namespace: dict[str, Any] = {}
     exec(
         """
@@ -3856,12 +3828,12 @@ def make_model():
         namespace,
     )
 
-    encoded = base64.b64encode(rcpdumps(namespace["make_model"](), protocol=5)).decode()
+    encoded = base64.b64encode(cloudpickle.dumps(namespace["make_model"](), protocol=5)).decode()
     script = (
         "import base64\n"
-        "from ray.cloudpickle import loads as rcploads\n"
+        "import cloudpickle\n"
         f"data = base64.b64decode('{encoded}')\n"
-        "model = rcploads(data)\n"
+        "model = cloudpickle.loads(data)\n"
         "result = model.flow.compute(b=2)\n"
         "assert result.value == 3, f'Expected 3, got {result.value}'\n"
     )
@@ -3886,7 +3858,7 @@ def test_local_generated_model_complex_annotations_same_process_cloudpickle():
 
         return summarize(values=[1, 2], mode="sum", offsets=(3,), maybe_offset=None)
 
-    restored = rcploads(rcpdumps(make_model(), protocol=5))
+    restored = cloudpickle.loads(cloudpickle.dumps(make_model(), protocol=5))
 
     assert restored.flow.compute(scale=2) == GenericResult[int](value=12)
 

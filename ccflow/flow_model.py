@@ -72,7 +72,17 @@ from typing import (
 )
 
 import cloudpickle
-from pydantic import BaseModel as PydanticModel, Field, PrivateAttr, SkipValidation, TypeAdapter, ValidationError, create_model, model_validator
+from pydantic import (
+    BaseModel as PydanticModel,
+    Field,
+    PrivateAttr,
+    SkipValidation,
+    TypeAdapter,
+    ValidationError,
+    create_model,
+    model_serializer,
+    model_validator,
+)
 from pydantic.errors import PydanticSchemaGenerationError, PydanticUndefinedAnnotation
 
 from ._flow_model_binding import (
@@ -124,6 +134,7 @@ class _UnsetFlowInput:
 
 
 _UNSET_FLOW_INPUT = _UnsetFlowInput()
+_FIELD_EXCLUDE_IF_SUPPORTED = "exclude_if" in inspect.signature(Field).parameters
 _TYPE_ADAPTER_CACHE_MAXSIZE = 256
 _HASHABLE_TYPE_ADAPTER_CACHE: "OrderedDict[Any, TypeAdapter]" = OrderedDict()
 _UNHASHABLE_TYPE_ADAPTER_CACHE: "OrderedDict[int, Tuple[Any, TypeAdapter]]" = OrderedDict()
@@ -234,6 +245,13 @@ def _unset_flow_input_factory() -> _UnsetFlowInput:
 
 def _is_unset_flow_input(value: Any) -> bool:
     return value is _UNSET_FLOW_INPUT
+
+
+def _unset_flow_input_field_default() -> Any:
+    kwargs = {"default_factory": _unset_flow_input_factory}
+    if _FIELD_EXCLUDE_IF_SUPPORTED:
+        kwargs["exclude_if"] = _is_unset_flow_input
+    return Field(**kwargs)
 
 
 def _flow_debug_value_repr(value: Any) -> str:
@@ -467,6 +485,8 @@ def _can_validate_type(annotation: Any) -> bool:
 
 
 def _expected_type_repr(annotation: Any) -> str:
+    if get_origin(annotation) in _UNION_ORIGINS:
+        return " | ".join(_expected_type_repr(arg) for arg in get_args(annotation))
     try:
         return annotation.__name__
     except AttributeError:
@@ -1076,7 +1096,7 @@ def _declared_context_field_annotation(config: _FlowModelConfig, name: str) -> A
     assert config.declared_context_type is not None
     field_info = config.declared_context_type.model_fields[name]
     if field_info.metadata:
-        return Annotated.__class_getitem__((field_info.annotation, *field_info.metadata))
+        return Annotated[(field_info.annotation, *field_info.metadata)]
     return field_info.annotation
 
 
@@ -2631,6 +2651,44 @@ class _GeneratedFlowModelBase(CallableModel):
     __flow_model_config__: ClassVar[_FlowModelConfig]
     __flow_model_identity__: ClassVar[str]
 
+    if not _FIELD_EXCLUDE_IF_SUPPORTED:
+
+        @model_serializer(mode="plain")
+        def _serialize_generated_flow_model_compat(self, info):
+            """Drop unbound sentinels on pydantic versions before Field(exclude_if)."""
+
+            include = getattr(info, "include", None)
+            exclude = getattr(info, "exclude", None)
+            by_alias = bool(getattr(info, "by_alias", False))
+
+            def selected(name: str, key: str) -> bool:
+                if include is not None and name not in include and key not in include:
+                    return False
+                if exclude is not None and (name in exclude or key in exclude):
+                    return False
+                return True
+
+            data: Dict[str, Any] = {}
+            for name, field_info in type(self).model_fields.items():
+                key = name
+                if by_alias:
+                    key = field_info.serialization_alias or field_info.alias or name
+                if not selected(name, key):
+                    continue
+                if getattr(info, "exclude_unset", False) and name not in self.__pydantic_fields_set__:
+                    continue
+                value = getattr(self, name, _UNSET_FLOW_INPUT)
+                if _is_unset_flow_input(value):
+                    continue
+                if getattr(info, "exclude_none", False) and value is None:
+                    continue
+                data[key] = value
+
+            type_key = "_target_" if by_alias else "type_"
+            if selected("type_", type_key):
+                data[type_key] = self.type_
+            return data
+
     def __reduce__(self):
         """Prefer import-path restoration, falling back to serialized local factories."""
 
@@ -2886,11 +2944,11 @@ def _build_flow_model_factory_from_config(config: _FlowModelConfig, factory_kwar
     for param in config.parameters:
         annotation = _generated_field_annotation(param)
         if param.is_contextual:
-            default = Field(default_factory=_unset_flow_input_factory, exclude_if=_is_unset_flow_input)
+            default = _unset_flow_input_field_default()
         elif param.has_function_default:
             default = param.function_default
         else:
-            default = Field(default_factory=_unset_flow_input_factory, exclude_if=_is_unset_flow_input)
+            default = _unset_flow_input_field_default()
         field_definitions[param.name] = (annotation, default)
 
     GeneratedModel = cast(

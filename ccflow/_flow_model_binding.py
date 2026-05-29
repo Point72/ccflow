@@ -276,11 +276,11 @@ def _restore_annotation(payload: Any) -> Any:
         args = tuple(_restore_annotation(arg) for arg in payload.args)
         return origin[args[0] if len(args) == 1 else args]
     if payload.kind == "annotated":
-        return Annotated.__class_getitem__((_restore_annotation(value), *payload.args))
+        return Annotated[(_restore_annotation(value), *payload.args)]
     if payload.kind == "union":
-        return Union.__getitem__(tuple(_restore_annotation(arg) for arg in value))
+        return Union[tuple(_restore_annotation(arg) for arg in value)]
     if payload.kind == "literal":
-        return Literal.__getitem__(value)
+        return Literal[value]
     if payload.kind == "generic_alias":
         origin = _restore_annotation(value)
         args = tuple(_restore_annotation(arg) for arg in payload.args)

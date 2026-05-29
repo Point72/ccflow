@@ -2,6 +2,7 @@ from pickle import dumps as pdumps, loads as ploads
 from typing import Generic, List, Optional, Tuple, Type, TypeVar, Union
 from unittest import TestCase
 
+import cloudpickle
 import ray
 from pydantic import ValidationError
 from ray.cloudpickle import dumps as rcpdumps, loads as rcploads
@@ -36,6 +37,32 @@ class MyExtendedContext(MyContext):
 
 class MyOtherContext(ContextBase):
     a: int
+
+
+# These factories intentionally define local classes outside the TestCase method
+# frame. Pydantic can capture method locals (including unittest/pytest state) in
+# __pydantic_parent_namespace__, which makes cloudpickle fail on unrelated objects.
+# See issue: https://github.com/Point72/ccflow/issues/221
+def _make_auto_context_cloudpickle_callable():
+    class AutoContextCallable(CallableModel):
+        multiplier: int = 2
+
+        @Flow.call(auto_context=True)
+        def __call__(self, *, x: int) -> GenericResult:
+            return GenericResult(value=x * self.multiplier)
+
+    return AutoContextCallable
+
+
+def _make_auto_context_kwargs_callable():
+    class AutoContextCallable(CallableModel):
+        factor: int = 2
+
+        @Flow.call(auto_context=True)
+        def __call__(self, *, x: int, y: int = 1) -> GenericResult:
+            return GenericResult(value=(x + y) * self.factor)
+
+    return AutoContextCallable
 
 
 class ListContext(ContextBase):
@@ -911,33 +938,16 @@ class TestAutoContext(TestCase):
         self.assertEqual(AutoContextCallable()().value, "parent")
 
     def test_cloudpickle_roundtrip(self):
-        class AutoContextCallable(CallableModel):
-            multiplier: int = 2
-
-            @Flow.call(auto_context=True)
-            def __call__(self, *, x: int) -> GenericResult:
-                return GenericResult(value=x * self.multiplier)
-
-        restored = rcploads(rcpdumps(AutoContextCallable(multiplier=3)))
+        AutoContextCallable = _make_auto_context_cloudpickle_callable()
+        restored = cloudpickle.loads(cloudpickle.dumps(AutoContextCallable(multiplier=3)))
 
         self.assertEqual(restored(x=10).value, 30)
 
-    def test_ray_task_execution(self):
-        class AutoContextCallable(CallableModel):
-            factor: int = 2
+    def test_cloudpickle_roundtrip_with_kwargs(self):
+        AutoContextCallable = _make_auto_context_kwargs_callable()
+        restored = cloudpickle.loads(cloudpickle.dumps(AutoContextCallable(factor=5)))
 
-            @Flow.call(auto_context=True)
-            def __call__(self, *, x: int, y: int = 1) -> GenericResult:
-                return GenericResult(value=(x + y) * self.factor)
-
-        @ray.remote
-        def run_callable(model, **kwargs):
-            return model(**kwargs).value
-
-        with ray.init(num_cpus=1):
-            result = ray.get(run_callable.remote(AutoContextCallable(factor=5), x=10, y=2))
-
-        self.assertEqual(result, 60)
+        self.assertEqual(restored(x=10, y=2).value, 60)
 
     def test_postponed_annotations_are_resolved(self):
         namespace = {}

@@ -121,7 +121,6 @@ class NullContext(ContextBase, metaclass=_NullContextMeta):
     """
 
 
-
 class FlowContext(ContextBase):
     """Universal context for @Flow.model functions.
 
