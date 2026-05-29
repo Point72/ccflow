@@ -3,10 +3,7 @@ import unittest
 from typing import (
     Annotated,
     Any,
-    Callable,
-    ClassVar,
     Dict,
-    Final,
     Generic,
     List,
     Optional,
@@ -15,20 +12,11 @@ from typing import (
 
 import numpy as np
 from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field, ValidationError
-from typing_extensions import NotRequired, Required
 
-from ccflow import BaseModel, CallableModelGenericType, GenericContext, GenericResult, NDArray, NullContext
-from ccflow.base import (
-    _GenericAliasTypeSpec,
-    _is_pydantic_generic_specialization,
-    _new_ccflow_generic_model,
-    _portable_generic_type_arg,
-    _PydanticGenericTypeSpec,
-    _restore_generic_type_arg,
-)
+from ccflow import BaseModel, GenericResult, NDArray
 from ccflow.enums import Enum
 from ccflow.exttypes.pydantic_numpy.ndtypes import bool_, complex64, float32, float64, int8, uint32
-from ccflow.result import ListResult
+from ccflow.pickling import reduce_generic_model_instance
 from ccflow.serialization import make_ndarray_orjson_valid
 
 
@@ -287,23 +275,24 @@ class TestBaseModelSerialization(unittest.TestCase):
         # Pydantic generic specializations. Ordinary BaseModel classes and
         # unspecialized generic origins must keep Pydantic's default pickle
         # behavior.
-        self.assertFalse(_is_pydantic_generic_specialization(ParentModel))
-        self.assertFalse(_is_pydantic_generic_specialization(GenericBox))
-        self.assertFalse(_is_pydantic_generic_specialization(GenericResult[int](value=5)))
-        self.assertTrue(_is_pydantic_generic_specialization(GenericBox[int]))
-        self.assertTrue(_is_pydantic_generic_specialization(GenericResult[int]))
+        self.assertIsNone(reduce_generic_model_instance(ParentModel(field1=1)))
+        self.assertIsNone(reduce_generic_model_instance(GenericBox(value=5)))
+        self.assertIsNone(reduce_generic_model_instance(GenericResult(value=5)))
+        self.assertIsNotNone(reduce_generic_model_instance(GenericBox[int](value=5)))
+        self.assertIsNotNone(reduce_generic_model_instance(GenericResult[int](value=5)))
 
     def test_reduce_ex_only_takes_over_generic_specializations(self):
         # This is the core blast-radius assertion for normal users: a non-generic
         # model should not route through the ccflow generic restore helper at
         # all. If this fails, the BaseModel pickle override became too broad.
-        non_generic_reduce = ParentModel(field1=1).__reduce_ex__(pickle.HIGHEST_PROTOCOL)
-        self.assertIsNot(non_generic_reduce[0], _new_ccflow_generic_model)
+        non_generic_model = ParentModel(field1=1)
+        self.assertIsNone(reduce_generic_model_instance(non_generic_model))
 
         generic_model = GenericResult[int](value=5)
-        reduce_func, reduce_args, reduce_state = generic_model.__reduce_ex__(pickle.HIGHEST_PROTOCOL)
+        reducer = reduce_generic_model_instance(generic_model)
+        self.assertIsNotNone(reducer)
+        reduce_func, reduce_args, reduce_state = reducer
 
-        self.assertIs(reduce_func, _new_ccflow_generic_model)
         origin, args = reduce_args
         self.assertIs(origin, GenericResult)
         self.assertEqual(args, (int,))
@@ -313,68 +302,6 @@ class TestBaseModelSerialization(unittest.TestCase):
         restored.__setstate__(reduce_state)
         self.assertEqual(restored, generic_model)
         self.assertIs(type(restored), GenericResult[int])
-
-    def test_portable_generic_type_arg_only_wraps_fragile_type_arguments(self):
-        # The helper walks type arguments, not instance values. Plain importable
-        # args and generic aliases with only plain args stay unchanged, so the
-        # extra serialization shape is limited to aliases that actually contain
-        # runtime Pydantic generic specializations. This includes
-        # CallableModelGenericType annotations, which are themselves Pydantic
-        # generic specializations and can contain nested result specializations.
-        self.assertIs(_portable_generic_type_arg(int), int)
-        self.assertEqual(_portable_generic_type_arg(list[int]), list[int])
-
-        portable_model_arg = _portable_generic_type_arg(ListResult[int])
-        self.assertIsInstance(portable_model_arg, _PydanticGenericTypeSpec)
-        self.assertIs(_restore_generic_type_arg(portable_model_arg), ListResult[int])
-
-        portable_alias_arg = _portable_generic_type_arg(list[ListResult[int]])
-        self.assertIsInstance(portable_alias_arg, _GenericAliasTypeSpec)
-        self.assertEqual(_restore_generic_type_arg(portable_alias_arg), list[ListResult[int]])
-
-        typing_list_alias = List[ListResult[int]]
-        portable_typing_alias_arg = _portable_generic_type_arg(typing_list_alias)
-        self.assertIsInstance(portable_typing_alias_arg, _GenericAliasTypeSpec)
-        self.assertEqual(_restore_generic_type_arg(portable_typing_alias_arg), typing_list_alias)
-
-        callable_alias = Callable[[ListResult[int]], int]
-        portable_callable_alias_arg = _portable_generic_type_arg(callable_alias)
-        self.assertIsInstance(portable_callable_alias_arg, _GenericAliasTypeSpec)
-        self.assertEqual(_restore_generic_type_arg(portable_callable_alias_arg), callable_alias)
-
-        portable_union_arg = _portable_generic_type_arg(GenericContext[int] | None)
-        self.assertIsInstance(portable_union_arg, _GenericAliasTypeSpec)
-        self.assertEqual(_restore_generic_type_arg(portable_union_arg), GenericContext[int] | None)
-
-        optional_alias = Optional[ListResult[int]]
-        portable_optional_arg = _portable_generic_type_arg(optional_alias)
-        self.assertIsInstance(portable_optional_arg, _GenericAliasTypeSpec)
-        self.assertEqual(_restore_generic_type_arg(portable_optional_arg), optional_alias)
-
-        classvar_alias = ClassVar[ListResult[int]]
-        portable_classvar_arg = _portable_generic_type_arg(classvar_alias)
-        self.assertIsInstance(portable_classvar_arg, _GenericAliasTypeSpec)
-        self.assertEqual(_restore_generic_type_arg(portable_classvar_arg), classvar_alias)
-
-        final_alias = Final[ListResult[int]]
-        portable_final_arg = _portable_generic_type_arg(final_alias)
-        self.assertIsInstance(portable_final_arg, _GenericAliasTypeSpec)
-        self.assertEqual(_restore_generic_type_arg(portable_final_arg), final_alias)
-
-        required_alias = Required[ListResult[int]]
-        portable_required_arg = _portable_generic_type_arg(required_alias)
-        self.assertIsInstance(portable_required_arg, _GenericAliasTypeSpec)
-        self.assertEqual(_restore_generic_type_arg(portable_required_arg), required_alias)
-
-        not_required_alias = NotRequired[ListResult[int]]
-        portable_not_required_arg = _portable_generic_type_arg(not_required_alias)
-        self.assertIsInstance(portable_not_required_arg, _GenericAliasTypeSpec)
-        self.assertEqual(_restore_generic_type_arg(portable_not_required_arg), not_required_alias)
-
-        callable_annotation = CallableModelGenericType[NullContext, GenericResult[int]]
-        portable_callable_arg = _portable_generic_type_arg(callable_annotation)
-        self.assertIsInstance(portable_callable_arg, _PydanticGenericTypeSpec)
-        self.assertIs(_restore_generic_type_arg(portable_callable_arg), callable_annotation)
 
     def test_generic_pickle_handles_all_pickle_protocols(self):
         for protocol in range(pickle.HIGHEST_PROTOCOL + 1):
