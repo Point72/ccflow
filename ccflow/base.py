@@ -33,6 +33,7 @@ from typing_extensions import Self
 
 from .exttypes.pyobjectpath import PyObjectPath
 from .local_persistence import register_ccflow_import_path, sync_to_module
+from .pickling import reduce_generic_model_instance
 
 log = logging.getLogger(__name__)
 
@@ -352,6 +353,12 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_BASE_MODEL_METACLA
     def __setstate__(self, state):
         state["__pydantic_fields_set__"] = set(state["__pydantic_fields_set__"])
         super().__setstate__(state)
+
+    def __reduce_ex__(self, protocol):
+        reducer = reduce_generic_model_instance(self)
+        if reducer is not None:
+            return reducer
+        return super().__reduce_ex__(protocol)
 
 
 class _ModelRegistryData(PydanticBaseModel):
