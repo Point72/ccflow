@@ -51,6 +51,9 @@ def _sha256_hexdigest(*parts: bytes | str) -> str:
 # ContextVar (rather than threading.local) so the visited set auto-isolates across asyncio tasks.
 _visited: contextvars.ContextVar[Optional[set]] = contextvars.ContextVar("_ccflow_normalize_visited", default=None)
 
+# Tracks functions currently being hashed to detect circular closure references.
+_hashing_functions: contextvars.ContextVar[Optional[set]] = contextvars.ContextVar("_ccflow_hashing_functions", default=None)
+
 
 def _with_cycle_check(obj: Any, build: Callable[[], Any]) -> Any:
     """Invoke ``build`` with object-identity cycle detection, returning ``("__cycle__", type_name)`` on re-entry."""
@@ -82,6 +85,14 @@ def normalize_token(obj: Any) -> Any:
 
     Unknown types fall back to a ``cloudpickle``-based digest, raising ``TypeError`` on pickling failure.
     """
+    # Python 3.14 exposes internal objects (e.g. _abc._abc_data, pydantic._internal.*,
+    # pydantic_core._pydantic_core.*) in function closures of ABC-derived classes.
+    # These are not behavior-relevant; produce a stable token keyed by module + qualname
+    # so they don't affect hashing.
+    obj_module = getattr(type(obj), "__module__", "") or ""
+    if obj_module.startswith("_") or "._" in obj_module:
+        return ("__internal__", obj_module, type(obj).__qualname__)
+
     try:
         import cloudpickle
     except ImportError as exc:  # pragma: no cover - defensive
@@ -245,7 +256,21 @@ def _normalize_code(obj):
 
 @normalize_token.register(type(lambda: None))  # FunctionType
 def _normalize_function(obj):
-    return ("__function__", _hash_function_bytecode(obj))
+    seen = _hashing_functions.get()
+    created = seen is None
+    if created:
+        seen = set()
+        token = _hashing_functions.set(seen)
+    elif id(obj) in seen:
+        return ("__function_cycle__", getattr(obj, "__qualname__", "?"))
+    seen.add(id(obj))
+    try:
+        result = ("__function__", _hash_function_bytecode(obj))
+    finally:
+        seen.discard(id(obj))
+        if created:
+            _hashing_functions.reset(token)
+    return result
 
 
 @normalize_token.register(MethodType)
@@ -452,9 +477,13 @@ def _hash_function_bytecode(func: Callable) -> Optional[str]:
         return None
     code = unwrapped.__code__
     consts = code.co_consts
-    # Function code starts with the docstring slot (a str when present, None when absent). Strip it
-    # so adding/removing a docstring doesn't change the behavior token.
-    if consts and isinstance(consts[0], (str, type(None))):
+    # Strip the docstring constant if present. In Python < 3.14, a None sentinel occupies
+    # co_consts[0] when there is no docstring; in Python >= 3.14 that slot is absent.
+    # Only strip when the first constant actually matches the function's __doc__.
+    doc = getattr(unwrapped, "__doc__", None)
+    if doc is not None and consts and consts[0] == doc:
+        consts = consts[1:]
+    elif consts and consts[0] is None:
         consts = consts[1:]
     code_canonical = (
         "code",
@@ -511,7 +540,7 @@ def _collect_methods(cls: type) -> List[Tuple[str, Callable]]:
     seen_names = set()
     methods = []
     for klass in cls.__mro__:
-        if klass is object:
+        if klass is object or klass is _PydanticBaseModel:
             break
         for name, value in klass.__dict__.items():
             if name in seen_names:

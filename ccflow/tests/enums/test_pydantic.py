@@ -96,12 +96,16 @@ def test_json_schema_no_csp():
     if importlib.util.find_spec("csp"):
         pytest.skip("Skipping test because csp installed")
 
-    assert MyModel.model_json_schema() == {
+    schema = MyModel.model_json_schema()
+    # Python 3.14 changed Enum.__doc__ from "An enumeration." to "An enumeration of <ClassName>"
+    expected_description = schema["properties"]["enum"]["description"]
+    assert expected_description in ("An enumeration.", "An enumeration of MyEnum")
+    assert schema == {
         "properties": {
-            "enum": {"description": "An enumeration.", "enum": ["FIELD1", "FIELD2"], "title": "MyEnum", "type": "string"},
+            "enum": {"description": expected_description, "enum": ["FIELD1", "FIELD2"], "title": "MyEnum", "type": "string"},
             "enum_default": {
                 "default": "FIELD1",
-                "description": "An enumeration.",
+                "description": expected_description,
                 "enum": ["FIELD1", "FIELD2"],
                 "title": "MyEnum",
                 "type": "string",

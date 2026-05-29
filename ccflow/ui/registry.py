@@ -13,9 +13,15 @@ __all__ = ("RegistryBrowser", "ModelRegistryViewer")
 class RegistryBrowser(param.Parameterized):
     selected_model = param.Parameter(default=None)
 
+    sort_children = param.Boolean(
+        default=True,
+        doc="If True, sort child entries alphabetically by name at every registry level. Defaults to insertion order when False.",
+    )
+
     def __init__(self, registry, **params):
         super().__init__(**params)
         self._registry = registry
+        self.selected_path = ""
 
         self._tree_items = self._build_tree(registry)
         self._node_index = self._build_node_index(self._tree_items)
@@ -52,8 +58,13 @@ class RegistryBrowser(param.Parameterized):
     def _build_tree(self, registry, index_prefix=()):
         import ccflow
 
+        model_items = registry.models.items()
+        if self.sort_children:
+            # Subregistries first, then leaf models; each group sorted alphabetically.
+            model_items = sorted(model_items, key=lambda kv: (not isinstance(kv[1], ccflow.ModelRegistry), kv[0]))
+
         items = []
-        for i, (name, model) in enumerate(registry.models.items()):
+        for i, (name, model) in enumerate(model_items):
             index_path = index_prefix + (i,)
             entry = {
                 "label": name,
@@ -75,6 +86,7 @@ class RegistryBrowser(param.Parameterized):
         def walk(items, prefix=""):
             for node in items:
                 path = f"{prefix}/{node['label']}" if prefix else node["label"]
+                node["_path"] = path
                 if "model" in node:
                     index[path] = node
                 walk(node.get("items", []), path)
@@ -100,32 +112,32 @@ class RegistryBrowser(param.Parameterized):
         self._search.value = ""
 
     def _on_tree_select(self, event):
-        self.selected_model = event.new[0].get("model") if event.new else None
+        if event.new:
+            node = event.new[0]
+            model = node.get("model")
+            self.selected_path = node.get("_path", "") if model is not None else ""
+            self.selected_model = model
+        else:
+            self.selected_path = ""
+            self.selected_model = None
 
 
 class ModelRegistryViewer(param.Parameterized):
     """
     Top-level viewer that composes the RegistryBrowser and ModelViewer
-    into a scrollable two-panel layout.
+    into a viewport-filling page with a resizable sidebar.
     """
 
     # Layout parameters
     browser_width = param.Integer(
         default=400,
         bounds=(200, None),
-        doc="Width of the registry browser panel (px)",
+        doc="Initial width of the registry browser sidebar (px). User can drag to resize at runtime.",
     )
 
-    browser_height = param.Integer(
-        default=700,
-        bounds=(300, None),
-        doc="Height of the registry browser panel (px)",
-    )
-
-    viewer_width = param.Integer(
-        default=None,
-        allow_None=True,
-        doc="Optional fixed width for the model viewer panel (px)",
+    title = param.String(
+        default="ccflow Model Registry",
+        doc="Title shown in the page header.",
     )
 
     model = param.Parameter(
@@ -133,47 +145,39 @@ class ModelRegistryViewer(param.Parameterized):
         doc="The currently selected model from the registry browser",
     )
 
+    sort_children = param.Boolean(
+        default=True,
+        doc="If True, sort registry child entries alphabetically by name at every level. Defaults to insertion order when False.",
+    )
+
     def __init__(self, registry, **params):
         super().__init__(**params)
 
         # Core components
-        self._browser = RegistryBrowser(registry)
+        self._browser = RegistryBrowser(registry, sort_children=self.sort_children)
         self._viewer = ModelViewer()
 
         # Wire browser → viewer and model param
         def _on_selection(e):
             self.model = e.new
+            self._viewer.model_path = self._browser.selected_path
             self._viewer.model = e.new
 
         self._browser.param.watch(_on_selection, "selected_model")
 
-        # Build layout
-        self._layout = pn.Row(
-            self._make_browser_column(),
-            self._make_viewer_column(),
+        # Wrap browser in a scrolling Column so large registries remain navigable.
+        sidebar_panel = pn.Column(
+            self._browser,
+            sizing_mode="stretch_both",
+            scroll=True,
+        )
+
+        self._layout = pmui.Page(
+            sidebar=[sidebar_panel],
+            main=[self._viewer],
+            sidebar_width=self.browser_width,
+            title=self.title,
         )
 
     def __panel__(self):
         return self._layout
-
-    # Internal helpers
-
-    def _make_browser_column(self):
-        return pn.Column(
-            self._browser,
-            width=self.browser_width,
-            height=self.browser_height,
-            scroll=True,  # ✅ only left panel scrolls
-        )
-
-    def _make_viewer_column(self):
-        if self.viewer_width is not None:
-            return pn.Column(
-                self._viewer,
-                width=self.viewer_width,
-            )
-        else:
-            return pn.Column(
-                self._viewer,
-                sizing_mode="stretch_width",
-            )

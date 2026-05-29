@@ -1,15 +1,22 @@
 import pickle
-import platform
 import unittest
-from typing import Annotated, ClassVar, Dict, List, Optional, Type, Union
+from typing import (
+    Annotated,
+    Any,
+    Dict,
+    Generic,
+    List,
+    Optional,
+    TypeVar,
+)
 
 import numpy as np
-from packaging import version
 from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field, ValidationError
 
-from ccflow import BaseModel, NDArray
+from ccflow import BaseModel, GenericResult, NDArray
 from ccflow.enums import Enum
 from ccflow.exttypes.pydantic_numpy.ndtypes import bool_, complex64, float32, float64, int8, uint32
+from ccflow.pickling import reduce_generic_model_instance
 from ccflow.serialization import make_ndarray_orjson_valid
 
 
@@ -96,6 +103,13 @@ class MultiAttributeModel(BaseModel):
     y: str
     x: float = Field(default=0.0)
     w: Annotated[bool, None]
+
+
+T = TypeVar("T")
+
+
+class GenericBox(BaseModel, Generic[T]):
+    value: T
 
 
 class TestBaseModelSerialization(unittest.TestCase):
@@ -214,47 +228,32 @@ class TestBaseModelSerialization(unittest.TestCase):
         _ = C(extra_field1=1)
 
     def test_serialize_as_any(self):
-        # https://docs.pydantic.dev/latest/concepts/serialization/#serializing-with-duck-typing
-        # https://github.com/pydantic/pydantic/issues/6423
-        # This test could be removed once there is a different solution to the issue above
-        from pydantic import SerializeAsAny
-        from pydantic.types import constr
-
-        if version.parse(platform.python_version()) >= version.parse("3.10"):
-            pipe_union = A | int
-        else:
-            pipe_union = Union[A, int]
+        class ChildA(A):
+            value: int
 
         class MyNestedModel(BaseModel):
             a1: A
-            a2: Optional[Union[A, int]]
+            a2: Optional[A]
             a3: Dict[str, Optional[List[A]]]
-            a4: ClassVar[A]
-            a5: Type[A]
-            a6: constr(min_length=1)
-            a7: pipe_union
+            a4: A | int
 
-        target = {
-            "a1": SerializeAsAny[A],
-            "a2": Optional[Union[SerializeAsAny[A], int]],
-            "a4": ClassVar[SerializeAsAny[A]],
-            "a5": Type[A],
-            "a6": constr(min_length=1),  # Uses Annotation
-            "a7": Union[SerializeAsAny[A], int],
-        }
-        target["a3"] = dict[str, Optional[list[SerializeAsAny[A]]]]
-        annotations = MyNestedModel.__annotations__
-        self.assertEqual(str(annotations["a1"]), str(target["a1"]))
-        self.assertEqual(str(annotations["a2"]), str(target["a2"]))
-        self.assertEqual(str(annotations["a3"]), str(target["a3"]))
-        self.assertEqual(str(annotations["a4"]), str(target["a4"]))
-        self.assertEqual(str(annotations["a5"]), str(target["a5"]))
-        self.assertEqual(str(annotations["a6"]), str(target["a6"]))
-        self.assertEqual(str(annotations["a7"]), str(target["a7"]))
+        model = MyNestedModel(
+            a1=ChildA(value=1),
+            a2=ChildA(value=2),
+            a3={"child": [ChildA(value=3)], "none": None},
+            a4=ChildA(value=4),
+        )
+
+        serialized = model.model_dump(mode="python")
+        self.assertEqual(serialized["a1"]["value"], 1)
+        self.assertEqual(serialized["a2"]["value"], 2)
+        self.assertEqual(serialized["a3"]["child"][0]["value"], 3)
+        self.assertEqual(serialized["a4"]["value"], 4)
+        self.assertEqual(MyNestedModel.model_validate(serialized), model)
 
     def test_pickle_consistency(self):
         model = MultiAttributeModel(z=1, y="test", x=3.14, w=True)
-        serialized = pickle.dumps(model)
+        serialized = pickle.dumps(model, protocol=4)
         # Hard code the pickled form of the model because it shouldn't change from run to run
         # (as it would normally in pydantic because of https://github.com/pydantic/pydantic/issues/11603)
         # This is generated on Linux/Python 3.11 - might need to have version specific values if it changes.
@@ -270,3 +269,52 @@ class TestBaseModelSerialization(unittest.TestCase):
         self.assertEqual(serialized, target)
         deserialized = pickle.loads(serialized)
         self.assertEqual(model, deserialized)
+
+    def test_generic_pickle_override_guard_is_narrow(self):
+        # Blast radius check: the custom reducer should apply only to concrete
+        # Pydantic generic specializations. Ordinary BaseModel classes and
+        # unspecialized generic origins must keep Pydantic's default pickle
+        # behavior.
+        self.assertIsNone(reduce_generic_model_instance(ParentModel(field1=1)))
+        self.assertIsNone(reduce_generic_model_instance(GenericBox(value=5)))
+        self.assertIsNone(reduce_generic_model_instance(GenericResult(value=5)))
+        self.assertIsNotNone(reduce_generic_model_instance(GenericBox[int](value=5)))
+        self.assertIsNotNone(reduce_generic_model_instance(GenericResult[int](value=5)))
+
+    def test_reduce_ex_only_takes_over_generic_specializations(self):
+        # This is the core blast-radius assertion for normal users: a non-generic
+        # model should not route through the ccflow generic restore helper at
+        # all. If this fails, the BaseModel pickle override became too broad.
+        non_generic_model = ParentModel(field1=1)
+        self.assertIsNone(reduce_generic_model_instance(non_generic_model))
+
+        generic_model = GenericResult[int](value=5)
+        reducer = reduce_generic_model_instance(generic_model)
+        self.assertIsNotNone(reducer)
+        reduce_func, reduce_args, reduce_state = reducer
+
+        origin, args = reduce_args
+        self.assertIs(origin, GenericResult)
+        self.assertEqual(args, (int,))
+        self.assertEqual(reduce_state, generic_model.__getstate__())
+
+        restored = reduce_func(*reduce_args)
+        restored.__setstate__(reduce_state)
+        self.assertEqual(restored, generic_model)
+        self.assertIs(type(restored), GenericResult[int])
+
+    def test_generic_pickle_handles_all_pickle_protocols(self):
+        for protocol in range(pickle.HIGHEST_PROTOCOL + 1):
+            with self.subTest(protocol=protocol):
+                restored = pickle.loads(pickle.dumps(GenericResult[int](value=5), protocol=protocol))
+                self.assertEqual(restored, GenericResult[int](value=5))
+
+    def test_generic_pickle_preserves_outer_graph_identity_and_cycles(self):
+        shared = []
+        restored_shared = pickle.loads(pickle.dumps([GenericResult[Any](value=shared), shared], protocol=pickle.HIGHEST_PROTOCOL))
+        self.assertIs(restored_shared[0].value, restored_shared[1])
+
+        model = GenericResult[Any](value=None)
+        model.value = model
+        restored_cycle = pickle.loads(pickle.dumps(model, protocol=pickle.HIGHEST_PROTOCOL))
+        self.assertIs(restored_cycle.value, restored_cycle)

@@ -11,6 +11,7 @@ import warnings
 from types import GenericAlias, MappingProxyType
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar, Union, get_args, get_origin
 
+import pydantic
 from packaging import version
 
 if TYPE_CHECKING:
@@ -32,6 +33,7 @@ from typing_extensions import Self
 
 from .exttypes.pyobjectpath import PyObjectPath
 from .local_persistence import register_ccflow_import_path, sync_to_module
+from .pickling import reduce_generic_model_instance
 
 log = logging.getLogger(__name__)
 
@@ -106,19 +108,33 @@ class _RegistryMixin:
         return deps
 
 
-# Pydantic 2 has different handling of serialization.
-# This requires some workarounds at the moment until the feature is added to easily get a mode that
-# is compatible with Pydantic 1
-# This is done by adjusting annotations via a MetaClass for any annotation that includes a BaseModel,
-# such that the new annotation contains SerializeAsAny
+# Pydantic 2 changed nested model serialization to use the annotated type by default.
+# For pydantic versions before runtime polymorphic serialization, preserve ccflow's
+# historical duck-typed behavior by adjusting BaseModel annotations via a metaclass.
 # https://docs.pydantic.dev/latest/concepts/serialization/#serializing-with-duck-typing
 # https://github.com/pydantic/pydantic/issues/6423
 # https://github.com/pydantic/pydantic-core/pull/740
 # See https://github.com/pydantic/pydantic/issues/6381 for inspiration on implementation
-# NOTE: For this logic to be removed, require https://github.com/pydantic/pydantic-core/pull/1478
 from pydantic._internal._model_construction import ModelMetaclass  # noqa: E402
 
 _IS_PY39 = version.parse(platform.python_version()) < version.parse("3.10")
+_PYDANTIC_VERSION = version.parse(pydantic.__version__)
+_USE_RUNTIME_POLYMORPHIC_SERIALIZATION = _PYDANTIC_VERSION >= version.parse("2.13")
+
+
+def _namespace_annotations(namespaces: Dict[str, Any]) -> dict:
+    if "__annotations__" in namespaces:
+        return dict(namespaces["__annotations__"])
+
+    try:
+        import annotationlib
+    except ImportError:
+        return {}
+
+    annotate = annotationlib.get_annotate_from_class_namespace(namespaces)
+    if annotate is None:
+        return {}
+    return dict(annotationlib.call_annotate_function(annotate, annotationlib.Format.FORWARDREF))
 
 
 def _adjust_annotations(annotation):
@@ -149,7 +165,7 @@ def _adjust_annotations(annotation):
 
 class _SerializeAsAnyMeta(ModelMetaclass):
     def __new__(self, name: str, bases: Tuple[type], namespaces: Dict[str, Any], **kwargs):
-        annotations: dict = namespaces.get("__annotations__", {})
+        annotations = _namespace_annotations(namespaces)
 
         for base in bases:
             for base_ in base.__mro__:
@@ -165,7 +181,10 @@ class _SerializeAsAnyMeta(ModelMetaclass):
         return super().__new__(self, name, bases, namespaces, **kwargs)
 
 
-class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta):
+_BASE_MODEL_METACLASS = ModelMetaclass if _USE_RUNTIME_POLYMORPHIC_SERIALIZATION else _SerializeAsAnyMeta
+
+
+class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_BASE_MODEL_METACLASS):
     """BaseModel is a base class for all pydantic models within the ccflow framework.
 
     This gives us a way to add functionality to the framework, including
@@ -221,6 +240,7 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
         # where the default behavior is just to drop the mis-named value. This prevents that
         extra="forbid",
         ser_json_timedelta="float",
+        **(dict(polymorphic_serialization=True) if _USE_RUNTIME_POLYMORPHIC_SERIALIZATION else {}),
     )
 
     def __str__(self):
@@ -333,6 +353,12 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
     def __setstate__(self, state):
         state["__pydantic_fields_set__"] = set(state["__pydantic_fields_set__"])
         super().__setstate__(state)
+
+    def __reduce_ex__(self, protocol):
+        reducer = reduce_generic_model_instance(self)
+        if reducer is not None:
+            return reducer
+        return super().__reduce_ex__(protocol)
 
 
 class _ModelRegistryData(PydanticBaseModel):

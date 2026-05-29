@@ -31,19 +31,13 @@ def _get_ui_args_parser() -> argparse.ArgumentParser:
         "--browser-width",
         type=int,
         default=400,
-        help="Width of the registry browser panel (default: 400)",
+        help="Initial width of the registry browser sidebar (default: 400). User can drag to resize.",
     )
     parser.add_argument(
-        "--browser-height",
-        type=int,
-        default=700,
-        help="Height of the registry browser panel (default: 700)",
-    )
-    parser.add_argument(
-        "--viewer-width",
-        type=int,
-        default=None,
-        help="Fixed width for model viewer panel (default: stretch)",
+        "--title",
+        type=str,
+        default="ccflow Model Registry",
+        help="Title shown in the page header (default: 'ccflow Model Registry')",
     )
 
     return parser
@@ -91,8 +85,7 @@ def registry_viewer_cli(
         viewer = ModelRegistryViewer(
             registry,
             browser_width=args.browser_width,
-            browser_height=args.browser_height,
-            viewer_width=args.viewer_width,
+            title=args.title,
         )
         return viewer.__panel__()
 

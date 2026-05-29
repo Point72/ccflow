@@ -88,8 +88,38 @@ __all__ = (
 
 _SEPARATOR = ","
 
-# Starting 0.8.0 Nullcontext is an alias to ContextBase
-NullContext = ContextBase
+
+class _NullContextMeta(type(ContextBase)):
+    """Metaclass that makes ``NullContext`` (and only ``NullContext``) a virtual superclass
+    of every ``ContextBase`` subclass.
+
+    A model annotated ``context: NullContext`` should accept any context. We achieve that
+    by lying in ``isinstance`` / ``issubclass`` while keeping ``NullContext`` a distinct
+    class so that introspection (``.context_type.__name__``, docstring, schema title)
+    reports ``NullContext`` rather than ``ContextBase``.
+
+    The lie applies only when the comparison target is ``NullContext`` itself; user-defined
+    subclasses of ``NullContext`` fall through to normal class-hierarchy rules.
+    """
+
+    def __instancecheck__(cls, obj):
+        if cls is globals().get("NullContext"):
+            return isinstance(type(obj), type) and ContextBase in type(obj).__mro__
+        return super().__instancecheck__(obj)
+
+    def __subclasscheck__(cls, sub):
+        if cls is globals().get("NullContext"):
+            return isinstance(sub, type) and ContextBase in sub.__mro__
+        return super().__subclasscheck__(sub)
+
+
+class NullContext(ContextBase, metaclass=_NullContextMeta):
+    """A Null Context, used when no context is required.
+
+    Any context can be passed where a NullContext is expected, but the model
+    should not rely on any of its fields.
+    """
+
 
 
 class FlowContext(ContextBase):
