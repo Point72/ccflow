@@ -1455,7 +1455,7 @@ def test_generated_model_dep_marker_pickle_roundtrip():
     model = total(values=[source(offset=2), 3])
     context = FlowContext(value=10)
 
-    for dumps, loads in ((pickle.dumps, pickle.loads), (rcpdumps, rcploads)):
+    for dumps, loads in ((pickle.dumps, pickle.loads), (cloudpickle.dumps, cloudpickle.loads)):
         restored = loads(dumps(model, protocol=5))
 
         assert len(restored.__deps__(context)) == 1
