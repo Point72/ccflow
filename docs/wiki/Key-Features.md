@@ -147,6 +147,42 @@ instance can be shared safely across threads and combined with parallel evaluato
 Celery evaluator). Place it *inside* a parallel evaluator to retry each task independently, or
 *outside* to retry the whole parallel dispatch as a unit.
 
+#### Choosing which models are retried
+
+An evaluator wraps *every* model evaluated in its scope (including dependencies). There are a few
+ways to control which tasks are retried and which are not, from coarse to fine:
+
+- **Scope the override to model types or instances.** `FlowOptionsOverride` can target specific
+  models, so only those get the retry evaluator while everything else uses the default:
+
+  ```python
+  with FlowOptionsOverride(options={"evaluator": retry}, model_types=(FetchFromApi,)):
+      result = pipeline(context)          # only FetchFromApi instances are retried
+  ```
+
+  Use `models=(instance,)` to target a single instance instead of a type.
+
+- **Override per call.** Pass `_options` for a one-off retry without any surrounding context:
+
+  ```python
+  result = my_model(context, _options={"evaluator": retry})
+  ```
+
+- **Pin it on the model.** Set `model.meta.options` so a model always carries its own retry policy.
+
+- **Select inside the evaluator.** When retry is part of a single global evaluator chain (e.g.
+  combined with logging/caching), use `include_model_types` / `exclude_model_types` to decide which
+  models the *same* evaluator retries. Non-selected models are evaluated once and passed straight
+  through (`exclude_model_types` wins over `include_model_types`):
+
+  ```python
+  retry = RetryEvaluator(
+      max_attempts=5,
+      include_model_types=["mypkg.FetchFromApi", "mypkg.CallService"],  # only these are retried
+      exclude_model_types=["mypkg.PureTransform"],                      # never retried
+  )
+  ```
+
 ## Results
 
 A Result is an object that holds the results from a callable model. It provides the equivalent of a strongly typed dictionary where the keys and schema are known upfront.

@@ -11,6 +11,10 @@ from ccflow.exttypes import PyObjectPath
 from .util import MyFlakyCallable, MyResult
 
 
+class MyOtherFlakyCallable(MyFlakyCallable):
+    """A distinct CallableModel type (sibling for include/exclude selection tests)."""
+
+
 class TestRetryEvaluator(TestCase):
     def setUp(self):
         self.context = DateContext(date=date(2022, 1, 1))
@@ -85,6 +89,44 @@ class TestRetryEvaluator(TestCase):
         self.assertTrue(evaluator.is_transparent(context))
         wrapped = evaluator.make_evaluation_context(context, options=context.options)
         self.assertIsInstance(wrapped, TransparentModelEvaluationContext)
+
+    def test_include_model_types(self):
+        # Only the included type is retried; other models pass straight through.
+        included = MyOtherFlakyCallable(fail_times=2)
+        excluded = MyFlakyCallable(fail_times=2)
+        evaluator = RetryEvaluator(max_attempts=3, include_model_types=[MyOtherFlakyCallable])
+        self.assertEqual(evaluator(self._eval_context(included)), MyResult(x=1))
+        self.assertEqual(included.calls, 3)
+        with self.assertRaises(ValueError):
+            evaluator(self._eval_context(excluded))
+        self.assertEqual(excluded.calls, 1)
+
+    def test_exclude_model_types(self):
+        # The excluded type passes straight through; everything else is retried.
+        excluded = MyOtherFlakyCallable(fail_times=2)
+        retried = MyFlakyCallable(fail_times=2)
+        evaluator = RetryEvaluator(max_attempts=3, exclude_model_types=[MyOtherFlakyCallable])
+        with self.assertRaises(ValueError):
+            evaluator(self._eval_context(excluded))
+        self.assertEqual(excluded.calls, 1)
+        self.assertEqual(evaluator(self._eval_context(retried)), MyResult(x=1))
+        self.assertEqual(retried.calls, 3)
+
+    def test_exclude_precedence_over_include(self):
+        # exclude_model_types wins even when the model also matches include_model_types.
+        model = MyOtherFlakyCallable(fail_times=2)
+        evaluator = RetryEvaluator(
+            max_attempts=3,
+            include_model_types=[MyFlakyCallable],
+            exclude_model_types=[MyOtherFlakyCallable],
+        )
+        with self.assertRaises(ValueError):
+            evaluator(self._eval_context(model))
+        self.assertEqual(model.calls, 1)
+
+    def test_invalid_model_type(self):
+        with self.assertRaises(ValueError):
+            RetryEvaluator(include_model_types=["math.pi"])
 
     def test_compute_delay_backoff(self):
         evaluator = RetryEvaluator(wait_initial=1.0, wait_multiplier=2.0)
