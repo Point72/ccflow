@@ -183,6 +183,32 @@ ways to control which tasks are retried and which are not, from coarse to fine:
   )
   ```
 
+#### `RetryModel`: retrying a single model declaratively
+
+`RetryEvaluator` is the cross-cutting ("how to run") way to add retries: it is configured at
+runtime and wraps whatever models fall in its scope. When you instead want a retry policy attached
+to one specific model *as part of the graph itself*, use `RetryModel`. It wraps another
+`CallableModel` and becomes a first-class node, so the policy can be declared statically in
+config/registries and shows up explicitly in serialization and the dependency graph. It shares all
+its configuration and retry mechanics with `RetryEvaluator` (both build on the same `RetryPolicy`),
+and preserves the wrapped model's `context_type` / `result_type`.
+
+```python
+from ccflow.models import RetryModel
+
+flaky = RetryModel(
+    model=fetch_from_api,   # any CallableModel
+    max_attempts=5,
+    wait_initial=0.5,
+    retry_exceptions=["builtins.TimeoutError", "builtins.ConnectionError"],
+)
+
+result = flaky(my_context)  # same context/result types as fetch_from_api
+```
+
+Use `RetryEvaluator` for runtime, cross-cutting retries (including across parallel evaluators), and
+`RetryModel` when the retry policy is a declarative, visible part of the model graph.
+
 ## Results
 
 A Result is an object that holds the results from a callable model. It provides the equivalent of a strongly typed dictionary where the keys and schema are known upfront.
