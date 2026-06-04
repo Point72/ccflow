@@ -95,6 +95,7 @@ The following table summarizes the "evaluator" models.
 | `MemoryCacheEvaluator`              | `ccflow.evaluators` | Evaluator that caches results in memory.                                                                                       |
 | `MultiEvaluator`                    | `ccflow.evaluators` | An evaluator that combines multiple evaluators.                                                                                |
 | `GraphEvaluator`                    | `ccflow.evaluators` | Evaluator that evaluates the dependency graph of callable models in topologically sorted order.                                |
+| `RetryEvaluator`                    | `ccflow.evaluators` | Evaluator that retries the evaluation of a callable model on failure, with exponential backoff and jitter.                     |
 | `ChunkedDateRangeEvaluator`         | *Coming Soon!*      |                                                                                                                                |
 | `ChunkedDateRangeResultsAggregator` | *Coming Soon!*      |                                                                                                                                |
 | `RayChunkedDateRangeEvaluator`      | *Coming Soon!*      |                                                                                                                                |
@@ -105,7 +106,46 @@ The following table summarizes the "evaluator" models.
 | `RayGraphEvaluator`                 | *Coming Soon!*      |                                                                                                                                |
 | `RayDelayedDistributedEvaluator`    | *Coming Soon!*      |                                                                                                                                |
 | `ParquetCacheEvaluator`             | *Coming Soon!*      |                                                                                                                                |
-| `RetryEvaluator`                    | *Coming Soon!*      |                                                                                                                                |
+
+### Retrying on failure
+
+The `RetryEvaluator` retries a `CallableModel` when evaluation raises an exception. It supports
+exponential backoff (`wait_initial`, `wait_multiplier`, `wait_max`), random `wait_jitter` to avoid
+thundering-herd retries, and stop conditions via `max_attempts` and `max_delay`. `max_delay` caps
+the *cumulative* time spent sleeping between retries (not the total wall-clock runtime of the
+evaluation); once the next backoff would push the accumulated wait over the budget, no further
+retries are attempted. Use `retry_exceptions` / `no_retry_exceptions` to control which exceptions
+are retried.
+
+```python
+from ccflow import FlowOptionsOverride
+from ccflow.evaluators import RetryEvaluator
+
+retry = RetryEvaluator(
+    max_attempts=5,
+    wait_initial=0.5,       # first retry waits ~0.5s
+    wait_multiplier=2.0,    # then 1s, 2s, 4s, ...
+    wait_max=30.0,          # cap any single wait at 30s
+    wait_jitter=0.25,       # add up to 0.25s of random jitter
+    max_delay=120.0,        # stop retrying once cumulative waiting would exceed 2 minutes
+    retry_exceptions=["builtins.TimeoutError", "builtins.ConnectionError"],
+)
+
+with FlowOptionsOverride(options={"evaluator": retry}):
+    result = my_model(my_context)
+```
+
+> [!NOTE]
+>
+> `retry_exceptions` and `no_retry_exceptions` accept any importable exception path. The paths are
+> validated (imported) eagerly, so a third-party exception such as `"httpx.ConnectError"` requires
+> that package to be installed.
+
+The evaluator is *transparent* (a successful result is identical to evaluating the model directly,
+so caching and dependency graphs are unaffected) and holds no mutable per-call state, so a single
+instance can be shared safely across threads and combined with parallel evaluators (e.g. a Ray or
+Celery evaluator). Place it *inside* a parallel evaluator to retry each task independently, or
+*outside* to retry the whole parallel dispatch as a unit.
 
 ## Results
 

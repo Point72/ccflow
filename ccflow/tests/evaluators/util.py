@@ -72,6 +72,30 @@ class MySometimesRaisingCallable(CallableModel):
         return self._called_dates
 
 
+class MyFlakyCallable(CallableModel):
+    """Model that raises a configurable exception for the first ``fail_times`` calls, then succeeds.
+
+    Useful for testing retry behaviour. The call counter is stored as a private
+    attribute so it is not part of the model's serialized/tokenized state.
+    """
+
+    offset: int = 0
+    fail_times: int = 0
+    exception_type: Any = ValueError
+    _calls: int = PrivateAttr(0)
+
+    @Flow.call
+    def __call__(self, context: DateContext) -> MyResult:
+        self._calls += 1
+        if self._calls <= self.fail_times:
+            raise self.exception_type(f"Expected raising on call {self._calls}")
+        return MyResult(x=context.date.day + self.offset)
+
+    @property
+    def calls(self) -> int:
+        return self._calls
+
+
 class MyDateRangeCallable(CallableModel):
     """Set up some more complex model that references the underlying ones"""
 
