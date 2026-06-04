@@ -20,9 +20,8 @@ log = logging.getLogger(__name__)
 class RetryError(Exception):
     """Raised when a ``RetryEvaluator`` exhausts all attempts and ``reraise`` is ``False``.
 
-    The original exception that caused the final failure is available both as the
-    ``__cause__`` of this error (via ``raise ... from``) and as the ``last_exception``
-    attribute.
+    The original exception that caused the final failure is available both as the ``__cause__`` of this error (via ``raise ... from``) and as the
+    ``last_exception`` attribute.
     """
 
     def __init__(self, message: str, attempts: int, last_exception: BaseException):
@@ -34,40 +33,29 @@ class RetryError(Exception):
 class RetryEvaluator(EvaluatorBase):
     """Evaluator that retries the evaluation of a callable model on failure.
 
-    Retry behaviour is controlled by a stop condition (``max_attempts`` and/or
-    ``max_delay``) and a wait strategy that supports exponential backoff with
-    optional jitter, inspired by `tenacity <https://github.com/jd/tenacity>`_.
+    Retry behaviour is controlled by a stop condition (``max_attempts`` and/or ``max_delay``) and a wait strategy that supports exponential
+    backoff with optional jitter, inspired by `tenacity <https://github.com/jd/tenacity>`_.
 
-    The evaluator is *transparent*: a successful evaluation returns exactly the
-    same value as evaluating the wrapped context directly, so it does not affect
-    cache keys or dependency-graph deduplication.
+    The evaluator is *transparent*: a successful evaluation returns exactly the same value as evaluating the wrapped context directly, so it does
+    not affect cache keys or dependency-graph deduplication.
 
     Concurrency / parallelism:
-        This evaluator keeps **no** mutable retry bookkeeping on the instance; all
-        per-call state (attempt counter, elapsed time, last exception) lives in
-        local variables. The same ``RetryEvaluator`` instance can therefore be
-        shared safely across threads and is safe to combine with evaluators that
-        execute callables in parallel (e.g. a Ray or Celery evaluator).
+        This evaluator keeps **no** mutable retry bookkeeping on the instance; all per-call state (attempt counter, elapsed time, last exception)
+        lives in local variables. The same ``RetryEvaluator`` instance can therefore be shared safely across threads and is safe to combine with
+        evaluators that execute callables in parallel (e.g. a Ray or Celery evaluator).
 
-        All fields are primitives or serializable ``PyObjectPath`` references, so
-        the evaluator can be pickled and shipped to remote workers. Where the
-        retry happens depends on composition order:
+        All fields are primitives or serializable ``PyObjectPath`` references, so the evaluator can be pickled and shipped to remote workers.
+        Where the retry happens depends on composition order:
 
-        - Place ``RetryEvaluator`` *inside* a parallel evaluator to retry each
-          task independently on the worker that runs it.
-        - Place ``RetryEvaluator`` *outside* a parallel evaluator to retry the
-          whole parallel dispatch as a single unit.
+        - Place ``RetryEvaluator`` *inside* a parallel evaluator to retry each task independently on the worker that runs it.
+        - Place ``RetryEvaluator`` *outside* a parallel evaluator to retry the whole parallel dispatch as a single unit.
 
     Selecting which models to retry:
-        By default every model evaluated through this evaluator is eligible for
-        retry. When the evaluator is applied as part of a single global chain
-        (e.g. combined with logging/caching), use ``include_model_types`` and/or
-        ``exclude_model_types`` to limit retries to specific ``CallableModel``
-        types. Non-selected models are passed straight through (evaluated once,
-        no retry). For coarser targeting you can instead scope the evaluator with
-        ``FlowOptionsOverride(models=..., model_types=...)`` or a per-call
-        ``_options={"evaluator": ...}`` override, or pin it on an individual model
-        via its ``meta.options``.
+        By default every model evaluated through this evaluator is eligible for retry. When the evaluator is applied as part of a single global
+        chain (e.g. combined with logging/caching), use ``include_model_types`` and/or ``exclude_model_types`` to limit retries to specific
+        ``CallableModel`` types. Non-selected models are passed straight through (evaluated once, no retry). For coarser targeting you can instead
+        scope the evaluator with ``FlowOptionsOverride(models=..., model_types=...)`` or a per-call ``_options={"evaluator": ...}`` override, or
+        pin it on an individual model via its ``meta.options``.
     """
 
     max_attempts: int = Field(default=3, ge=1, description="Maximum number of attempts (including the first) before giving up.")
