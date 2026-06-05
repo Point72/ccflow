@@ -411,6 +411,13 @@ def test_cfg_run_cli(mocker, capsys):
     """Test cfg_run cli entrypoint using the ETL example config"""
     from ccflow.utils.hydra import cfg_run
 
+    # Mock the network call so the test does not depend on external connectivity
+    mock_response = mocker.Mock()
+    mock_response.text = "<html></html>"
+    mock_response.raise_for_status.return_value = None
+    mock_client = mocker.patch("ccflow.examples.etl.models.Client")
+    mock_client.return_value.get.return_value = mock_response
+
     # We'll load up the model registry using the normal hydra functions
     with initialize(version_base=None, config_path="../../examples/etl/config"):
         cfg = compose(config_name="base", overrides=["+callable=extract", "+context=[]"])
