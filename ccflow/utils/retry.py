@@ -119,6 +119,7 @@ class RetryPolicy(BaseModel):
         """
         total_wait = 0.0
         last_exception: Optional[Exception] = None
+        budget_exceeded = False
         for attempt in range(1, self.max_attempts + 1):
             try:
                 return attempt_fn()
@@ -130,6 +131,7 @@ class RetryPolicy(BaseModel):
                     break
                 delay = self._compute_delay(attempt)
                 if self.max_delay is not None and total_wait + delay > self.max_delay:
+                    budget_exceeded = True
                     break
                 log.log(
                     self.log_level,
@@ -146,7 +148,10 @@ class RetryPolicy(BaseModel):
                     time.sleep(delay)
                     total_wait += delay
 
-        message = f"Retry attempts exhausted after {attempt} attempt(s) for {name}."
+        if budget_exceeded:
+            message = f"Retry stopped after {attempt} attempt(s) for {name}: max_delay budget exceeded."
+        else:
+            message = f"Retry attempts exhausted after {attempt}/{self.max_attempts} attempt(s) for {name}."
         assert last_exception is not None  # The loop only breaks/exits after at least one caught exception.
         if self.reraise:
             raise last_exception

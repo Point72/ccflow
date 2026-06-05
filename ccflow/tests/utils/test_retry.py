@@ -51,8 +51,20 @@ class TestRetryPolicy(TestCase):
         with self.assertRaises(RetryError) as ctx:
             self._run(policy, attempt)
         self.assertEqual(ctx.exception.attempts, 2)
+        self.assertIn("attempts exhausted", str(ctx.exception))
         self.assertIsInstance(ctx.exception.last_exception, ValueError)
         self.assertIsInstance(ctx.exception.__cause__, ValueError)
+
+    def test_max_delay_budget_exceeded_message(self):
+        # When the loop terminates because the max_delay budget would be exceeded (rather than
+        # running out of attempts), the failure message distinguishes the two cases.
+        policy = RetryPolicy(max_attempts=10, wait_initial=5.0, wait_multiplier=1.0, max_delay=1.0, reraise=False)
+        attempt = _flaky(5, ValueError("boom"))
+        with patch("ccflow.utils.retry.time.sleep"):
+            with self.assertRaises(RetryError) as ctx:
+                self._run(policy, attempt)
+        self.assertIn("max_delay budget exceeded", str(ctx.exception))
+        self.assertEqual(ctx.exception.attempts, 1)
 
     def test_non_matching_exception_not_retried(self):
         policy = RetryPolicy(max_attempts=3, retry_exceptions=[ValueError])

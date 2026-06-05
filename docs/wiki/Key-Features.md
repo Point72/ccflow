@@ -128,7 +128,7 @@ retry = RetryEvaluator(
     wait_max=30.0,          # cap any single wait at 30s
     wait_jitter=0.25,       # add up to 0.25s of random jitter
     max_delay=120.0,        # stop retrying once cumulative waiting would exceed 2 minutes
-    retry_exceptions=["builtins.TimeoutError", "builtins.ConnectionError"],
+    retry_exceptions=[TimeoutError, ConnectionError],
 )
 
 with FlowOptionsOverride(options={"evaluator": retry}):
@@ -137,9 +137,10 @@ with FlowOptionsOverride(options={"evaluator": retry}):
 
 > [!NOTE]
 >
-> `retry_exceptions` and `no_retry_exceptions` accept any importable exception path. The paths are
-> validated (imported) eagerly, so a third-party exception such as `"httpx.ConnectError"` requires
-> that package to be installed.
+> `retry_exceptions` and `no_retry_exceptions` accept either a bare exception class (as shown above,
+> the natural form in Python) or any importable exception path as a string (e.g.
+> `"httpx.ConnectError"`, the form to use in YAML/Hydra config files). The paths are validated
+> (imported) eagerly, so a third-party exception requires that package to be installed.
 
 The evaluator is *transparent* (a successful result is identical to evaluating the model directly,
 so caching and dependency graphs are unaffected) and holds no mutable per-call state, so a single
@@ -170,19 +171,6 @@ ways to control which tasks are retried and which are not, from coarse to fine:
 
 - **Pin it on the model.** Set `model.meta.options` so a model always carries its own retry policy.
 
-- **Select inside the evaluator.** When retry is part of a single global evaluator chain (e.g.
-  combined with logging/caching), use `include_model_types` / `exclude_model_types` to decide which
-  models the *same* evaluator retries. Non-selected models are evaluated once and passed straight
-  through (`exclude_model_types` wins over `include_model_types`):
-
-  ```python
-  retry = RetryEvaluator(
-      max_attempts=5,
-      include_model_types=["mypkg.FetchFromApi", "mypkg.CallService"],  # only these are retried
-      exclude_model_types=["mypkg.PureTransform"],                      # never retried
-  )
-  ```
-
 #### `RetryModel`: retrying a single model declaratively
 
 `RetryEvaluator` is the cross-cutting ("how to run") way to add retries: it is configured at
@@ -200,7 +188,7 @@ flaky = RetryModel(
     model=fetch_from_api,   # any CallableModel
     max_attempts=5,
     wait_initial=0.5,
-    retry_exceptions=["builtins.TimeoutError", "builtins.ConnectionError"],
+    retry_exceptions=[TimeoutError, ConnectionError],
 )
 
 result = flaky(my_context)  # same context/result types as fetch_from_api
