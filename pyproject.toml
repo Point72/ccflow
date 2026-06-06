@@ -56,6 +56,7 @@ full = [
     "cexprtk",
     "duckdb",
     "IPython",
+    "opentelemetry-api",
     "panel",
     "panel_material_ui",
     "plotly",
@@ -64,6 +65,9 @@ full = [
     "scipy",
     "smart_open",
     "xarray",
+]
+otel = [
+    "opentelemetry-api",
 ]
 develop = [
     "build",
@@ -93,6 +97,8 @@ develop = [
     "scipy",
     "smart_open",
     "xarray",
+    # Reporting deps
+    "opentelemetry-api",
     # Test deps
     "beautifulsoup4",
     "httpx",
@@ -105,6 +111,7 @@ develop = [
 test = [
     "beautifulsoup4",
     "httpx",
+    "opentelemetry-api",
     "pytest",
     "pytest-asyncio",
     "pytest-cov",
