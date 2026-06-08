@@ -96,6 +96,8 @@ The following table summarizes the "evaluator" models.
 | `MultiEvaluator`                    | `ccflow.evaluators` | An evaluator that combines multiple evaluators.                                                                                |
 | `GraphEvaluator`                    | `ccflow.evaluators` | Evaluator that evaluates the dependency graph of callable models in topologically sorted order.                                |
 | `RetryEvaluator`                    | `ccflow.evaluators` | Evaluator that retries the evaluation of a callable model on failure, with exponential backoff and jitter.                     |
+| `ReportingEvaluator`                | `ccflow.evaluators` | Transparent evaluator that reports telemetry (tracing / metrics / alerting) about each evaluation in its scope.                |
+| `DryRunEvaluator`                   | `ccflow.evaluators` | Evaluator that walks the dependency graph and reports a plan *without running any model bodies*.                               |
 | `ChunkedDateRangeEvaluator`         | *Coming Soon!*      |                                                                                                                                |
 | `ChunkedDateRangeResultsAggregator` | *Coming Soon!*      |                                                                                                                                |
 | `RayChunkedDateRangeEvaluator`      | *Coming Soon!*      |                                                                                                                                |
@@ -196,6 +198,102 @@ result = flaky(my_context)  # same context/result types as fetch_from_api
 
 Use `RetryEvaluator` for runtime, cross-cutting retries (including across parallel evaluators), and
 `RetryModel` when the retry policy is a declarative, visible part of the model graph.
+
+### Reporting, tracing & dry-run
+
+Reporting is *telemetry about the evaluation itself* — which model ran, on what context, how long it
+took, how it relates to other evaluations (parent/child spans), and whether it failed. It is
+strictly **transparent**: it never changes the value returned by the wrapped evaluation, so caching
+and dependency graphs are unaffected. This is what distinguishes reporting from *publishing*:
+
+| Concern        | Acts on                     | Changes the result? | Example                                |
+| :------------- | :-------------------------- | :------------------ | :------------------------------------- |
+| **Reporting**  | the *evaluation* (metadata) | No (transparent)    | spans, latency metrics, failure alerts |
+| **Publishing** | the *result payload*        | No, but consumes it | write a DataFrame to disk / a database |
+
+Like retries, reporting comes in both the cross-cutting (`ReportingEvaluator`) and structural
+(`ReportingModel`) forms, both built on a shared `ReportingPolicy`. Events are delivered to a
+pluggable `Reporter` sink. Signal-specific subclasses specialise the policy:
+
+- **Tracing** (`TracingReportingEvaluator` / `TracingReportingModel`) — spans with parent/child
+  correlation. `OpenTelemetryTracingReportingEvaluator` (aliased `OpenTelemetryEvaluator`) opens
+  real OpenTelemetry spans (install the optional extra: `pip install ccflow[otel]`).
+- **Metrics** (`MetricsReportingEvaluator` / `MetricsReportingModel`) — success/error counters and a
+  latency histogram. `OpenTelemetryMetricsReportingEvaluator` pushes to OpenTelemetry instruments.
+- **Alerting** (`AlertsReportingEvaluator` / `AlertsReportingModel`) — prioritised alerts with
+  `P1`–`P5` tags (`AlertPriority`), emitted on failure (and optionally on recovery).
+
+```python
+from ccflow import FlowOptionsOverride
+from ccflow.evaluators import TracingReportingEvaluator
+from ccflow.utils.reporting import InMemoryReporter, ReportPhase
+
+reporter = InMemoryReporter()
+tracing = TracingReportingEvaluator(reporter=reporter)
+
+with FlowOptionsOverride(options={"evaluator": tracing}):
+    result = my_model(my_context)          # result is unchanged
+
+# reporter.events is a list of structured ReportEvent objects forming a span tree
+phases = [e.phase for e in reporter.events]   # e.g. [START, SUCCESS, END, ...]
+```
+
+Available reporters (`ccflow.utils.reporting`): `NoOpReporter`, `InMemoryReporter` (testing /
+introspection), `LoggingReporter` (writes events to a logger), `CompositeReporter` (fan-out), and
+`UIReporter` (a thread-safe, bounded buffer drained by an observability UI). `ReportingStateStore`
+folds a stream of events into per-node state (keyed by `span_id`) so a UI can reconstruct the live
+span tree, and `run_scope(...)` tags all events emitted within a run with a shared `run_id`.
+
+> [!NOTE]
+>
+> Current evaluators and models emit **node** lifecycle events (`START`, `SUCCESS`, `ERROR`, `RETRY`,
+> `GIVE_UP`, `END`, plus `QUEUED` / `SKIPPED` from `DryRunEvaluator`). The run/graph envelope phases
+> `RUN_STARTED`, `RUN_FINISHED` and `GRAPH_DISCOVERED` are **reserved** for a future explicit
+> observer layer — `ReportingStateStore` already folds them, but no evaluator emits them today, so
+> `run_scope(...)` gives you a shared `run_id` on node events rather than a complete run envelope.
+
+Each `ReportEvent` carries a structured `extra` dict whose keys depend on the signal/source:
+
+| Source                          | `extra` keys          | Meaning                                            |
+| :------------------------------ | :-------------------- | :------------------------------------------------- |
+| `DryRunEvaluator`               | `node_key`, `dry_run` | Logical node identity (equals `cache_key()`); flag |
+| `MetricsReportingEvaluator`     | `metric`, `value`     | Metric name (counter/histogram) and its value      |
+| Retry lifecycle (`RetryPolicy`) | `delay`, `reason`     | Backoff before next attempt; give-up reason        |
+
+> [!NOTE]
+>
+> `LoggingEvaluator` — the default evaluator — is itself a reporting evaluator built on a
+> `LoggingPolicy`, so it participates in the same span tree. Configure a `reporter` on it to receive
+> structured events in addition to its log lines. A structural `LoggingModel` is also available.
+
+Placeholders for additional backends (`Datadog*`, `Opsgenie*`, `JSMAlerts*`, `NewRelic*`) are defined
+so they can be referenced in config and tracked, but raise `NotImplementedError` until implemented.
+
+#### Previewing a run with `DryRunEvaluator`
+
+`DryRunEvaluator` *plans* an evaluation: it walks the dependency graph (which evaluates the cheap
+`__deps__` declarations but never a model body), emits `QUEUED` then `SKIPPED` events for every node
+with a parent/child span tree mirroring the graph, and returns a synthetic result without running
+anything. This is useful for previewing what a run would do and for driving a UI.
+
+```python
+from ccflow.evaluators import DryRunEvaluator
+from ccflow.utils.reporting import InMemoryReporter
+
+reporter = InMemoryReporter()
+with FlowOptionsOverride(options={"evaluator": DryRunEvaluator(reporter=reporter)}):
+    pipeline(my_context)                   # no model bodies run
+
+planned = [(e.model_name, e.phase) for e in reporter.events]
+```
+
+> [!WARNING]
+>
+> With the default `synthetic_result=True`, the value returned by a dry run is built with
+> `model_construct`: required fields may be **unset** and validators do **not** run. Treat it purely
+> as a planning placeholder for previews/UIs — do **not** feed it into downstream computation. Because
+> the return value differs from a real run, `DryRunEvaluator` is **not** transparent in this mode, so
+> it participates in cache keys and will not contaminate a cached real result.
 
 ## Results
 

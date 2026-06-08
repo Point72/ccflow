@@ -1,5 +1,6 @@
 import logging
 import random
+import secrets
 import time
 from typing import Callable, List, Optional, Union
 
@@ -7,6 +8,7 @@ from pydantic import Field, field_validator
 
 from ..base import BaseModel, ResultType
 from ..exttypes import PyObjectPath
+from .reporting import Reporter, ReportEvent, ReportPhase, current_run_id, current_span_depth, current_span_id
 
 __all__ = [
     "RetryError",
@@ -71,6 +73,10 @@ class RetryPolicy(BaseModel):
         default=True, description="If True, re-raise the last underlying exception on failure. If False, raise a RetryError that wraps it."
     )
     log_level: int = Field(default=logging.WARNING, description="Log level used to report each retry attempt.")
+    reporter: Optional[Reporter] = Field(
+        default=None,
+        description="Optional reporting sink that receives retry lifecycle events (failure, retry, success, give-up). See ccflow.utils.reporting.",
+    )
 
     @field_validator("log_level", mode="before")
     @classmethod
@@ -109,6 +115,51 @@ class RetryPolicy(BaseModel):
             delay += jitter_value
         return max(delay, 0.0)
 
+    def _emit_retry(
+        self,
+        phase: ReportPhase,
+        *,
+        name: str,
+        detail: str,
+        span_id: Optional[str],
+        attempt: int,
+        exc: Optional[BaseException] = None,
+        delay: Optional[float] = None,
+        reason: Optional[str] = None,
+    ) -> None:
+        """Emit a single retry-lifecycle event to the configured reporter (no-op if unset)."""
+        if self.reporter is None or span_id is None:
+            return
+        extra: dict = {}
+        if delay is not None:
+            extra["delay"] = delay
+        if reason is not None:
+            extra["reason"] = reason
+        parent_span_id = current_span_id()
+        parent_depth = current_span_depth()
+        depth = parent_depth + 1 if parent_depth is not None else 0
+        try:
+            self.reporter.emit(
+                ReportEvent(
+                    phase=phase,
+                    model_name=name,
+                    fn="__call__",
+                    context_repr=detail,
+                    span_id=span_id,
+                    parent_span_id=parent_span_id,
+                    run_id=current_run_id(),
+                    depth=depth,
+                    attempt=attempt,
+                    max_attempts=self.max_attempts,
+                    exception_type=type(exc).__name__ if exc is not None else None,
+                    exception_message=str(exc) if exc is not None else None,
+                    extra=extra,
+                )
+            )
+        except Exception:
+            # Retry reporting is best-effort: a broken sink must never change retry behaviour.
+            log.exception("Reporter %r failed to emit %s retry event; continuing.", type(self.reporter).__name__, phase.value)
+
     def _run_with_retry(self, attempt_fn: Callable[[], ResultType], name: str, detail: str) -> ResultType:
         """Run ``attempt_fn`` with retries according to this policy.
 
@@ -120,11 +171,14 @@ class RetryPolicy(BaseModel):
         total_wait = 0.0
         last_exception: Optional[Exception] = None
         budget_exceeded = False
+        span_id = secrets.token_hex(8) if self.reporter is not None else None
         for attempt in range(1, self.max_attempts + 1):
             try:
-                return attempt_fn()
+                result = attempt_fn()
             except Exception as exc:
+                self._emit_retry(ReportPhase.ERROR, name=name, detail=detail, span_id=span_id, attempt=attempt, exc=exc)
                 if not self._should_retry(exc):
+                    self._emit_retry(ReportPhase.GIVE_UP, name=name, detail=detail, span_id=span_id, attempt=attempt, exc=exc, reason="non-retryable")
                     raise
                 last_exception = exc
                 if attempt >= self.max_attempts:
@@ -133,6 +187,7 @@ class RetryPolicy(BaseModel):
                 if self.max_delay is not None and total_wait + delay > self.max_delay:
                     budget_exceeded = True
                     break
+                self._emit_retry(ReportPhase.RETRY, name=name, detail=detail, span_id=span_id, attempt=attempt, exc=exc, delay=delay)
                 log.log(
                     self.log_level,
                     "[%s]: Attempt %d/%d (%s) failed with %s: %s. Retrying in %.3fs.",
@@ -147,12 +202,18 @@ class RetryPolicy(BaseModel):
                 if delay > 0:
                     time.sleep(delay)
                     total_wait += delay
+            else:
+                self._emit_retry(ReportPhase.SUCCESS, name=name, detail=detail, span_id=span_id, attempt=attempt)
+                return result
 
         if budget_exceeded:
             message = f"Retry stopped after {attempt} attempt(s) for {name}: max_delay budget exceeded."
+            reason = "max_delay budget exceeded"
         else:
             message = f"Retry attempts exhausted after {attempt}/{self.max_attempts} attempt(s) for {name}."
+            reason = "attempts exhausted"
         assert last_exception is not None  # The loop only breaks/exits after at least one caught exception.
+        self._emit_retry(ReportPhase.GIVE_UP, name=name, detail=detail, span_id=span_id, attempt=attempt, exc=last_exception, reason=reason)
         if self.reraise:
             raise last_exception
         raise RetryError(message, attempts=attempt, last_exception=last_exception) from last_exception

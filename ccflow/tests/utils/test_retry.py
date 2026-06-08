@@ -160,3 +160,110 @@ class TestRetryPolicy(TestCase):
         dumped = policy.model_dump()
         self.assertEqual(dumped["retry_exceptions"], [PyObjectPath.validate(ValueError), PyObjectPath.validate(KeyError)])
         self.assertEqual(RetryPolicy.model_validate(dumped), policy)
+
+
+class TestRetryReporting(TestCase):
+    def _run(self, policy: RetryPolicy, attempt_fn: Callable[[], str]) -> str:
+        return policy._run_with_retry(attempt_fn, name="test", detail="__call__ on ctx")
+
+    def test_no_reporter_no_events(self):
+        # Reporting is fully opt-in; with no reporter there is zero overhead and no events.
+        policy = RetryPolicy(max_attempts=3)
+        attempt = _flaky(1, ValueError("boom"))
+        self.assertEqual(self._run(policy, attempt), "ok")  # does not raise
+
+    def test_success_first_try_reports_success(self):
+        from ccflow.utils.reporting import InMemoryReporter, ReportPhase
+
+        reporter = InMemoryReporter()
+        policy = RetryPolicy(max_attempts=3, reporter=reporter)
+        self._run(policy, _flaky(0, ValueError("boom")))
+        self.assertEqual([e.phase for e in reporter.events], [ReportPhase.SUCCESS])
+        self.assertEqual(reporter.events[0].attempt, 1)
+        self.assertEqual(reporter.events[0].max_attempts, 3)
+
+    def test_retry_then_succeed_lifecycle(self):
+        from ccflow.utils.reporting import InMemoryReporter, ReportPhase
+
+        reporter = InMemoryReporter()
+        policy = RetryPolicy(max_attempts=3, reporter=reporter)
+        self._run(policy, _flaky(2, ValueError("boom")))
+        # Two failures, each producing ERROR then RETRY, then a final SUCCESS.
+        self.assertEqual(
+            [e.phase for e in reporter.events],
+            [ReportPhase.ERROR, ReportPhase.RETRY, ReportPhase.ERROR, ReportPhase.RETRY, ReportPhase.SUCCESS],
+        )
+
+    def test_events_tagged_with_run_id(self):
+        from ccflow.utils.reporting import InMemoryReporter, run_scope
+
+        reporter = InMemoryReporter()
+        policy = RetryPolicy(max_attempts=3, reporter=reporter)
+        with run_scope("R"):
+            self._run(policy, _flaky(2, ValueError("boom")))
+        self.assertTrue(reporter.events)
+        self.assertTrue(all(e.run_id == "R" for e in reporter.events))
+
+    def test_events_nested_under_reporting_span_have_parent_and_depth(self):
+        from ccflow.utils.reporting import InMemoryReporter, ReportingPolicy
+
+        reporter = InMemoryReporter()
+        retry = RetryPolicy(max_attempts=3, reporter=reporter)
+        outer = ReportingPolicy(reporter=reporter)
+
+        def attempt() -> str:
+            return self._run(retry, _flaky(2, ValueError("boom")))
+
+        # Run the retry inside an active reporting span; retry events should nest one level deeper.
+        outer._run_with_reporting(attempt, model_name="outer", model_type="pkg.outer", fn="__call__", context="c")
+        outer_start = next(e for e in reporter.events if e.model_name == "outer" and e.phase.name == "START")
+        retry_events = [e for e in reporter.events if e.model_name == "test"]
+        self.assertTrue(retry_events)
+        for event in retry_events:
+            self.assertEqual(event.parent_span_id, outer_start.span_id)
+            self.assertEqual(event.depth, outer_start.depth + 1)
+
+    def test_reporter_failure_does_not_break_retry(self):
+        from ccflow.utils.reporting import NoOpReporter
+
+        class BrokenReporter(NoOpReporter):
+            def emit(self, event):
+                raise RuntimeError("sink down")
+
+        policy = RetryPolicy(max_attempts=3, reporter=BrokenReporter())
+        with self.assertLogs("ccflow.utils.retry", level="ERROR"):
+            self.assertEqual(self._run(policy, _flaky(1, ValueError("boom"))), "ok")
+
+    def test_give_up_on_exhaustion(self):
+        from ccflow.utils.reporting import InMemoryReporter, ReportPhase
+
+        reporter = InMemoryReporter()
+        policy = RetryPolicy(max_attempts=2, reporter=reporter)
+        with self.assertRaises(ValueError):
+            self._run(policy, _flaky(5, ValueError("boom")))
+        phases = [e.phase for e in reporter.events]
+        self.assertEqual(phases[-1], ReportPhase.GIVE_UP)
+        give_up = reporter.events[-1]
+        self.assertEqual(give_up.extra["reason"], "attempts exhausted")
+
+    def test_give_up_on_non_retryable(self):
+        from ccflow.utils.reporting import InMemoryReporter, ReportPhase
+
+        reporter = InMemoryReporter()
+        policy = RetryPolicy(max_attempts=3, retry_exceptions=[ValueError], reporter=reporter)
+        with self.assertRaises(KeyError):
+            self._run(policy, _flaky(5, KeyError("boom")))
+        self.assertEqual([e.phase for e in reporter.events], [ReportPhase.ERROR, ReportPhase.GIVE_UP])
+        self.assertEqual(reporter.events[-1].extra["reason"], "non-retryable")
+
+    def test_give_up_on_budget(self):
+        from ccflow.utils.reporting import InMemoryReporter, ReportPhase
+
+        reporter = InMemoryReporter()
+        policy = RetryPolicy(max_attempts=10, wait_initial=5.0, wait_multiplier=1.0, max_delay=1.0, reporter=reporter)
+        with patch("ccflow.utils.retry.time.sleep"):
+            with self.assertRaises(ValueError):
+                self._run(policy, _flaky(5, ValueError("boom")))
+        give_up = reporter.events[-1]
+        self.assertEqual(give_up.phase, ReportPhase.GIVE_UP)
+        self.assertEqual(give_up.extra["reason"], "max_delay budget exceeded")
