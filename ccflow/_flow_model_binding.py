@@ -487,10 +487,12 @@ def _pop_dep_marker(annotation: Any) -> Tuple[Any, bool]:
     base = args[0]
     if not metadata:
         return base, has_dep
-    # Python 3.10 cannot spell this as ``Annotated[base, *metadata]``. Keep
-    # non-Dep metadata, such as pydantic Field constraints, on the annotation
-    # used to validate literals and resolved dependency results.
-    return Annotated.__class_getitem__((base, *metadata)), has_dep
+    # Keep non-Dep metadata, such as pydantic Field constraints, on the annotation
+    # used to validate literals and resolved dependency results. Build the tuple
+    # first and subscript ``Annotated`` with it: ``Annotated[base, *metadata]`` is
+    # 3.11+-only syntax, and ``Annotated.__class_getitem__`` was removed in 3.14,
+    # but ``Annotated[(base, *metadata)]`` is portable across both.
+    return Annotated[(base, *metadata)], has_dep
 
 
 def _annotation_contains_dep(annotation: Any) -> bool:
