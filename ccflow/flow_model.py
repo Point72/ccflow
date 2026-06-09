@@ -928,6 +928,20 @@ def _generated_model_instance(stage: Any) -> Optional["_GeneratedFlowModelBase"]
     return None
 
 
+def _declared_context_type_for_model(model: CallableModel) -> Optional[Type[ContextBase]]:
+    """Return a generated model's declared ``context_type``, if any.
+
+    Generated ``@Flow.model`` instances expose ``FlowContext`` as their runtime
+    context type but may also declare a nominal ``context_type`` whose ordered
+    fields enable positional/string context shorthand.
+    """
+
+    generated = _generated_model_instance(model)
+    if generated is None:
+        return None
+    return type(generated).__flow_model_config__.declared_context_type
+
+
 def _model_context_contract(
     model: CallableModel,
 ) -> _ModelContextContract:
@@ -1897,6 +1911,17 @@ def _compute_context_from_explicit(model: CallableModel, context: Any, contract:
         if _context_matches_type(context, model.context_type):
             return context
         return _runtime_context_for_model(model, _context_values(context))
+    # Positional/string shorthand (e.g. `[start, end]` or "start,end", as used by
+    # Hydra `+context=[...]`) only carries field *order*, not names. A generated
+    # model's runtime context_type is the open FlowContext bag, which has no declared
+    # fields to zip against, so the shorthand would otherwise be silently dropped.
+    # When the model declares a context_type, validate the shorthand through it first
+    # (which applies the ordered `zip(model_fields, v)` mapping), then forward the
+    # named values into the FlowContext bag. Mappings already carry names and keep
+    # their existing path.
+    declared = _declared_context_type_for_model(model)
+    if declared is not None and not isinstance(context, Mapping):
+        return _runtime_context_for_model(model, _context_values(declared.model_validate(context)))
     return contract.runtime_context_type.model_validate(context)
 
 
