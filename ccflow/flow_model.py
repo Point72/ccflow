@@ -1868,35 +1868,56 @@ def _build_compute_context(model: CallableModel, context: Any, kwargs: Dict[str,
     ``compute`` is intentionally not a second constructor.  For generated models
     it only supplies contextual inputs; regular parameters and model_base fields
     must already be bound on the model instance.
+
+    This is a thin dispatcher: an explicit context object/value takes one path,
+    plain ``CallableModel`` instances take another, and generated ``@Flow.model``
+    instances take a third that enforces the compute()-only-supplies-context rule.
     """
 
     if context is not _UNSET and kwargs:
         raise TypeError("compute() accepts either one context object or contextual keyword inputs, but not both.")
 
-    ctx_type = model.context_type
-    _ctx_is_optional = _is_optional_context_type(ctx_type)
-
     contract = _model_context_contract(model)
 
     if context is not _UNSET:
-        if context is None and _ctx_is_optional:
-            return None
-        if isinstance(context, FlowContext):
-            return context
-        if isinstance(context, ContextBase):
-            if _context_matches_type(context, model.context_type):
-                return context
-            return _runtime_context_for_model(model, _context_values(context))
-        return contract.runtime_context_type.model_validate(context)
-
+        return _compute_context_from_explicit(model, context, contract)
     if contract.generated_model is None:
-        default_context = _plain_model_default_context(model)
-        if default_context is not _UNSET:
-            default_values = _plain_model_default_context_values(model, contract.runtime_context_type)
-            return _plain_model_compute_context_from_default(model, default_context, default_values, kwargs, contract.runtime_context_type)
-        if not kwargs and _ctx_is_optional:
-            return None
-        return contract.runtime_context_type.model_validate(kwargs)
+        return _compute_context_for_plain_model(model, kwargs, contract)
+    return _compute_context_for_generated_model(model, kwargs, contract)
+
+
+def _compute_context_from_explicit(model: CallableModel, context: Any, contract: "_ModelContextContract") -> Optional[ContextBase]:
+    """Build the runtime context from an explicit context object/value."""
+
+    if context is None and _is_optional_context_type(model.context_type):
+        return None
+    if isinstance(context, FlowContext):
+        return context
+    if isinstance(context, ContextBase):
+        if _context_matches_type(context, model.context_type):
+            return context
+        return _runtime_context_for_model(model, _context_values(context))
+    return contract.runtime_context_type.model_validate(context)
+
+
+def _compute_context_for_plain_model(model: CallableModel, kwargs: Dict[str, Any], contract: "_ModelContextContract") -> Optional[ContextBase]:
+    """Build the runtime context for a plain (non-generated) ``CallableModel``."""
+
+    default_context = _plain_model_default_context(model)
+    if default_context is not _UNSET:
+        default_values = _plain_model_default_context_values(model, contract.runtime_context_type)
+        return _plain_model_compute_context_from_default(model, default_context, default_values, kwargs, contract.runtime_context_type)
+    if not kwargs and _is_optional_context_type(model.context_type):
+        return None
+    return contract.runtime_context_type.model_validate(kwargs)
+
+
+def _compute_context_for_generated_model(model: CallableModel, kwargs: Dict[str, Any], contract: "_ModelContextContract") -> Optional[ContextBase]:
+    """Build the FlowContext bag for a generated ``@Flow.model`` instance.
+
+    ``compute`` only supplies contextual inputs, so keyword inputs that collide
+    with bound/unbound regular parameters or model_base fields are rejected.
+    """
 
     generated = contract.generated_model
     config = type(generated).__flow_model_config__
