@@ -75,6 +75,7 @@ class _ParsedAnnotation:
     base: Any
     is_lazy: bool
     is_from_context: bool
+    optional_context: bool = False
 
 
 @dataclass(frozen=True)
@@ -390,6 +391,7 @@ def _resolved_flow_signature(
 def _parse_annotation(annotation: Any) -> _ParsedAnnotation:
     is_lazy = False
     is_from_context = False
+    optional_context = False
 
     while get_origin(annotation) is Annotated:
         args = get_args(annotation)
@@ -400,12 +402,38 @@ def _parse_annotation(annotation: Any) -> _ParsedAnnotation:
             elif isinstance(metadata, _FromContextMarker):
                 is_from_context = True
 
+    # Detect markers nested inside a top-level Optional/Union, e.g.
+    # ``Optional[FromContext[int]]`` == ``Union[Annotated[int, FromContext], None]``.
+    # Such a parameter is contextual but not required: when absent from the runtime
+    # context it is bound to ``None`` (an implicit default synthesized in
+    # ``_analyze_flow_function``). This is distinct from ``FromContext[Optional[int]]``,
+    # which is required-in-context but may carry a ``None`` value.
+    if not is_from_context and not is_lazy and get_origin(annotation) in _UNION_ORIGINS:
+        members = get_args(annotation)
+        non_none = [member for member in members if member is not type(None)]
+        has_none = len(non_none) != len(members)
+        marked = [(member, _parse_annotation(member)) for member in non_none]
+        marker_members = [(member, parsed) for member, parsed in marked if parsed.is_from_context or parsed.is_lazy]
+        if marker_members:
+            if any(parsed.is_lazy for _, parsed in marker_members):
+                raise TypeError("Lazy[...] cannot be nested inside Optional/Union; mark the whole parameter as Lazy[T].")
+            if len(marker_members) != 1 or not has_none or len(non_none) != 1:
+                raise TypeError(
+                    "FromContext[...] inside a Union is only supported as Optional[FromContext[T]] "
+                    "(exactly one contextual member plus None). Use FromContext[Optional[T]] for a "
+                    "required-but-nullable contextual input."
+                )
+            inner = marker_members[0][1].base
+            annotation = Optional[inner]
+            is_from_context = True
+            optional_context = True
+
     if annotation is FromContext:
         raise TypeError("FromContext is an annotation marker; use FromContext[T] in @Flow.model signatures.")
     if annotation is Lazy:
         raise TypeError("Lazy is an annotation marker; use Lazy[T] in @Flow.model signatures.")
 
-    return _ParsedAnnotation(base=annotation, is_lazy=is_lazy, is_from_context=is_from_context)
+    return _ParsedAnnotation(base=annotation, is_lazy=is_lazy, is_from_context=is_from_context, optional_context=optional_context)
 
 
 def _strip_annotated(annotation: Any) -> Any:
@@ -520,14 +548,26 @@ def _analyze_flow_function(
         if parsed.is_from_context and has_default and is_model_dependency(param.default):
             raise TypeError(f"Parameter '{param.name}' is marked FromContext[...] and cannot default to a CallableModel.")
 
+        # ``Optional[FromContext[T]]`` is contextual with an implicit ``None`` default unless
+        # the signature already provides one. An explicit default always wins.
+        if has_default:
+            stored_has_default = True
+            stored_default = param.default
+        elif parsed.optional_context:
+            stored_has_default = True
+            stored_default = None
+        else:
+            stored_has_default = False
+            stored_default = _UNSET
+
         analyzed_params.append(
             _FlowModelParam(
                 name=param.name,
                 annotation=parsed.base,
                 is_contextual=parsed.is_from_context,
                 is_lazy=parsed.is_lazy,
-                has_function_default=has_default,
-                function_default=param.default if has_default else _UNSET,
+                has_function_default=stored_has_default,
+                function_default=stored_default,
             )
         )
 
