@@ -1,0 +1,29 @@
+# Parity config: a registered source referenced three equivalent ways.
+#
+# In ccflow a bare string field value is resolved from the model registry, so an
+# explicit `model_alias` wrapper, a bare-string alias, and a root-relative `/name`
+# alias should all dereference to the SAME registered model instance.
+
+alias_source:
+    _target_: ccflow.tests.flow_model_hydra_fixtures.data_source
+    base_value: 100
+
+# 1. Explicit Hydra wrapper form.
+via_model_alias:
+    _target_: ccflow.tests.flow_model_hydra_fixtures.data_transformer
+    source:
+        _target_: ccflow.compose.model_alias
+        model_name: alias_source
+    factor: 3
+
+# 2. Bare-string registry alias.
+via_bare_string:
+    _target_: ccflow.tests.flow_model_hydra_fixtures.data_transformer
+    source: alias_source
+    factor: 3
+
+# 3. Root-relative registry alias.
+via_root_relative:
+    _target_: ccflow.tests.flow_model_hydra_fixtures.data_transformer
+    source: /alias_source
+    factor: 3
