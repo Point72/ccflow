@@ -507,6 +507,11 @@ class Flow(PydanticBaseModel):
                 applies the returned decorator.
             context_type: Optional ``ContextBase`` subclass used to validate
                 ``FromContext[...]`` fields together.
+            strict: When ``context_type`` is given, require a full bijection
+                between the declared context's required fields and the
+                ``FromContext[...]`` parameters. Defaults to ``False``, which
+                allows the declared context to be an omnibus superset carrying
+                extra fields the model does not consume.
             auto_unwrap: When ``True`` and the function's plain return value is
                 auto-wrapped in ``GenericResult[T]``, external
                 ``model.flow.compute(...)`` calls return the raw ``T`` value

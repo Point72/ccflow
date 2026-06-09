@@ -1086,6 +1086,17 @@ def _validate_declared_context_values(config: _FlowModelConfig, values: Dict[str
     if config.declared_context_type is None:
         return values
 
+    # Subset (omnibus) mode: when the declared context carries required fields this model
+    # does not consume, constructing the whole declared context from only the consumed
+    # fields would fail. Validate the consumed fields individually against their declared
+    # annotations instead. When the declared context is a full bijection (or only adds
+    # optional extras), construct the whole model so its cross-field validators still run.
+    declared_fields = config.declared_context_type.model_fields
+    consumed = set(config.contextual_param_names)
+    has_unconsumed_required = any(name not in consumed and info.is_required() for name, info in declared_fields.items())
+    if has_unconsumed_required:
+        return {param.name: _coerce_contextual_value(config, param, values[param.name], "Context field") for param in config.contextual_params}
+
     validated = config.declared_context_type.model_validate(values)
     return {param.name: getattr(validated, param.name) for param in config.contextual_params}
 
@@ -3037,6 +3048,7 @@ def flow_model(
     func: Optional[_AnyCallable] = None,
     *,
     context_type: Optional[Type[ContextBase]] = None,
+    strict: bool = False,
     auto_unwrap: bool = False,
     model_base: Type[CallableModel] = CallableModel,
     cacheable: Any = _UNSET,
@@ -3063,6 +3075,14 @@ def flow_model(
         context_type: Optional ``ContextBase`` subclass used to validate all
             contextual inputs together after individual ``FromContext[...]``
             fields are resolved.
+        strict: When ``context_type`` is given, controls how strictly the
+            ``FromContext[...]`` parameters must match the declared context. The
+            default (``False``) allows the declared context to be an "omnibus"
+            superset: every ``FromContext`` field must exist on the context with a
+            compatible type, but the context may also carry extra fields this
+            model does not consume. ``strict=True`` additionally requires that
+            every required field of ``context_type`` is declared as a
+            ``FromContext`` parameter (a full bijection).
         auto_unwrap: When ``True`` and ccflow auto-wraps a plain return
             annotation in ``GenericResult[T]``, external
             ``model.flow.compute(...)`` calls return the raw ``T`` value instead
@@ -3095,6 +3115,7 @@ def flow_model(
             context_type=context_type,
             auto_unwrap=auto_unwrap,
             is_model_dependency=_is_model_dependency,
+            strict=strict,
         )
         factory_kwargs = {
             "context_type": context_type,

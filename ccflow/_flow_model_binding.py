@@ -534,7 +534,12 @@ def _analyze_flow_function(
     return tuple(analyzed_params)
 
 
-def _validate_declared_context_type(context_type: Any, contextual_params: Tuple[_FlowModelParam, ...]) -> Type[ContextBase]:
+def _validate_declared_context_type(
+    context_type: Any,
+    contextual_params: Tuple[_FlowModelParam, ...],
+    *,
+    strict: bool = False,
+) -> Type[ContextBase]:
     if not isinstance(context_type, type) or not issubclass(context_type, ContextBase):
         raise TypeError(f"context_type must be a ContextBase subclass, got {context_type!r}")
 
@@ -545,14 +550,20 @@ def _validate_declared_context_type(context_type: Any, contextual_params: Tuple[
     if missing:
         raise TypeError(f"context_type {context_type.__name__} must define fields for all FromContext parameters: {', '.join(missing)}")
 
-    required_extra_fields = sorted(
-        name for name, info in context_fields.items() if name not in ContextBase.model_fields and name not in contextual_names and info.is_required()
-    )
-    if required_extra_fields:
-        raise TypeError(
-            f"context_type {context_type.__name__} has required fields that are not declared as FromContext parameters: "
-            f"{', '.join(required_extra_fields)}"
+    if strict:
+        # Strict mode requires a full bijection: every required context_type field must be a
+        # FromContext parameter. The default (subset) mode lets the declared context act as an
+        # "omnibus" carrier whose extra fields this model simply does not consume.
+        required_extra_fields = sorted(
+            name
+            for name, info in context_fields.items()
+            if name not in ContextBase.model_fields and name not in contextual_names and info.is_required()
         )
+        if required_extra_fields:
+            raise TypeError(
+                f"context_type {context_type.__name__} has required fields that are not declared as FromContext parameters: "
+                f"{', '.join(required_extra_fields)}"
+            )
 
     for param in contextual_params:
         ctx_field = context_fields[param.name]
@@ -572,6 +583,7 @@ def _analyze_flow_model(
     context_type: Optional[Type[ContextBase]],
     auto_unwrap: bool,
     is_model_dependency: Callable[[Any], bool],
+    strict: bool = False,
 ) -> _FlowModelConfig:
     parameters = _analyze_flow_function(fn, sig, is_model_dependency=is_model_dependency)
     reserved = sorted(param.name for param in parameters if param.name in _RESERVED_FLOW_MODEL_PARAM_NAMES)
@@ -584,7 +596,7 @@ def _analyze_flow_model(
     if context_type is not None and not contextual_params:
         raise TypeError("context_type=... requires FromContext[...] parameters.")
     if context_type is not None:
-        declared_context_type = _validate_declared_context_type(context_type, contextual_params)
+        declared_context_type = _validate_declared_context_type(context_type, contextual_params, strict=strict)
 
     if declared_context_type is not None:
         updated_params = []
