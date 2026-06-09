@@ -165,26 +165,28 @@ def _adjust_annotations(annotation):
 
 class _SerializeAsAnyMeta(ModelMetaclass):
     def __new__(self, name: str, bases: Tuple[type], namespaces: Dict[str, Any], **kwargs):
-        annotations = _namespace_annotations(namespaces)
+        # The metaclass must be referenced statically on BaseModel so that pyright
+        # recognizes it as a pydantic ModelMetaclass and synthesizes __init__ with
+        # field defaults. On pydantic >= 2.13 the annotation rewrite is unnecessary,
+        # so we gate it here rather than swapping the metaclass.
+        if not _USE_RUNTIME_POLYMORPHIC_SERIALIZATION:
+            annotations = _namespace_annotations(namespaces)
 
-        for base in bases:
-            for base_ in base.__mro__:
-                if base_ is PydanticBaseModel:
-                    annotations.update(base_.__annotations__)
+            for base in bases:
+                for base_ in base.__mro__:
+                    if base_ is PydanticBaseModel:
+                        annotations.update(base_.__annotations__)
 
-        for field, annotation in annotations.items():
-            if not field.startswith("__"):
-                annotations[field] = _adjust_annotations(annotation)
+            for field, annotation in annotations.items():
+                if not field.startswith("__"):
+                    annotations[field] = _adjust_annotations(annotation)
 
-        namespaces["__annotations__"] = annotations
+            namespaces["__annotations__"] = annotations
 
         return super().__new__(self, name, bases, namespaces, **kwargs)
 
 
-_BASE_MODEL_METACLASS = ModelMetaclass if _USE_RUNTIME_POLYMORPHIC_SERIALIZATION else _SerializeAsAnyMeta
-
-
-class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_BASE_MODEL_METACLASS):
+class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta):
     """BaseModel is a base class for all pydantic models within the ccflow framework.
 
     This gives us a way to add functionality to the framework, including
