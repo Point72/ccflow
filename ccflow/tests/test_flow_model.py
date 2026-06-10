@@ -24,6 +24,7 @@ from ccflow import (
     CallableModel,
     ContextBase,
     DateRangeContext,
+    Dep,
     EvaluatorBase,
     Flow,
     FlowContext,
@@ -384,6 +385,479 @@ def test_regular_param_containers_are_literals():
 
     with pytest.raises(TypeError, match="Field 'values'"):
         total(values=[source()])
+
+
+def test_regular_param_dep_marker_allows_marked_container_leaves():
+    calls = {"source": 0, "total": 0}
+
+    @Flow.model
+    def source(value: FromContext[int], offset: int) -> int:
+        calls["source"] += 1
+        return value + offset
+
+    @Flow.model
+    def total(values: list[Dep[int]]) -> int:
+        calls["total"] += 1
+        return sum(values)
+
+    model = total(values=[source(offset=1), "2", 3])
+    deps = model.__deps__(FlowContext(value=10))
+
+    assert len(deps) == 1
+    assert model.flow.compute(value=10).value == 16
+    assert calls == {"source": 1, "total": 1}
+
+
+def test_dep_marker_allows_nested_container_leaves_and_outer_coercion():
+    @Flow.model
+    def row_source(value: FromContext[int]) -> list[int]:
+        return [value, value + 1]
+
+    @Flow.model
+    def total(rows: list[Dep[list[int]]]) -> int:
+        return sum(sum(row) for row in rows)
+
+    model = total(rows=([4, 5], row_source()))
+
+    assert len(model.__deps__(FlowContext(value=10))) == 1
+    assert model.flow.compute(value=10).value == 30
+
+
+def test_dep_marker_preserves_whole_parameter_dependency_rule():
+    @Flow.model
+    def list_source(value: FromContext[int]) -> list[int]:
+        return [value, value * 2]
+
+    @Flow.model
+    def total(values: list[Dep[int]]) -> int:
+        return sum(values)
+
+    model = total(values=list_source())
+
+    assert tuple(dependency.path for dependency in model.flow.inspect(value=4).dependencies) == ("values",)
+    assert len(model.flow.inspect(value=4, dependencies="recursive").dependencies) == 1
+    assert model.flow.compute(value=4).value == 12
+
+
+def test_dep_marker_preserves_serialized_whole_parameter_dependency_rule():
+    @Flow.model
+    def list_source(value: FromContext[int]) -> list[int]:
+        return [value, value * 2]
+
+    @Flow.model
+    def total(values: list[Dep[int]]) -> int:
+        return sum(values)
+
+    for payload in (
+        list_source().model_dump(mode="python"),
+        list_source().model_dump(mode="python", by_alias=True),
+    ):
+        model = total(values=payload)
+
+        assert isinstance(model.values, CallableModel)
+        assert model.flow.compute(value=4).value == 12
+
+    restored = BaseModel.model_validate_json(total(values=list_source()).model_dump_json())
+
+    assert isinstance(restored.values, CallableModel)
+    assert restored.flow.compute(value=4).value == 12
+
+
+def test_dep_marker_preserves_serialized_dict_shaped_whole_parameter_dependency_rule():
+    @Flow.model
+    def dict_source(value: FromContext[int]) -> dict[str, Any]:
+        return {"x": value}
+
+    @Flow.model
+    def consume(values: dict[str, Dep[Any]]) -> int:
+        return values["x"]
+
+    for payload in (
+        dict_source().model_dump(mode="python"),
+        dict_source().model_dump(mode="python", by_alias=True),
+    ):
+        model = consume(values=payload)
+
+        assert isinstance(model.values, CallableModel)
+        assert len(model.__deps__(FlowContext(value=3))) == 1
+        assert model.flow.compute(value=3).value == 3
+
+    restored = BaseModel.model_validate_json(consume(values=dict_source()).model_dump_json())
+
+    assert isinstance(restored.values, CallableModel)
+    assert len(restored.__deps__(FlowContext(value=3))) == 1
+    assert restored.flow.compute(value=3).value == 3
+
+
+def test_dep_marker_preserves_registry_whole_parameter_dependency_rule():
+    @Flow.model
+    def list_source(value: FromContext[int]) -> list[int]:
+        return [value, value * 2]
+
+    @Flow.model
+    def total(values: list[Dep[int]]) -> int:
+        return sum(values)
+
+    registry = ModelRegistry.root().clear()
+    registry.add("source", list_source())
+    try:
+        model = total(values="source")
+
+        assert isinstance(model.values, CallableModel)
+        assert model.flow.compute(value=4).value == 12
+    finally:
+        registry.clear()
+
+
+def test_dep_marker_accepts_serialized_leaf_dependency():
+    @Flow.model
+    def source(value: FromContext[int], offset: int) -> int:
+        return value + offset
+
+    @Flow.model
+    def total(values: list[Dep[int]]) -> int:
+        return sum(values)
+
+    model = total(values=[source(offset=5).model_dump(mode="python")])
+
+    assert isinstance(model.values[0], CallableModel)
+    assert model.flow.compute(value=10).value == 15
+
+
+def test_dep_marker_allows_union_inside_marked_slot():
+    @Flow.model
+    def source(value: FromContext[int | None], offset: int) -> int | None:
+        if value is None:
+            return None
+        return value + offset
+
+    @Flow.model
+    def total(values: list[Dep[int | None]]) -> int:
+        return sum(value or 0 for value in values)
+
+    model = total(values=[source(offset=5), None, 2])
+
+    assert isinstance(model.values[0], CallableModel)
+    assert model.flow.compute(value=10).value == 17
+    assert model.flow.compute(value=None).value == 2
+
+
+def test_dep_marker_any_slot_keeps_non_restorable_serialized_looking_dicts():
+    @Flow.model
+    def collect(values: list[Dep[Any]]) -> list[Any]:
+        return values
+
+    payloads = [
+        {"type_": "missing.module.Model", "value": 1},
+        {"_target_": "missing.module.Model", "meta": {"name": ""}, "value": 2},
+    ]
+    model = collect(values=payloads)
+
+    assert model.values == payloads
+    assert model.flow.compute().value == payloads
+
+
+def test_dep_marker_malformed_serialized_leaf_preserves_literal_type_error():
+    @Flow.model
+    def source(value: FromContext[int], offset: int) -> int:
+        return value + offset
+
+    @Flow.model
+    def total(values: list[Dep[int]]) -> int:
+        return sum(values)
+
+    payload = source(offset=5).model_dump(mode="python")
+    payload["offset"] = "bad"
+
+    with pytest.raises(TypeError, match="Field 'values\\[0\\]': expected int, got dict"):
+        total(values=[payload])
+
+
+@pytest.mark.parametrize("by_alias", [False, True])
+def test_dep_marker_restores_serialized_leaf_dependency_for_any_slot(by_alias):
+    @Flow.model
+    def source(value: FromContext[int], offset: int) -> int:
+        return value + offset
+
+    @Flow.model
+    def collect(values: list[Dep[Any]]) -> list[Any]:
+        return values
+
+    payload = source(offset=5).model_dump(mode="python", by_alias=by_alias)
+    model = collect(values=[payload])
+
+    assert isinstance(model.values[0], CallableModel)
+    assert len(model.__deps__(FlowContext(value=10))) == 1
+    assert model.flow.compute(value=10).value == [15]
+
+
+@pytest.mark.parametrize("by_alias", [False, True])
+def test_dep_marker_preserves_literal_dicts_with_serialized_dependency_markers(by_alias):
+    @Flow.model
+    def source(value: FromContext[int], offset: int) -> int:
+        return value + offset
+
+    @Flow.model
+    def consume(items: list[Dep[dict[str, Any]]]) -> str:
+        return type(items[0]).__name__
+
+    payload = source(offset=5).model_dump(mode="python", by_alias=by_alias)
+    model = consume(items=[payload])
+
+    assert isinstance(model.items[0], dict)
+    assert model.flow.compute(value=10).value == "dict"
+
+
+def test_dep_marker_accepts_registry_leaf_dependency():
+    @Flow.model
+    def source(value: FromContext[int], offset: int) -> int:
+        return value + offset
+
+    @Flow.model
+    def total(values: list[Dep[int]]) -> int:
+        return sum(values)
+
+    registry = ModelRegistry.root().clear()
+    registry.add("source", source(offset=4))
+    try:
+        model = total(values=["source", "2"])
+        assert model.flow.compute(value=10).value == 16
+    finally:
+        registry.clear()
+
+
+def test_dep_marker_rejects_unknown_or_incompatible_registry_leaf_dependency():
+    @Flow.model
+    def total(values: list[Dep[int]]) -> int:
+        return sum(values)
+
+    registry = ModelRegistry.root().clear()
+    registry.add("payload", ExternalCcflowPayload(x=1))
+    try:
+        with pytest.raises(TypeError, match="Field 'values\\[0\\]': expected int, got str"):
+            total(values=["payload"])
+        with pytest.raises(TypeError, match="Field 'values\\[0\\]': expected int, got str"):
+            total(values=["missing"])
+    finally:
+        registry.clear()
+
+
+def test_dep_marker_allows_tuple_and_dict_value_slots():
+    @Flow.model
+    def source(value: FromContext[int], offset: int) -> int:
+        return value + offset
+
+    @Flow.model
+    def total(pair: tuple[Dep[int], str], values: dict[str, Dep[int]], many: tuple[Dep[int], ...]) -> int:
+        return pair[0] + sum(values.values()) + sum(many)
+
+    model = total(
+        pair=(source(offset=1), "ignored"),
+        values={"literal": "2", "model": source(offset=3)},
+        many=(source(offset=5), "7"),
+    )
+
+    assert len(model.__deps__(FlowContext(value=10))) == 3
+    assert model.flow.compute(value=10).value == 48
+
+
+def test_flow_inspect_reports_dep_marker_container_dependencies():
+    @Flow.model
+    def source(value: FromContext[int], offset: int) -> int:
+        return value + offset
+
+    @Flow.model
+    def total(pair: tuple[Dep[int], str], values: dict[str, Dep[int]], many: tuple[Dep[int], ...]) -> int:
+        return pair[0] + sum(values.values()) + sum(many)
+
+    model = total(
+        pair=(source(offset=1), "ignored"),
+        values={"literal": "2", "model": source(offset=3)},
+        many=(source(offset=5), "7"),
+    )
+
+    inspection = model.flow.inspect(value=10)
+
+    assert tuple(dependency.path for dependency in inspection.dependencies) == ("pair[0]", "values['model']", "many[0]")
+    assert tuple(dependency.context for dependency in inspection.dependencies) == (
+        FlowContext(value=10),
+        FlowContext(value=10),
+        FlowContext(value=10),
+    )
+    assert inspection.inputs["pair"].value is model.pair
+    assert model.flow.inspect(dependencies="none").dependencies == ()
+
+
+def test_flow_inspect_recurses_through_dep_marker_dependencies():
+    @Flow.model
+    def leaf(v: FromContext[int]) -> int:
+        return v
+
+    @Flow.model
+    def middle(x: int) -> int:
+        return x
+
+    @Flow.model
+    def total(values: list[Dep[int]]) -> int:
+        return sum(values)
+
+    model = total(values=[middle(x=leaf()), 2])
+
+    missing = model.flow.inspect(dependencies="recursive")
+    assert tuple(dependency.path for dependency in missing.dependencies) == ("values[0]", "values[0].x")
+    assert missing.dependencies[1].model.flow.inspect().required_inputs == {"v": int}
+
+    supplied = model.flow.inspect(v=3, dependencies="recursive")
+    assert tuple(dependency.context for dependency in supplied.dependencies) == (FlowContext(v=3), FlowContext(v=3))
+    leaf_with_context = supplied.dependencies[1].model.flow.inspect(supplied.dependencies[1].context)
+    assert leaf_with_context.inputs["v"].value == 3
+
+
+def test_dep_marker_fixed_tuple_arity_mismatch_does_not_walk_slots():
+    @Flow.model
+    def source(value: FromContext[int], offset: int) -> int:
+        return value + offset
+
+    @Flow.model
+    def total(pair: tuple[Dep[int], str]) -> int:
+        return pair[0]
+
+    with pytest.raises(TypeError, match="Field 'pair'"):
+        total(pair=(source(offset=1),))
+    with pytest.raises(TypeError, match="Field 'pair'"):
+        total(pair=(source(offset=1), "ok", 3))
+
+
+def test_dep_marker_participates_in_graph_and_effective_cache_identity():
+    calls = {"source": 0, "total": 0}
+
+    @Flow.model
+    def source(value: FromContext[int]) -> int:
+        calls["source"] += 1
+        return value * 10
+
+    @Flow.model
+    def total(values: list[Dep[int]], bonus: FromContext[int]) -> int:
+        calls["total"] += 1
+        return sum(values) + bonus
+
+    model = total(values=[source(), 2])
+    graph = get_dependency_graph(model.__call__.get_evaluation_context(model, FlowContext(value=3, bonus=7, unused="one")))
+    assert len(graph.ids) == 2
+
+    cache = MemoryCacheEvaluator()
+    with FlowOptionsOverride(options={"evaluator": cache, "cacheable": True}):
+        assert model.flow.compute(value=3, bonus=7, unused="one").value == 39
+        assert model.flow.compute(value=3, bonus=7, unused="two").value == 39
+
+    assert calls == {"source": 1, "total": 1}
+
+
+def test_dep_marker_preserves_other_annotated_metadata():
+    @Flow.model
+    def source(value: FromContext[int]) -> int:
+        return value
+
+    @Flow.model
+    def total(values: list[Dep[Annotated[int, Field(gt=0)]]]) -> int:
+        return sum(values)
+
+    assert total(values=["1", source()]).flow.compute(value=2).value == 3
+
+    with pytest.raises(TypeError, match="Field 'values"):
+        total(values=[-1])
+
+    with pytest.raises(TypeError, match="Regular parameter"):
+        total(values=[source()]).flow.compute(value=-1)
+
+
+def test_dep_marker_rejects_unmarked_or_dynamic_dependency_shapes():
+    @Flow.model
+    def source(value: FromContext[int]) -> int:
+        return value
+
+    @Flow.model
+    def row_source(value: FromContext[int]) -> list[int]:
+        return [value]
+
+    @Flow.model
+    def row_total(rows: list[Dep[list[int]]]) -> int:
+        return sum(sum(row) for row in rows)
+
+    with pytest.raises(TypeError, match="Field 'rows"):
+        row_total(rows=[[source()]])
+
+    with pytest.raises(TypeError, match="container values"):
+
+        @Flow.model
+        def top_level(values: Dep[int]) -> int:
+            return values
+
+    with pytest.raises(TypeError, match="cannot contain another Dep"):
+
+        @Flow.model
+        def nested(values: list[Dep[list[Dep[int]]]]) -> int:
+            return sum(sum(value) for value in values)
+
+    with pytest.raises(TypeError, match="dict keys"):
+
+        @Flow.model
+        def dict_key(values: dict[Dep[str], int]) -> int:
+            return sum(values.values())
+
+    with pytest.raises(TypeError, match="container values"):
+
+        @Flow.model
+        def set_values(values: set[Dep[int]]) -> int:
+            return sum(values)
+
+    with pytest.raises(TypeError, match="union"):
+
+        @Flow.model
+        def optional_values(values: list[Dep[int]] | None) -> int:
+            return 0 if values is None else sum(values)
+
+    with pytest.raises(TypeError, match="Lazy.*FromContext|FromContext.*Lazy"):
+
+        @Flow.model
+        def dep_from_context(values: list[Dep[FromContext[int]]]) -> int:
+            return sum(values)
+
+    with pytest.raises(TypeError, match="Lazy.*FromContext|FromContext.*Lazy"):
+
+        @Flow.model
+        def dep_lazy(values: list[Dep[Lazy[int]]]) -> int:
+            return sum(value() for value in values)
+
+    with pytest.raises(TypeError, match="cannot combine Dep.*FromContext"):
+
+        @Flow.model
+        def outer_from_context(values: FromContext[list[Dep[int]]]) -> int:
+            return sum(values)
+
+    with pytest.raises(TypeError, match="cannot combine Dep.*Lazy"):
+
+        @Flow.model
+        def outer_lazy(values: Lazy[list[Dep[int]]]) -> int:
+            return sum(values())
+
+
+def test_dep_marker_is_ordinary_annotation_for_handwritten_callable_model():
+    @Flow.model
+    def source(value: FromContext[int]) -> int:
+        return value
+
+    class Plain(CallableModel):
+        values: list[Dep[int]]
+
+        @Flow.call
+        def __call__(self, context: FlowContext) -> GenericResult[int]:
+            del context
+            return GenericResult(value=sum(self.values))
+
+    assert Plain(values=["1", 2]).flow.compute().value == 3
+    with pytest.raises(ValidationError):
+        Plain(values=[source()])
 
 
 def test_regular_param_upstream_dependency_coerced():
@@ -951,6 +1425,25 @@ def test_generated_models_plain_pickle_roundtrip():
     assert restored.flow.compute(b=7).value == 42
 
 
+def test_generated_model_dep_marker_pickle_roundtrip():
+    @Flow.model
+    def source(value: FromContext[int], offset: int) -> int:
+        return value + offset
+
+    @Flow.model
+    def total(values: list[Dep[int]]) -> int:
+        return sum(values)
+
+    model = total(values=[source(offset=2), 3])
+    context = FlowContext(value=10)
+
+    for dumps, loads in ((pickle.dumps, pickle.loads), (cloudpickle.dumps, cloudpickle.loads)):
+        restored = loads(dumps(model, protocol=5))
+
+        assert len(restored.__deps__(context)) == 1
+        assert restored.flow.compute(context).value == 15
+
+
 def test_generated_model_direct_call_plain_pickle_uses_serialized_factory(monkeypatch):
     module = ModuleType("ccflow_test_direct_model")
 
@@ -1219,6 +1712,26 @@ def test_generated_model_dependency_input_json_roundtrip():
 
     assert restored.flow.compute(value=10).value == 22
     assert isinstance(restored.source, CallableModel)
+
+
+def test_generated_model_dep_marker_json_roundtrip():
+    from ccflow import BaseModel
+
+    @Flow.model
+    def source(value: FromContext[int], offset: int) -> int:
+        return value + offset
+
+    @Flow.model
+    def total(values: list[Dep[int]]) -> int:
+        return sum(values)
+
+    model = total(values=[source(offset=1), 2])
+    restored = BaseModel.model_validate_json(model.model_dump_json())
+
+    assert type(restored) is type(model)
+    assert isinstance(restored.values[0], CallableModel)
+    assert len(restored.__deps__(FlowContext(value=10))) == 1
+    assert restored.flow.compute(value=10).value == 13
 
 
 def test_generated_model_lazy_dependency_input_json_roundtrip():
@@ -2012,7 +2525,7 @@ def test_flow_inspect_with_runtime_values_is_structural_not_a_validator():
     assert flow_model_module._is_unset_flow_input(missing_inspection.inputs["b"].value)
 
 
-def test_flow_inspect_reports_direct_dependencies_and_unused_context():
+def test_flow_inspect_reports_direct_dependencies_and_ignores_unknown_context_fields():
     @Flow.model
     def source(value: FromContext[int]) -> int:
         return value * 2
