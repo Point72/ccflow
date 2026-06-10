@@ -2721,11 +2721,19 @@ def test_additional_validation_and_hint_fallback_paths(monkeypatch):
         end_date: date
         label: str
 
+    # Under the default (strict=False) an unconsumed required field is allowed: the declared
+    # context acts as an omnibus superset. strict=True restores the full-bijection requirement.
     with pytest.raises(TypeError, match="has required fields that are not declared as FromContext parameters"):
 
-        @Flow.model(context_type=ExtraRequiredContext)
+        @Flow.model(context_type=ExtraRequiredContext, strict=True)
         def bad_extra(start_date: FromContext[date], end_date: FromContext[date]) -> int:
             return 0
+
+    @Flow.model(context_type=ExtraRequiredContext)
+    def ok_extra(start_date: FromContext[date], end_date: FromContext[date]) -> int:
+        return (end_date - start_date).days
+
+    assert ok_extra().flow.compute(ExtraRequiredContext(start_date=date(2025, 1, 1), end_date=date(2025, 1, 8), label="x")).value == 7
 
     class BadAnnotationContext(ContextBase):
         value: str
