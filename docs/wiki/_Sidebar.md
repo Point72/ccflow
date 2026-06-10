@@ -13,6 +13,7 @@ Notes for editors:
 - [Installation](Installation)
 - [Design Goals](Design-Goals)
 - [Key Features](Key-Features)
+- [Flow Model](Flow-Model)
 - [First Steps](First-Steps)
 
 **Tutorials**

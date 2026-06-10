@@ -13,6 +13,7 @@ from ccflow.context import (
     DateContext,
     DateRangeContext,
     DatetimeContext,
+    FlowContext,
     FreqContext,
     FreqDateContext,
     FreqDateRangeContext,
@@ -52,6 +53,13 @@ class TestContexts(TestCase):
         self.assertEqual(NullContext.model_validate(None), NullContext())
         self.assertIsInstance(NullContext.model_validate(DateContext(date="0d")), NullContext)
         self.assertRaises(ValueError, NullContext.model_validate, [True])
+
+    def test_flow_context_hash_freezes_nested_pydantic_values(self):
+        c1 = FlowContext(payload=DateContext(date=date(2024, 1, 1)))
+        c2 = FlowContext(payload=DateContext(date="2024-01-01"))
+
+        self.assertEqual(c1, c2)
+        self.assertEqual(hash(c1), hash(c2))
 
     def test_context_with_defaults(self):
         # Contexts may define default values. Extending the assumptions above:
@@ -275,8 +283,13 @@ class TestContextInheritance(TestCase):
     def test_inheritance(self):
         """Test that if a context has a superset of fields of another context, it is a subclass of that context."""
 
-        for parent_name, parent_class in self.classes.items():
-            for child_name, child_class in self.classes.items():
+        # Exclude FlowContext from this test - it's a special universal carrier with no
+        # declared fields (uses extra="allow"), so the "superset implies subclass" logic
+        # doesn't apply to it.
+        classes_to_check = {name: cls for name, cls in self.classes.items() if name != "FlowContext"}
+
+        for parent_name, parent_class in classes_to_check.items():
+            for child_name, child_class in classes_to_check.items():
                 if parent_class is child_class:
                     continue
 
