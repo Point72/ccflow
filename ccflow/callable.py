@@ -97,6 +97,25 @@ class MetaData(BaseModel):
     options: Optional["FlowOptions"] = Field(None, exclude=True, repr=False)  # noqa F405
 
 
+class _FlowAccessor:
+    """Non-data descriptor backing ``model.flow``.
+
+    Implemented as a non-data descriptor (only ``__get__``) rather than a
+    ``property`` so that a generated ``@Flow.model`` field literally named
+    ``flow`` shadows it through the instance ``__dict__``.  In that (rare) case
+    ``model.flow`` returns the field value; use ``Flow.of(model)`` to reach the
+    flow API.  For ordinary models ``model.flow`` returns the ``FlowAPI`` as
+    before.
+    """
+
+    def __get__(self, obj, objtype=None):
+        if obj is None:
+            return self
+        from .flow_model import FlowAPI
+
+        return FlowAPI(obj)
+
+
 class _CallableModel(BaseModel, abc.ABC):
     """Generic base class for Callable Models.
 
@@ -104,7 +123,7 @@ class _CallableModel(BaseModel, abc.ABC):
     """
 
     model_config = ConfigDict(
-        ignored_types=(property,),
+        ignored_types=(property, _FlowAccessor),
     )
     meta: MetaData = Field(default_factory=MetaData)
 
@@ -544,6 +563,17 @@ class Flow(PydanticBaseModel):
 
         return _flow_context_transform(*args, **kwargs)
 
+    @staticmethod
+    def of(model: "CallableModel") -> "FlowAPI":
+        """Return the flow API for ``model``, equivalent to ``model.flow``.
+
+        Use this when a generated ``@Flow.model`` field literally named ``flow``
+        shadows the ``model.flow`` accessor (see ``CallableModel.flow``).
+        """
+        from .flow_model import _flow_api
+
+        return _flow_api(model)
+
 
 # *****************************************************************************
 # Define "Evaluators" and associated types
@@ -798,12 +828,8 @@ class CallableModel(_CallableModel):
         """
         return []
 
-    @property
-    def flow(self) -> "FlowAPI":
-        """Access flow helpers for execution, context transforms, and introspection."""
-        from .flow_model import FlowAPI
-
-        return FlowAPI(self)
+    flow = _FlowAccessor()
+    """Access flow helpers for execution, context transforms, and introspection."""
 
 
 class WrapperModel(CallableModel, Generic[CallableModelType], abc.ABC):

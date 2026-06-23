@@ -2181,7 +2181,7 @@ def _recursive_dependency_specs_for_flow(
             result.append(prefixed)
             result.extend(
                 _recursive_dependency_specs_for_flow(
-                    dependency.model.flow,
+                    _flow_api(dependency.model),
                     dependency.context,
                     prefix=path,
                     lazy_parent=lazy,
@@ -2700,6 +2700,19 @@ class _BoundFlowAPI(FlowAPI):
             model=self._bound.model,
             context_spec=_validate_static_context_spec_declared_context(self._bound.model, merged),
         )
+
+
+def _flow_api(model: CallableModel) -> FlowAPI:
+    """Return the flow API for ``model`` without going through ``model.flow``.
+
+    Use this for internal access and as the implementation of ``Flow.of`` so a
+    generated model whose field is named ``flow`` (which shadows the ``.flow``
+    accessor) still resolves to the correct API.
+    """
+
+    if isinstance(model, BoundModel):
+        return _BoundFlowAPI(model)
+    return FlowAPI(model)
 
 
 class _GeneratedFlowModelBase(CallableModel):

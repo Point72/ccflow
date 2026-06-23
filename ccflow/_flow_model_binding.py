@@ -40,7 +40,13 @@ _INTERNAL_SENTINELS = {
     "_UNSET": _InternalSentinel("_UNSET"),
 }
 _UNSET = _INTERNAL_SENTINELS["_UNSET"]
-_RESERVED_FLOW_MODEL_PARAM_NAMES = frozenset({"flow", "meta", "context_type", "result_type", "type_"})
+# ``flow`` is intentionally *not* reserved: ``CallableModel.flow`` is a non-data
+# descriptor that a same-named field shadows, and ``Flow.of(model)`` still reaches
+# the flow API.  The names below are load-bearing framework attributes the runtime
+# reads directly (``context_type``/``result_type`` drive validation and dispatch,
+# ``meta`` is a real field, ``type_`` is the hydra ``_target_``), so shadowing them
+# would silently break execution rather than raise here.
+_RESERVED_FLOW_MODEL_PARAM_NAMES = frozenset({"meta", "context_type", "result_type", "type_"})
 
 
 class _LazyMarker:

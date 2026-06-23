@@ -140,9 +140,15 @@ it is provided by keyword for that contextual field.
 A construction-time value for a contextual parameter is still a default, not a
 conversion into a regular bound parameter.
 
-Generated models reserve a few framework attribute names for the model API:
-`flow`, `meta`, `context_type`, `result_type`, and `type_`. Do not use these as
+Generated models reserve a few framework attribute names that the runtime reads
+directly: `meta`, `context_type`, `result_type`, and `type_`. Do not use these as
 `@Flow.model` function parameter names.
+
+`flow` is *not* reserved. `model.flow` is a non-data descriptor, so a parameter
+(field) named `flow` shadows it: `model.flow` then returns the field value. Reach
+the flow API for such a model with `Flow.of(model)` (equivalent to `model.flow`
+for models that do not shadow it). Defining a `flow` field emits a pydantic
+warning that it shadows the accessor — expected for this case.
 
 ```python
 from ccflow import Flow, FromContext

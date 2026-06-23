@@ -817,7 +817,7 @@ def test_context_named_regular_parameter_can_coexist_with_from_context():
     assert model.flow.compute(y=5).value == 15
 
 
-@pytest.mark.parametrize("reserved_name", ["flow", "meta", "context_type", "result_type", "type_"])
+@pytest.mark.parametrize("reserved_name", ["meta", "context_type", "result_type", "type_"])
 def test_flow_model_rejects_reserved_parameter_names(reserved_name):
     namespace = {"Flow": Flow, "FromContext": FromContext}
     exec(
@@ -827,6 +827,24 @@ def test_flow_model_rejects_reserved_parameter_names(reserved_name):
 
     with pytest.raises(TypeError, match=f"Parameter name\\(s\\) '{reserved_name}' are reserved"):
         Flow.model(namespace["bad"])
+
+
+def test_flow_model_allows_flow_parameter_name():
+    """``flow`` is not reserved: the field shadows the (non-data descriptor) accessor.
+
+    ``model.flow`` returns the field value, and ``Flow.of(model)`` still reaches
+    the flow API.
+    """
+
+    def add(flow: int, value: FromContext[int]) -> int:
+        return flow + value
+
+    with pytest.warns(UserWarning, match="shadows an attribute"):
+        add_model = Flow.model(add)
+
+    model = add_model(flow=10)
+    assert model.flow == 10
+    assert Flow.of(model).compute(value=5).value == 15
 
 
 def test_context_type_requires_from_context():
