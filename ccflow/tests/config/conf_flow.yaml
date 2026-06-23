@@ -1,0 +1,44 @@
+# Flow.model configurations for Hydra integration tests.
+
+flow_loader:
+    _target_: ccflow.tests.flow_model_hydra_fixtures.basic_loader
+    source: fixture_input
+    multiplier: 5
+
+flow_source:
+    _target_: ccflow.tests.flow_model_hydra_fixtures.data_source
+    base_value: 100
+
+flow_transformer:
+    _target_: ccflow.tests.flow_model_hydra_fixtures.data_transformer
+    source: flow_source
+    factor: 3
+
+diamond_source:
+    _target_: ccflow.tests.flow_model_hydra_fixtures.data_source
+    base_value: 10
+
+diamond_branch_a:
+    _target_: ccflow.tests.flow_model_hydra_fixtures.data_transformer
+    source: diamond_source
+    factor: 2
+
+diamond_branch_b:
+    _target_: ccflow.tests.flow_model_hydra_fixtures.data_transformer
+    source: diamond_source
+    factor: 5
+
+diamond_aggregator:
+    _target_: ccflow.tests.flow_model_hydra_fixtures.data_aggregator
+    input_a: diamond_branch_a
+    input_b: diamond_branch_b
+    operation: add
+
+contextual_loader_model:
+    _target_: ccflow.tests.flow_model_hydra_fixtures.contextual_loader
+    source: data_source
+
+contextual_processor_model:
+    _target_: ccflow.tests.flow_model_hydra_fixtures.contextual_processor
+    data: contextual_loader_model
+    prefix: output

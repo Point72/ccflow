@@ -13,13 +13,30 @@ which all need to be defined together so that pydantic (especially V1) can resol
 
 import abc
 import logging
+from dataclasses import dataclass
 from functools import lru_cache, wraps
 from inspect import Signature, isclass, signature
-from typing import Any, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar, Union, get_args, get_origin
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    ClassVar,
+    Dict,
+    Generic,
+    List,
+    Optional,
+    Tuple,
+    Type,
+    TypeVar,
+    Union,
+    get_args,
+    get_origin,
+)
 
 from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field, InstanceOf, PrivateAttr, TypeAdapter, field_validator, model_validator
 from typing_extensions import override
 
+from ._flow_model_binding import _normalize_auto_context_parent, _wrap_auto_context_call
 from .base import (
     BaseModel,
     ContextBase,
@@ -28,6 +45,9 @@ from .base import (
     ResultType,
 )
 from .validators import str_to_log_level
+
+if TYPE_CHECKING:
+    from .flow_model import FlowAPI
 
 __all__ = (
     "GraphDepType",
@@ -50,6 +70,14 @@ __all__ = (
 log = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class EvaluationDependency:
+    """Internal marker for a dependency invocation in an effective identity payload."""
+
+    model: Any
+    context: Any
+
+
 # *****************************************************************************
 # Base CallableModel definitions, before introducing the Flow decorator or
 # any evaluators
@@ -69,6 +97,25 @@ class MetaData(BaseModel):
     options: Optional["FlowOptions"] = Field(None, exclude=True, repr=False)  # noqa F405
 
 
+class _FlowAccessor:
+    """Non-data descriptor backing ``model.flow``.
+
+    Implemented as a non-data descriptor (only ``__get__``) rather than a
+    ``property`` so that a generated ``@Flow.model`` field literally named
+    ``flow`` shadows it through the instance ``__dict__``.  In that (rare) case
+    ``model.flow`` returns the field value; use ``Flow.of(model)`` to reach the
+    flow API.  For ordinary models ``model.flow`` returns the ``FlowAPI`` as
+    before.
+    """
+
+    def __get__(self, obj, objtype=None):
+        if obj is None:
+            return self
+        from .flow_model import FlowAPI
+
+        return FlowAPI(obj)
+
+
 class _CallableModel(BaseModel, abc.ABC):
     """Generic base class for Callable Models.
 
@@ -76,7 +123,7 @@ class _CallableModel(BaseModel, abc.ABC):
     """
 
     model_config = ConfigDict(
-        ignored_types=(property,),
+        ignored_types=(property, _FlowAccessor),
     )
     meta: MetaData = Field(default_factory=MetaData)
 
@@ -174,6 +221,18 @@ class _CallableModel(BaseModel, abc.ABC):
 
         Implementations should be decorated with Flow.call.
         """
+
+    def _evaluation_identity_payload(
+        self,
+        context: Any,
+    ) -> Optional[Any]:
+        """Return an effective evaluation identity payload when available.
+
+        Returning ``None`` keeps the model on the existing structural key path.
+        This is intentionally narrow and internal: only models whose effective
+        invocation can be described declaratively should override it.
+        """
+        return None
 
 
 CallableModelType = TypeVar("CallableModelType", bound=_CallableModel)
@@ -392,7 +451,28 @@ class FlowOptionsOverride(BaseModel):
 class Flow(PydanticBaseModel):
     @staticmethod
     def call(*args, **kwargs):
-        """Decorator for methods on callable models"""
+        """Decorator for methods on callable models.
+
+        Pass ``auto_context=True`` or a ``ContextBase`` subclass to derive the
+        method context from annotated parameters.
+        """
+        auto_context = kwargs.pop("auto_context", False)
+
+        if auto_context is not False:
+            context_parent = _normalize_auto_context_parent(auto_context)
+
+            def auto_context_decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+                wrapped = _wrap_auto_context_call(
+                    fn,
+                    parent=context_parent,
+                    is_model_dependency=lambda value: isinstance(value, CallableModel),
+                )
+                return FlowOptions(**kwargs)(wrapped)
+
+            if len(args) == 1 and callable(args[0]):
+                return auto_context_decorator(args[0])
+            return auto_context_decorator
+
         if len(args) == 1 and callable(args[0]):
             # No arguments to decorator, this is the decorator
             fn = args[0]
@@ -417,6 +497,82 @@ class Flow(PydanticBaseModel):
             # Arguments to decorator, this is just returning the decorator
             # Note that the code below is executed only once
             return FlowOptionsDeps(**kwargs)
+
+    @staticmethod
+    def model(*args, **kwargs):
+        """Generate a ``CallableModel`` factory from a typed Python function.
+
+        Unmarked function parameters become construction-time model inputs.
+        They can be bound to literal values or to upstream ``CallableModel``
+        dependencies. Parameters annotated as ``FromContext[T]`` are runtime
+        inputs supplied by ``model.flow.compute(...)``, a context object,
+        construction-time contextual defaults, or ``with_context(...)``.
+
+        Plain return annotations are wrapped in ``GenericResult`` so generated
+        models still follow the normal ccflow result/evaluator/cache path.
+        Functions that already return a ``ResultBase`` subclass are left as-is.
+
+        Common options mirror ``Flow.call``: ``cacheable``, ``volatile``,
+        ``log_level``, ``validate_result``, ``verbose``, and ``evaluator``.
+        Generated-model options also include ``context_type`` for validating
+        contextual fields, ``auto_unwrap`` for ergonomic compute results, and
+        ``model_base`` for custom ``CallableModel`` bases.
+
+        Args:
+            func: The function being decorated. This is passed automatically in
+                bare decorator form, for example ``@Flow.model``. When using
+                options, for example ``@Flow.model(auto_unwrap=True)``, Python
+                first calls ``Flow.model(...)`` without a function and then
+                applies the returned decorator.
+            context_type: Optional ``ContextBase`` subclass used to validate
+                ``FromContext[...]`` fields together.
+            strict: When ``context_type`` is given, require a full bijection
+                between the declared context's required fields and the
+                ``FromContext[...]`` parameters. Defaults to ``False``, which
+                allows the declared context to be an omnibus superset carrying
+                extra fields the model does not consume.
+            auto_unwrap: When ``True`` and the function's plain return value is
+                auto-wrapped in ``GenericResult[T]``, external
+                ``model.flow.compute(...)`` calls return the raw ``T`` value
+                instead of ``GenericResult[T]``. Internal model dependencies
+                still use normal ccflow result objects.
+            model_base: Custom ``CallableModel`` subclass to use as the base
+                class for the generated model.
+        """
+        from .flow_model import flow_model
+
+        return flow_model(*args, **kwargs)
+
+    @staticmethod
+    def context_transform(*args, **kwargs):
+        """Create a serializable transform factory for ``model.flow.with_context``.
+
+        Mark transform inputs with ``FromContext[T]`` when they should be read
+        from the caller's runtime context. Unmarked parameters are regular
+        arguments bound when the transform factory is called.
+
+        Mapping-returning transforms are patch transforms and are passed
+        positionally to ``with_context(...)``. Scalar-returning transforms are
+        field transforms and are passed as keyword overrides, for example
+        ``model.flow.with_context(score=shift_score(amount=1))``.
+
+        Transform bindings serialize enough function metadata to survive model
+        serialization, including local or nested functions through cloudpickle.
+        """
+        from .flow_model import _flow_context_transform
+
+        return _flow_context_transform(*args, **kwargs)
+
+    @staticmethod
+    def of(model: "CallableModel") -> "FlowAPI":
+        """Return the flow API for ``model``, equivalent to ``model.flow``.
+
+        Use this when a generated ``@Flow.model`` field literally named ``flow``
+        shadows the ``model.flow`` accessor (see ``CallableModel.flow``).
+        """
+        from .flow_model import _flow_api
+
+        return _flow_api(model)
 
 
 # *****************************************************************************
@@ -671,6 +827,9 @@ class CallableModel(_CallableModel):
         upstream dependencies in this function.
         """
         return []
+
+    flow = _FlowAccessor()
+    """Access flow helpers for execution, context transforms, and introspection."""
 
 
 class WrapperModel(CallableModel, Generic[CallableModelType], abc.ABC):
