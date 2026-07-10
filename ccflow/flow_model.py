@@ -8,7 +8,7 @@ surface is small:
   context instead of model construction.
 * ``Lazy[T]`` marks a dependency that should be passed as a thunk and evaluated
   only if user code calls it.
-* ``Dep[T]`` marks a nested regular-parameter slot that can be a literal ``T``
+* ``Dependency[T]`` marks a nested regular-parameter slot that can be a literal ``T``
   or a ``CallableModel`` dependency returning ``T``.
 * ``model.flow.compute(...)`` and ``model.flow.with_context(...)`` provide the
   ergonomic execution and contextual binding API.
@@ -90,7 +90,7 @@ from pydantic.errors import PydanticSchemaGenerationError, PydanticUndefinedAnno
 from ._flow_model_binding import (
     _UNION_ORIGINS,
     _UNSET,
-    Dep,
+    Dependency,
     FromContext,
     Lazy,
     _analyze_flow_context_transform,
@@ -115,7 +115,7 @@ from .utils.tokenize import compute_behavior_token, compute_data_token
 __all__ = (
     "FlowAPI",
     "BoundModel",
-    "Dep",
+    "Dependency",
     "FlowInspection",
     "InputSpec",
     "FromContext",
@@ -435,7 +435,7 @@ def _is_model_dependency(value: Any) -> bool:
 
 
 def _strip_outer_non_dep_annotated(annotation: Any) -> Any:
-    """Strip outer Annotated layers only until an explicit Dep marker is found."""
+    """Strip outer Annotated layers only until an explicit Dependency marker is found."""
 
     while get_origin(annotation) is Annotated:
         _, has_dep = _pop_dep_marker(annotation)
@@ -1081,7 +1081,7 @@ def _walk_dep_marked_value(
     on_dict: Callable[[Any, List[Tuple[Any, Any]], Any, Any, Any, Tuple[Any, ...]], Any],
     path: Tuple[Any, ...] = (),
 ) -> Any:
-    """Walk only the container grammar where Dep markers are valid."""
+    """Walk only the container grammar where Dependency markers are valid."""
 
     annotation = _strip_outer_non_dep_annotated(annotation)
     dep_base, is_dep_slot = _pop_dep_marker(annotation)
@@ -1183,7 +1183,7 @@ def _dep_slot_prefers_serialized_dependency(annotation: Any) -> bool:
 
 
 def _validate_dep_marked_value(name: str, value: Any, annotation: Any, source: str, path: Tuple[Any, ...] = ()) -> Any:
-    """Validate construction values that use explicit nested Dep markers."""
+    """Validate construction values that use explicit nested Dependency markers."""
 
     def validate_dep_slot(item: Any, dep_base: Any, item_path: Tuple[Any, ...]) -> Any:
         if _is_model_dependency(item):
@@ -1233,7 +1233,7 @@ def _validate_dep_marked_value(name: str, value: Any, annotation: Any, source: s
 
 
 def _resolve_dep_marked_value(name: str, value: Any, annotation: Any, context: ContextBase, path: Tuple[Any, ...] = ()) -> Any:
-    """Resolve CallableModel leaves that appear at explicit Dep marker slots."""
+    """Resolve CallableModel leaves that appear at explicit Dependency marker slots."""
 
     def resolve_dep_slot(item: Any, dep_base: Any, item_path: Tuple[Any, ...]) -> Any:
         if _is_model_dependency(item):
@@ -1255,7 +1255,7 @@ def _resolve_dep_marked_value(name: str, value: Any, annotation: Any, context: C
 
 
 def _dep_marked_dependency_entries(value: Any, annotation: Any, context: ContextBase) -> GraphDepList:
-    """Collect dependency graph edges from explicit Dep marker slots."""
+    """Collect dependency graph edges from explicit Dependency marker slots."""
 
     def dep_slot_edges(item: Any, _dep_base: Any, _path: Tuple[Any, ...]) -> GraphDepList:
         if not _is_model_dependency(item):
@@ -1288,7 +1288,7 @@ def _dep_marked_dependency_specs(
     *,
     trim_context: bool,
 ) -> Tuple[DependencySpec, ...]:
-    """Collect inspect-visible dependency edges from explicit Dep marker slots."""
+    """Collect inspect-visible dependency edges from explicit Dependency marker slots."""
 
     def dep_slot_specs(item: Any, _dep_base: Any, item_path: Tuple[Any, ...]) -> Tuple[DependencySpec, ...]:
         if not _is_model_dependency(item):
@@ -1323,7 +1323,7 @@ def _dep_marked_dependency_specs(
 
 
 def _dep_marked_identity_value(value: Any, annotation: Any, context: ContextBase) -> Any:
-    """Return an identity payload with explicit Dep leaves replaced by dependencies."""
+    """Return an identity payload with explicit Dependency leaves replaced by dependencies."""
 
     def dep_slot_identity(item: Any, _dep_base: Any, _path: Tuple[Any, ...]) -> Any:
         if _is_model_dependency(item):
@@ -3289,6 +3289,12 @@ def _generated_field_annotation(param: _FlowModelParam) -> Any:
         annotation = param.validation_annotation
     elif param.is_lazy:
         annotation = CallableModel
+    elif param.has_dep_slots:
+        # Dependency-marked containers may hold CallableModel leaves alongside
+        # literals. The leaf types are validated by ccflow, not pydantic, so use
+        # Any here to keep SkipValidation from emitting serializer warnings when a
+        # model leaf is serialized against the literal leaf type.
+        annotation = Any
     elif param.annotation is Any or param.annotation is inspect.Parameter.empty:
         annotation = Any
     else:

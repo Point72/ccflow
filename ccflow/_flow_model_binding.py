@@ -61,7 +61,7 @@ class _FromContextMarker:
 
 class _DepMarker:
     def __repr__(self) -> str:
-        return "Dep"
+        return "Dependency"
 
 
 class FromContext:
@@ -81,11 +81,11 @@ class Lazy:
         return Annotated[item, _LazyMarker()]
 
 
-class Dep:
+class Dependency:
     """Marker used in ``@Flow.model`` signatures for explicit dependency leaves."""
 
     def __new__(cls, *args, **kwargs):
-        raise TypeError("Dep is an annotation marker; use Dep[T] in @Flow.model signatures.")
+        raise TypeError("Dependency is an annotation marker; use Dependency[T] in @Flow.model signatures.")
 
     def __class_getitem__(cls, item):
         return Annotated[item, _DepMarker()]
@@ -463,8 +463,8 @@ def _parse_annotation(annotation: Any) -> _ParsedAnnotation:
         raise TypeError("FromContext is an annotation marker; use FromContext[T] in @Flow.model signatures.")
     if annotation is Lazy:
         raise TypeError("Lazy is an annotation marker; use Lazy[T] in @Flow.model signatures.")
-    if annotation is Dep:
-        raise TypeError("Dep is an annotation marker; use Dep[T] in @Flow.model signatures.")
+    if annotation is Dependency:
+        raise TypeError("Dependency is an annotation marker; use Dependency[T] in @Flow.model signatures.")
 
     return _ParsedAnnotation(
         base=annotation,
@@ -482,7 +482,7 @@ def _strip_annotated(annotation: Any) -> Any:
 
 
 def _pop_dep_marker(annotation: Any) -> Tuple[Any, bool]:
-    """Remove only the outer Dep marker while preserving other Annotated metadata."""
+    """Remove only the outer Dependency marker while preserving other Annotated metadata."""
 
     if get_origin(annotation) is not Annotated:
         return annotation, False
@@ -493,7 +493,7 @@ def _pop_dep_marker(annotation: Any) -> Tuple[Any, bool]:
     base = args[0]
     if not metadata:
         return base, has_dep
-    # Keep non-Dep metadata, such as pydantic Field constraints, on the annotation
+    # Keep non-Dependency metadata, such as pydantic Field constraints, on the annotation
     # used to validate literals and resolved dependency results. Build the tuple
     # first and subscript ``Annotated`` with it: ``Annotated[base, *metadata]`` is
     # 3.11+-only syntax, and ``Annotated.__class_getitem__`` was removed in 3.14,
@@ -509,31 +509,31 @@ def _annotation_contains_dep(annotation: Any) -> bool:
 
 
 def _validate_dep_annotation(annotation: Any, *, in_dep: bool = False, dep_allowed: bool = False) -> None:
-    """Validate the deliberately small Dep marker language.
+    """Validate the deliberately small Dependency marker language.
 
-    Dep marks exact substitution slots. It is allowed inside container values,
-    but not inside another Dep, not in dict keys, and not mixed with Lazy or
-    FromContext markers inside a Dep slot.
+    Dependency marks exact substitution slots. It is allowed inside container values,
+    but not inside another Dependency, not in dict keys, and not mixed with Lazy or
+    FromContext markers inside a Dependency slot.
     """
 
     annotation, has_dep = _pop_dep_marker(annotation)
     if has_dep:
         if not dep_allowed:
-            raise TypeError("Dep[...] is only supported in regular parameter container values.")
+            raise TypeError("Dependency[...] is only supported in regular parameter container values.")
         if in_dep:
-            raise TypeError("Dep[...] cannot contain another Dep[...] marker.")
+            raise TypeError("Dependency[...] cannot contain another Dependency[...] marker.")
         _validate_dep_annotation(annotation, in_dep=True, dep_allowed=False)
         return
 
     if in_dep and get_origin(annotation) is Annotated:
         metadata = get_args(annotation)[1:]
         if any(isinstance(item, (_LazyMarker, _FromContextMarker)) for item in metadata):
-            raise TypeError("Dep[...] cannot contain Lazy[...] or FromContext[...] markers.")
+            raise TypeError("Dependency[...] cannot contain Lazy[...] or FromContext[...] markers.")
 
     origin = get_origin(annotation)
     args = get_args(annotation)
     if origin in _UNION_ORIGINS and any(_annotation_contains_dep(arg) for arg in args):
-        raise TypeError("Dep[...] is not supported inside union annotations.")
+        raise TypeError("Dependency[...] is not supported inside union annotations.")
     if origin is list and len(args) == 1:
         _validate_dep_annotation(args[0], in_dep=in_dep, dep_allowed=True)
         return
@@ -545,7 +545,7 @@ def _validate_dep_annotation(annotation: Any, *, in_dep: bool = False, dep_allow
     if origin is dict and len(args) == 2:
         key_annotation, value_annotation = args
         if _annotation_contains_dep(key_annotation):
-            raise TypeError("Dep[...] is not supported in dict keys.")
+            raise TypeError("Dependency[...] is not supported in dict keys.")
         _validate_dep_annotation(value_annotation, in_dep=in_dep, dep_allowed=True)
         return
 
@@ -655,9 +655,9 @@ def _analyze_flow_function(
             raise TypeError(f"Parameter '{param.name}' cannot combine Lazy[...] and FromContext[...].")
         if (parsed.is_dep or _annotation_contains_dep(parsed.base)) and (parsed.is_lazy or parsed.is_from_context):
             marker = "Lazy" if parsed.is_lazy else "FromContext"
-            raise TypeError(f"Parameter '{param.name}' cannot combine Dep[...] and {marker}[...].")
+            raise TypeError(f"Parameter '{param.name}' cannot combine Dependency[...] and {marker}[...].")
         if parsed.is_dep:
-            raise TypeError("Dep[...] is only supported in regular parameter container values.")
+            raise TypeError("Dependency[...] is only supported in regular parameter container values.")
         _validate_dep_annotation(parsed.base)
         has_dep_slots = _annotation_contains_dep(parsed.base)
         has_default = param.default is not inspect.Parameter.empty

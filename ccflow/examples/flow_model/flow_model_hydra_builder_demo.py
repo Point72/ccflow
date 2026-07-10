@@ -10,7 +10,7 @@ The pattern is:
 
 - keep runtime context (`start_date`, `end_date`) as runtime inputs,
 - use a plain Python builder function for graph construction,
-- use `Dep[...]` when a regular container input holds upstream models,
+- use `Dependency[...]` when a regular container input holds upstream models,
 - let Hydra instantiate that builder and register the returned model.
 
 Run with:
@@ -20,7 +20,7 @@ Run with:
 from datetime import date, timedelta
 from pathlib import Path
 
-from ccflow import CallableModel, DateRangeContext, Dep, Flow, FromContext, ModelRegistry
+from ccflow import CallableModel, DateRangeContext, Dependency, Flow, FromContext, ModelRegistry
 
 CONFIG_PATH = Path(__file__).with_name("config") / "flow_model_hydra_builder_demo.yaml"
 
@@ -65,7 +65,7 @@ def count_visitors(location: str, start_date: FromContext[date], end_date: FromC
 
 @Flow.model(context_type=DateRangeContext)
 def visitor_delta(
-    counts: list[Dep[int]],
+    counts: list[Dependency[int]],
     label: str,
     start_date: FromContext[date],
     end_date: FromContext[date],
