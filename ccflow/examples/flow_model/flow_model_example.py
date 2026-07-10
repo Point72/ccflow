@@ -6,7 +6,7 @@ Shows how to:
 1. define stages as plain Python functions,
 2. compose stages by passing upstream models as ordinary arguments,
 3. rewrite contextual inputs on one dependency edge with `.flow.with_context(...)`,
-4. use `Dep[...]` for model leaves inside regular container inputs,
+4. use `Dependency[...]` for model leaves inside regular container inputs,
 5. execute the configured graph with `model.flow.compute(...)`.
 
 Run with:
@@ -15,7 +15,7 @@ Run with:
 
 from datetime import date, timedelta
 
-from ccflow import DateRangeContext, Dep, Flow, FromContext
+from ccflow import DateRangeContext, Dependency, Flow, FromContext
 
 
 def _format_input_names(inputs: dict[str, object]) -> str:
@@ -54,7 +54,7 @@ def count_visitors(
 
 @Flow.model(context_type=DateRangeContext)
 def visitor_delta(
-    counts: list[Dep[int]],
+    counts: list[Dependency[int]],
     label: str,
     start_date: FromContext[date],
     end_date: FromContext[date],
