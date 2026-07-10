@@ -8,6 +8,8 @@ surface is small:
   context instead of model construction.
 * ``Lazy[T]`` marks a dependency that should be passed as a thunk and evaluated
   only if user code calls it.
+* ``Dep[T]`` marks a nested regular-parameter slot that can be a literal ``T``
+  or a ``CallableModel`` dependency returning ``T``.
 * ``model.flow.compute(...)`` and ``model.flow.with_context(...)`` provide the
   ergonomic execution and contextual binding API.
 
@@ -88,6 +90,7 @@ from pydantic.errors import PydanticSchemaGenerationError, PydanticUndefinedAnno
 from ._flow_model_binding import (
     _UNION_ORIGINS,
     _UNSET,
+    Dep,
     FromContext,
     Lazy,
     _analyze_flow_context_transform,
@@ -95,6 +98,7 @@ from ._flow_model_binding import (
     _callable_name,
     _FlowModelConfig,
     _FlowModelParam,
+    _pop_dep_marker,
     _resolved_flow_signature,
     _restore_flow_model_config,
     _serialize_flow_model_config,
@@ -111,6 +115,7 @@ from .utils.tokenize import compute_behavior_token, compute_data_token
 __all__ = (
     "FlowAPI",
     "BoundModel",
+    "Dep",
     "FlowInspection",
     "InputSpec",
     "FromContext",
@@ -364,6 +369,11 @@ class _LiteralIdentity(NamedTuple):
     value: Any
 
 
+class _DepMarkedIdentity(NamedTuple):
+    kind: Literal["dep_marked"]
+    value: Any
+
+
 class _UnresolvedLazyDependencyIdentity(NamedTuple):
     kind: Literal["unresolved_lazy_dependency"]
     model_type: str
@@ -422,6 +432,31 @@ def _is_model_dependency(value: Any) -> bool:
     # binding analyzers also need it, but _flow_model_binding.py is imported by
     # callable.py and cannot import CallableModel directly without a cycle.
     return isinstance(value, CallableModel)
+
+
+def _strip_outer_non_dep_annotated(annotation: Any) -> Any:
+    """Strip outer Annotated layers only until an explicit Dep marker is found."""
+
+    while get_origin(annotation) is Annotated:
+        _, has_dep = _pop_dep_marker(annotation)
+        if has_dep:
+            return annotation
+        annotation = get_args(annotation)[0]
+    return annotation
+
+
+def _annotation_origin_args(annotation: Any) -> Tuple[Any, Tuple[Any, ...]]:
+    # Container walking cares about list/tuple/dict origins, but unrelated
+    # Annotated metadata should not hide those origins.
+    annotation = _strip_outer_non_dep_annotated(annotation)
+    return get_origin(annotation), get_args(annotation)
+
+
+def _path_name(name: str, path: Tuple[Any, ...]) -> str:
+    # Use a field-like path in nested validation errors, e.g. values[0] or
+    # rows['left'][2], instead of reporting every failure at the root field.
+    suffix = "".join(f"[{item!r}]" if not isinstance(item, int) else f"[{item}]" for item in path)
+    return f"{name}{suffix}"
 
 
 def _bound_field_names(model: Any) -> set[str]:
@@ -620,6 +655,21 @@ def _resolve_serialized_dependency_ref(
     except (ValidationError, ImportError, AttributeError, TypeError, ValueError):
         return value
     return restored if _is_model_dependency(restored) else value
+
+
+def _resolve_whole_param_serialized_dependency_ref(value: Any) -> Any:
+    """Restore serialized whole-parameter dependencies before container walking."""
+
+    restored = _resolve_serialized_dependency_ref(value)
+    if _is_model_dependency(restored):
+        return restored
+    # ``_target_`` is also Hydra syntax. Accept it before literal validation
+    # only for payloads that look like ccflow serialized models.
+    if type(value) is dict and "meta" in value:
+        restored = _resolve_serialized_dependency_ref(value, include_target_alias=True)
+        if _is_model_dependency(restored):
+            return restored
+    return value
 
 
 def _ensure_named_python_function(fn: _AnyCallable, *, decorator_name: str) -> None:
@@ -1015,7 +1065,280 @@ def _resolve_regular_param_value(model: "_GeneratedFlowModelBase", param: _FlowM
             if callable(add_note):
                 add_note(f"Error while evaluating dependency {parent}.{param.name} -> {child}.")
             raise
+    if param.has_dep_slots:
+        return _resolve_dep_marked_value(param.name, value, param.annotation, context)
     return value
+
+
+def _walk_dep_marked_value(
+    value: Any,
+    annotation: Any,
+    *,
+    on_dep_slot: Callable[[Any, Any, Tuple[Any, ...]], Any],
+    on_literal: Callable[[Any, Any, Tuple[Any, ...]], Any],
+    on_list: Callable[[Any, List[Any], Any, Tuple[Any, ...]], Any],
+    on_tuple: Callable[[Any, Tuple[Any, ...], Any, Tuple[Any, ...]], Any],
+    on_dict: Callable[[Any, List[Tuple[Any, Any]], Any, Any, Any, Tuple[Any, ...]], Any],
+    path: Tuple[Any, ...] = (),
+) -> Any:
+    """Walk only the container grammar where Dep markers are valid."""
+
+    annotation = _strip_outer_non_dep_annotated(annotation)
+    dep_base, is_dep_slot = _pop_dep_marker(annotation)
+    if is_dep_slot:
+        return on_dep_slot(value, dep_base, path)
+
+    origin, args = _annotation_origin_args(annotation)
+    if origin is list and isinstance(value, (list, tuple)) and args:
+        items = [
+            _walk_dep_marked_value(
+                item,
+                args[0],
+                on_dep_slot=on_dep_slot,
+                on_literal=on_literal,
+                on_list=on_list,
+                on_tuple=on_tuple,
+                on_dict=on_dict,
+                path=path + (index,),
+            )
+            for index, item in enumerate(value)
+        ]
+        return on_list(value, items, annotation, path)
+
+    if origin is tuple and isinstance(value, (list, tuple)) and args:
+        if len(args) == 2 and args[1] is Ellipsis:
+            items = tuple(
+                _walk_dep_marked_value(
+                    item,
+                    args[0],
+                    on_dep_slot=on_dep_slot,
+                    on_literal=on_literal,
+                    on_list=on_list,
+                    on_tuple=on_tuple,
+                    on_dict=on_dict,
+                    path=path + (index,),
+                )
+                for index, item in enumerate(value)
+            )
+            return on_tuple(value, items, annotation, path)
+        if len(args) == len(value):
+            items = tuple(
+                _walk_dep_marked_value(
+                    item,
+                    item_annotation,
+                    on_dep_slot=on_dep_slot,
+                    on_literal=on_literal,
+                    on_list=on_list,
+                    on_tuple=on_tuple,
+                    on_dict=on_dict,
+                    path=path + (index,),
+                )
+                for index, (item, item_annotation) in enumerate(zip(value, args))
+            )
+            return on_tuple(value, items, annotation, path)
+        return on_literal(value, annotation, path)
+
+    if origin is dict and isinstance(value, Mapping) and len(args) == 2:
+        key_annotation, value_annotation = args
+        items = [
+            (
+                key,
+                _walk_dep_marked_value(
+                    item,
+                    value_annotation,
+                    on_dep_slot=on_dep_slot,
+                    on_literal=on_literal,
+                    on_list=on_list,
+                    on_tuple=on_tuple,
+                    on_dict=on_dict,
+                    path=path + (key,),
+                ),
+            )
+            for key, item in value.items()
+        ]
+        return on_dict(value, items, key_annotation, value_annotation, annotation, path)
+
+    return on_literal(value, annotation, path)
+
+
+def _resolve_dep_slot_registry_ref(value: Any, annotation: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    candidate = _resolve_registry_candidate(value)
+    if candidate is not None and _registry_candidate_allowed(annotation, candidate):
+        return candidate
+    return value
+
+
+def _dep_slot_prefers_serialized_dependency(annotation: Any) -> bool:
+    """Return whether literal validation is too broad to preserve serialized deps."""
+
+    annotation = _strip_outer_non_dep_annotated(annotation)
+    if annotation in (Any, object, inspect.Parameter.empty):
+        return True
+    origin, args = _annotation_origin_args(annotation)
+    if origin in _UNION_ORIGINS:
+        return any(_dep_slot_prefers_serialized_dependency(arg) for arg in args)
+    return False
+
+
+def _validate_dep_marked_value(name: str, value: Any, annotation: Any, source: str, path: Tuple[Any, ...] = ()) -> Any:
+    """Validate construction values that use explicit nested Dep markers."""
+
+    def validate_dep_slot(item: Any, dep_base: Any, item_path: Tuple[Any, ...]) -> Any:
+        if _is_model_dependency(item):
+            return item
+        tried_serialized_dep = False
+        if _dep_slot_prefers_serialized_dependency(dep_base):
+            tried_serialized_dep = True
+            item_with_serialized_dep = _resolve_serialized_dependency_ref(item, include_target_alias=True)
+            if _is_model_dependency(item_with_serialized_dep):
+                return item_with_serialized_dep
+        try:
+            return _coerce_value(_path_name(name, item_path), item, dep_base, source)
+        except TypeError as error:
+            literal_error = error
+        if not tried_serialized_dep:
+            item_with_serialized_dep = _resolve_serialized_dependency_ref(item, include_target_alias=True)
+            if _is_model_dependency(item_with_serialized_dep):
+                return item_with_serialized_dep
+        item_with_alias_dep = _resolve_dep_slot_registry_ref(item, dep_base)
+        if item_with_alias_dep is not item and _is_model_dependency(item_with_alias_dep):
+            return item_with_alias_dep
+        raise literal_error
+
+    def validate_literal(item: Any, item_annotation: Any, item_path: Tuple[Any, ...]) -> Any:
+        return _coerce_value(_path_name(name, item_path), item, item_annotation, source)
+
+    def validate_dict(
+        _value: Any,
+        items: List[Tuple[Any, Any]],
+        key_annotation: Any,
+        _value_annotation: Any,
+        _dict_annotation: Any,
+        dict_path: Tuple[Any, ...],
+    ) -> Any:
+        return {_coerce_value(_path_name(name, dict_path + (key, "key")), key, key_annotation, source): item for key, item in items}
+
+    return _walk_dep_marked_value(
+        value,
+        annotation,
+        on_dep_slot=validate_dep_slot,
+        on_literal=validate_literal,
+        on_list=lambda _value, items, _annotation, _path: list(items),
+        on_tuple=lambda _value, items, _annotation, _path: tuple(items),
+        on_dict=validate_dict,
+        path=path,
+    )
+
+
+def _resolve_dep_marked_value(name: str, value: Any, annotation: Any, context: ContextBase, path: Tuple[Any, ...] = ()) -> Any:
+    """Resolve CallableModel leaves that appear at explicit Dep marker slots."""
+
+    def resolve_dep_slot(item: Any, dep_base: Any, item_path: Tuple[Any, ...]) -> Any:
+        if _is_model_dependency(item):
+            dependency_model, dependency_context = _resolved_dependency_invocation(item, context)
+            resolved = _unwrap_model_result(dependency_model(dependency_context))
+            return _coerce_value(_path_name(name, item_path), resolved, dep_base, "Regular parameter")
+        return item
+
+    return _walk_dep_marked_value(
+        value,
+        annotation,
+        on_dep_slot=resolve_dep_slot,
+        on_literal=lambda item, _annotation, _path: item,
+        on_list=lambda _value, items, _annotation, _path: list(items),
+        on_tuple=lambda _value, items, _annotation, _path: tuple(items),
+        on_dict=lambda _value, items, _key_annotation, _value_annotation, _dict_annotation, _path: dict(items),
+        path=path,
+    )
+
+
+def _dep_marked_dependency_entries(value: Any, annotation: Any, context: ContextBase) -> GraphDepList:
+    """Collect dependency graph edges from explicit Dep marker slots."""
+
+    def dep_slot_edges(item: Any, _dep_base: Any, _path: Tuple[Any, ...]) -> GraphDepList:
+        if not _is_model_dependency(item):
+            return []
+        dependency_model, dependency_context = _resolved_dependency_invocation(item, context)
+        return [(dependency_model, [dependency_context])]
+
+    def merge_items(items: Any) -> GraphDepList:
+        deps: GraphDepList = []
+        for item in items:
+            deps.extend(item)
+        return deps
+
+    return _walk_dep_marked_value(
+        value,
+        annotation,
+        on_dep_slot=dep_slot_edges,
+        on_literal=lambda _item, _annotation, _path: [],
+        on_list=lambda _value, items, _annotation, _path: merge_items(items),
+        on_tuple=lambda _value, items, _annotation, _path: merge_items(items),
+        on_dict=lambda _value, items, _key_annotation, _value_annotation, _dict_annotation, _path: merge_items(item for _, item in items),
+    )
+
+
+def _dep_marked_dependency_specs(
+    name: str,
+    value: Any,
+    annotation: Any,
+    context: Optional[ContextBase],
+    *,
+    trim_context: bool,
+) -> Tuple[DependencySpec, ...]:
+    """Collect inspect-visible dependency edges from explicit Dep marker slots."""
+
+    def dep_slot_specs(item: Any, _dep_base: Any, item_path: Tuple[Any, ...]) -> Tuple[DependencySpec, ...]:
+        if not _is_model_dependency(item):
+            return ()
+        dependency_model = item
+        dependency_context = None
+        if context is not None:
+            try:
+                dependency_model, dependency_context = _resolved_dependency_invocation(item, context)
+            except (TypeError, ValueError, ValidationError):
+                dependency_model = item
+                dependency_context = _partial_dependency_context_for_inspect(item, context)
+            else:
+                dependency_context = _trim_dependency_context_for_inspect(dependency_model, dependency_context, trim_context=trim_context)
+        return (DependencySpec(_path_name(name, item_path), dependency_model, dependency_context),)
+
+    def merge_items(items: Any) -> Tuple[DependencySpec, ...]:
+        specs: List[DependencySpec] = []
+        for item in items:
+            specs.extend(item)
+        return tuple(specs)
+
+    return _walk_dep_marked_value(
+        value,
+        annotation,
+        on_dep_slot=dep_slot_specs,
+        on_literal=lambda _item, _annotation, _path: (),
+        on_list=lambda _value, items, _annotation, _path: merge_items(items),
+        on_tuple=lambda _value, items, _annotation, _path: merge_items(items),
+        on_dict=lambda _value, items, _key_annotation, _value_annotation, _dict_annotation, _path: merge_items(item for _, item in items),
+    )
+
+
+def _dep_marked_identity_value(value: Any, annotation: Any, context: ContextBase) -> Any:
+    """Return an identity payload with explicit Dep leaves replaced by dependencies."""
+
+    def dep_slot_identity(item: Any, _dep_base: Any, _path: Tuple[Any, ...]) -> Any:
+        if _is_model_dependency(item):
+            return _regular_dependency_identity(item, context)
+        return item
+
+    return _walk_dep_marked_value(
+        value,
+        annotation,
+        on_dep_slot=dep_slot_identity,
+        on_literal=lambda item, _annotation, _path: item,
+        on_list=lambda _value, items, _annotation, _path: list(items),
+        on_tuple=lambda _value, items, _annotation, _path: tuple(items),
+        on_dict=lambda _value, items, _key_annotation, _value_annotation, _dict_annotation, _path: dict(items),
+    )
 
 
 def _regular_dependency_identity(value: CallableModel, context: ContextBase) -> _DependencyIdentity:
@@ -1041,6 +1364,8 @@ def _lazy_regular_dependency_identity(value: CallableModel, context: ContextBase
 def _regular_input_identity(param: _FlowModelParam, value: Any, context: ContextBase) -> _RegularInputIdentity:
     if _is_model_dependency(value):
         payload = _lazy_regular_dependency_identity(value, context) if param.is_lazy else _regular_dependency_identity(value, context)
+    elif param.has_dep_slots:
+        payload = _DepMarkedIdentity(kind="dep_marked", value=_dep_marked_identity_value(value, param.annotation, context))
     else:
         payload = _LiteralIdentity(kind="literal", value=value)
     return _RegularInputIdentity(kind="regular_input", name=param.name, lazy=param.is_lazy, payload=payload)
@@ -1466,6 +1791,21 @@ def _validate_bound_param_value(
         return value
     if _is_model_dependency(value):
         return value
+    if param.has_dep_slots:
+        value_with_serialized_dep = _resolve_whole_param_serialized_dependency_ref(value)
+        if value_with_serialized_dep is not value and _is_model_dependency(value_with_serialized_dep):
+            return value_with_serialized_dep
+        try:
+            return _validate_dep_marked_value(param.name, value, param.annotation, source)
+        except TypeError as error:
+            literal_error = error
+        value_with_alias_deps = _resolve_serialized_dependency_ref(value, include_target_alias=True)
+        if value_with_alias_deps is not value and _is_model_dependency(value_with_alias_deps):
+            return value_with_alias_deps
+        value_with_registry_dep = _resolve_bound_param_registry_ref(param, value)
+        if value_with_registry_dep is not value and _is_model_dependency(value_with_registry_dep):
+            return value_with_registry_dep
+        raise literal_error
     try:
         return _coerce_value(param.name, value, param.annotation, source)
     except TypeError:
@@ -2056,6 +2396,26 @@ def _project_bound_dependency_context_for_inspect(model: "BoundModel", context: 
     return FlowContext(**projected)
 
 
+def _trim_dependency_context_for_inspect(
+    dependency_model: CallableModel,
+    dependency_context: Optional[ContextBase],
+    *,
+    trim_context: bool,
+) -> Optional[ContextBase]:
+    if not trim_context or dependency_context is None:
+        return dependency_context
+    if isinstance(dependency_model, BoundModel):
+        return _project_bound_dependency_context_for_inspect(dependency_model, dependency_context)
+    contract = _model_context_contract(dependency_model)
+    if contract.input_types is None:
+        return dependency_context
+    values = _context_values(dependency_context)
+    return _runtime_context_for_model(
+        dependency_model,
+        {name: values[name] for name in contract.input_types if name in values},
+    )
+
+
 def _generated_context_argument_specs(generated: "_GeneratedFlowModelBase", input_types: Optional[Dict[str, Any]]) -> Dict[str, InputSpec]:
     config = type(generated).__flow_model_config__
     explicit_fields = _bound_field_names(generated)
@@ -2106,7 +2466,11 @@ def _direct_dependency_specs(
     config = type(generated).__flow_model_config__
     for param in config.regular_params:
         value = getattr(generated, param.name, _UNSET_FLOW_INPUT)
-        if _is_unset_flow_input(value) or not _is_model_dependency(value):
+        if _is_unset_flow_input(value):
+            continue
+        if not _is_model_dependency(value):
+            if param.has_dep_slots:
+                specs.extend(_dep_marked_dependency_specs(param.name, value, param.annotation, context, trim_context=trim_context))
             continue
         dependency_model = value
         dependency_context = None
@@ -2117,16 +2481,7 @@ def _direct_dependency_specs(
                 dependency_model = value
                 dependency_context = _partial_dependency_context_for_inspect(value, context)
             else:
-                contract = _model_context_contract(dependency_model)
-                if trim_context and dependency_context is not None:
-                    if isinstance(dependency_model, BoundModel):
-                        dependency_context = _project_bound_dependency_context_for_inspect(dependency_model, dependency_context)
-                    elif contract.input_types is not None:
-                        values = _context_values(dependency_context)
-                        dependency_context = _runtime_context_for_model(
-                            dependency_model,
-                            {name: values[name] for name in contract.input_types if name in values},
-                        )
+                dependency_context = _trim_dependency_context_for_inspect(dependency_model, dependency_context, trim_context=trim_context)
         specs.append(DependencySpec(param.name, dependency_model, dependency_context, lazy=param.is_lazy))
     return tuple(specs)
 
@@ -2879,6 +3234,8 @@ def _make_deps_impl(config: _FlowModelConfig) -> _AnyCallable:
             if _is_model_dependency(value):
                 dependency_model, dependency_context = _resolved_dependency_invocation(value, context)
                 deps.append((dependency_model, [dependency_context]))
+            elif param.has_dep_slots:
+                deps.extend(_dep_marked_dependency_entries(value, param.annotation, context))
         return deps
 
     cast(Any, __deps__).__signature__ = inspect.Signature(

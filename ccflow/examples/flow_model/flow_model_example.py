@@ -6,15 +6,16 @@ Shows how to:
 1. define stages as plain Python functions,
 2. compose stages by passing upstream models as ordinary arguments,
 3. rewrite contextual inputs on one dependency edge with `.flow.with_context(...)`,
-4. execute the configured graph with `model.flow.compute(...)`.
+4. use `Dep[...]` for model leaves inside regular container inputs,
+5. execute the configured graph with `model.flow.compute(...)`.
 
 Run with:
-    python ccflow/examples/flow_model/flow_model_example.py
+    python -m ccflow.examples.flow_model.flow_model_example
 """
 
 from datetime import date, timedelta
 
-from ccflow import DateRangeContext, Flow, FromContext
+from ccflow import DateRangeContext, Dep, Flow, FromContext
 
 
 def _format_input_names(inputs: dict[str, object]) -> str:
@@ -23,10 +24,18 @@ def _format_input_names(inputs: dict[str, object]) -> str:
 
 
 def _format_bound_inputs(inputs: dict[str, object]) -> str:
+    def display_value(value: object) -> str:
+        if hasattr(value, "flow"):
+            return "model"
+        if isinstance(value, list):
+            return "[" + ", ".join(display_value(item) for item in value) + "]"
+        if isinstance(value, tuple):
+            return "(" + ", ".join(display_value(item) for item in value) + ")"
+        return repr(value)
+
     parts = []
     for name, value in inputs.items():
-        display = "model" if hasattr(value, "flow") else repr(value)
-        parts.append(f"{name}={display}")
+        parts.append(f"{name}={display_value(value)}")
     return ", ".join(parts) or "(none)"
 
 
@@ -45,13 +54,13 @@ def count_visitors(
 
 @Flow.model(context_type=DateRangeContext)
 def visitor_delta(
-    current: int,
-    previous: int,
+    counts: list[Dep[int]],
     label: str,
     start_date: FromContext[date],
     end_date: FromContext[date],
 ) -> dict[str, object]:
     """Return both visitor counts plus their difference."""
+    current, previous = counts
     return {
         "label": label,
         "window": f"{start_date} -> {end_date}",
@@ -75,8 +84,7 @@ def build_visitor_pipeline(location: str):
     current = count_visitors(location=location)
     previous = current.flow.with_context(shift_window(days=7))
     return visitor_delta(
-        current=current,
-        previous=previous,
+        counts=[current, previous],
         label="previous_week",
     )
 
@@ -101,8 +109,8 @@ def main() -> None:
     print("\nPipeline:")
     print("  model: visitor_delta")
     pipeline_inspection = pipeline.flow.inspect()
-    current_inspection = pipeline.current.flow.inspect()
-    previous_inspection = pipeline.previous.flow.inspect()
+    current_inspection = pipeline.counts[0].flow.inspect()
+    previous_inspection = pipeline.counts[1].flow.inspect()
     print(f"  bound inputs: {_format_bound_inputs(pipeline_inspection.bound_inputs)}")
     print(f"  declared context inputs: {_format_input_names(pipeline_inspection.context_inputs)}")
     print(f"  runtime inputs: {_format_input_names(pipeline_inspection.runtime_inputs)}")

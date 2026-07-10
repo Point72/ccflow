@@ -10,16 +10,17 @@ The pattern is:
 
 - keep runtime context (`start_date`, `end_date`) as runtime inputs,
 - use a plain Python builder function for graph construction,
+- use `Dep[...]` when a regular container input holds upstream models,
 - let Hydra instantiate that builder and register the returned model.
 
 Run with:
-    python ccflow/examples/flow_model/flow_model_hydra_builder_demo.py
+    python -m ccflow.examples.flow_model.flow_model_hydra_builder_demo
 """
 
 from datetime import date, timedelta
 from pathlib import Path
 
-from ccflow import CallableModel, DateRangeContext, Flow, FromContext, ModelRegistry
+from ccflow import CallableModel, DateRangeContext, Dep, Flow, FromContext, ModelRegistry
 
 CONFIG_PATH = Path(__file__).with_name("config") / "flow_model_hydra_builder_demo.yaml"
 
@@ -30,10 +31,18 @@ def _format_input_names(inputs: dict[str, object]) -> str:
 
 
 def _format_bound_inputs(inputs: dict[str, object]) -> str:
+    def display_value(value: object) -> str:
+        if hasattr(value, "flow"):
+            return "model"
+        if isinstance(value, list):
+            return "[" + ", ".join(display_value(item) for item in value) + "]"
+        if isinstance(value, tuple):
+            return "(" + ", ".join(display_value(item) for item in value) + ")"
+        return repr(value)
+
     parts = []
     for name, value in inputs.items():
-        display = "model" if hasattr(value, "flow") else repr(value)
-        parts.append(f"{name}={display}")
+        parts.append(f"{name}={display_value(value)}")
     return ", ".join(parts) or "(none)"
 
 
@@ -56,13 +65,13 @@ def count_visitors(location: str, start_date: FromContext[date], end_date: FromC
 
 @Flow.model(context_type=DateRangeContext)
 def visitor_delta(
-    current: int,
-    previous: int,
+    counts: list[Dep[int]],
     label: str,
     start_date: FromContext[date],
     end_date: FromContext[date],
 ) -> dict[str, object]:
     """Return both visitor counts plus their difference."""
+    current, previous = counts
     return {
         "label": label,
         "window": f"{start_date} -> {end_date}",
@@ -85,8 +94,7 @@ def build_visitor_delta(current: CallableModel, *, label: str, days_back: int):
     """Hydra-friendly builder that returns a configured visitor-count model."""
     previous = current.flow.with_context(shift_window(days=days_back))
     return visitor_delta(
-        current=current,
-        previous=previous,
+        counts=[current, previous],
         label=label,
     )
 
