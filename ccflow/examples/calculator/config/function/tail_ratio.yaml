@@ -1,0 +1,12 @@
+# A diamond: tail_ratio needs upper_gap and lower_gap, and both need mean.
+# Under the graph + cache evaluator (see base.yaml), the shared mean is
+# computed once instead of once per branch.
+_target_: ccflow.examples.calculator.functions.tail_ratio
+upper:
+  _target_: ccflow.examples.calculator.functions.upper_gap
+  center:
+    _target_: ccflow.examples.calculator.functions.mean
+lower:
+  _target_: ccflow.examples.calculator.functions.lower_gap
+  center:
+    _target_: ccflow.examples.calculator.functions.mean

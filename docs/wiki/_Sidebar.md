@@ -8,19 +8,40 @@ Notes for editors:
 
 **[Home](Home)**
 
-**Get Started**
-
-- [Installation](Installation)
-- [Design Goals](Design-Goals)
-- [Key Features](Key-Features)
-- [Flow Model](Flow-Model)
-- [First Steps](First-Steps)
-
 **Tutorials**
 
-- [Configuration](Configuration)
-- [Workflows](Workflows)
-- [ETL](ETL)
+- [Overview](Tutorials)
+- [First Steps](First-Steps)
+- [Configuring Models](Configuring-Models)
+- [Defining Workflows](Defining-Workflows)
+- [Building an ETL Pipeline](Building-an-ETL-Pipeline)
+- [Composing an ETL Application](Composing-an-ETL-Application)
+- [Building a Configurable Calculator](Building-a-Configurable-Calculator)
+
+**How-to Guides**
+
+- [Overview](How-to-Guides)
+- [Install ccflow](Installation)
+- [Configure Complex Values](Configure-Complex-Values)
+- [Bind Logic to Configs](Bind-Logic-to-Configs)
+- [Run Workflows from the CLI](Run-Workflows-from-the-CLI)
+- [Cache Results](Cache-Results)
+- [Retry on Failure](Retry-on-Failure)
+
+**Reference**
+
+- [Overview](Reference)
+- [Core Types](Core-Types)
+- [Contexts and Results](Contexts-and-Results)
+- [Built-in Models](Built-in-Models)
+- [Flow Model](Flow-Model)
+
+**Explanation**
+
+- [Overview](Explanation)
+- [Core Concepts](Core-Concepts)
+- [Design Goals](Design-Goals)
+- [Configuration and Hydra](Configuration-and-Hydra)
 
 **Developer Guide**
 

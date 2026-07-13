@@ -44,7 +44,8 @@ result = prefilled.flow.compute()
 assert result.value == 23
 ```
 
-> **Note:** When the function returns a plain value (like `int` above) instead
+> [!NOTE]
+> When the function returns a plain value (like `int` above) instead
 > of a `ResultBase` subclass, `@Flow.model` automatically wraps it in
 > `GenericResult`. Access the inner value with `.value`.
 
@@ -481,7 +482,7 @@ function body on each call, use a normal `CallableModel` subclass instead of
 
 For class-based `CallableModel` methods that want to declare context fields as
 keyword-only parameters, see `Flow.call(auto_context=...)` in
-[Workflows](Workflows#flow-decorator).
+[Defining Workflows](Defining-Workflows#controlling-the-flow-decorator).
 
 ## Introspection
 

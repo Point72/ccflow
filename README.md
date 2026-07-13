@@ -33,7 +33,14 @@ We have taken these ideas a step further by introducing the concept of the `Mode
 
 We aim to provide additional (and optional) tools for workflow orchestration on top of the configuration framework.
 
-[More information is available in our wiki](https://github.com/Point72/ccflow/wiki)
+## Documentation
+
+Our [wiki](https://github.com/Point72/ccflow/wiki) is organized along the four kinds of documentation:
+
+- **[Tutorials](https://github.com/Point72/ccflow/wiki/Tutorials)** — hands-on lessons, from [First Steps](https://github.com/Point72/ccflow/wiki/First-Steps) through building ETL applications to a [configurable calculator driven from the CLI](https://github.com/Point72/ccflow/wiki/Building-a-Configurable-Calculator).
+- **[How-to Guides](https://github.com/Point72/ccflow/wiki/How-to-Guides)** — recipes for specific tasks like configuring complex values, caching, and retries.
+- **[Reference](https://github.com/Point72/ccflow/wiki/Reference)** — the core types, built-in models, and options.
+- **[Explanation](https://github.com/Point72/ccflow/wiki/Explanation)** — the [design goals](https://github.com/Point72/ccflow/wiki/Design-Goals), [core concepts](https://github.com/Point72/ccflow/wiki/Core-Concepts), and [why ccflow leans on Hydra](https://github.com/Point72/ccflow/wiki/Configuration-and-Hydra).
 
 ## Installation
 
