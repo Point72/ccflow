@@ -1,0 +1,37 @@
+# @package _global_
+
+# Base configuration for the functional calculator example.
+#
+# The `function` config group selects which calculator runs, and the `output`
+# config group selects how the result is emitted (print, log, or write to file).
+#
+# Run the default calculator, printing the result:
+#   python -m ccflow.examples.calculator +context.values=[1,2,3]
+# Swap the calculator (it is in the defaults list, so no `+`):
+#   python -m ccflow.examples.calculator function=power +context.values=[1,2,3]
+# Configure the selected calculator's field:
+#   python -m ccflow.examples.calculator function=power function.exponent=3 +context.values=[1,2,3]
+# Change how the result is emitted:
+#   python -m ccflow.examples.calculator output=log +context.values=[1,2,3]
+#   python -m ccflow.examples.calculator output=write +context.values=[1,2,3]
+# A diamond that reuses a shared `mean` node (deduped by the graph + cache evaluator below):
+#   python -m ccflow.examples.calculator function=tail_ratio +context.values=[1,2,3,10]
+
+defaults:
+  - _self_
+  - function: add
+  - output: print
+
+callable: /output
+
+# Run every workflow under a graph + cache evaluator, so shared nodes in a
+# composed graph (e.g. the `mean` inside `tail_ratio`) are evaluated once.
+cli:
+  model:
+    _target_: ccflow.FlowOptions
+    evaluator:
+      _target_: ccflow.evaluators.MultiEvaluator
+      evaluators:
+        - _target_: ccflow.evaluators.GraphEvaluator
+        - _target_: ccflow.evaluators.MemoryCacheEvaluator
+    cacheable: true

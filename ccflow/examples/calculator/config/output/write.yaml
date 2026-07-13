@@ -1,0 +1,7 @@
+_target_: ccflow.PublisherModel
+model: /function
+publisher:
+  _target_: ccflow.publishers.GenericFilePublisher
+  name: result
+  suffix: .txt
+field: value

@@ -1,0 +1,7 @@
+# Composes two functions: round the result of `power`.
+# `value` is a regular parameter fed by an upstream calculator model.
+_target_: ccflow.examples.calculator.functions.rounded
+digits: 2
+value:
+  _target_: ccflow.examples.calculator.functions.power
+  exponent: 2.0
