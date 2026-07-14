@@ -1,4 +1,4 @@
-__version__ = "0.8.5"
+__version__ = "0.9.0"
 
 # Import exttypes early so modules that import `from ccflow import PyObjectPath` during
 # initialization find it (avoids circular import issues with functions that import utilities
