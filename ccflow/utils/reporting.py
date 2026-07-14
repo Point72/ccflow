@@ -81,7 +81,7 @@ class ReportPhase(str, Enum):
         run/graph observer layer and are *not* emitted by the current evaluator/model paths.
         :class:`ReportingStateStore` already knows how to fold them so that the consuming layer can be
         added without a breaking change. ``QUEUED`` / ``SKIPPED`` are emitted today by
-        :class:`~ccflow.evaluators.reporting.DryRunEvaluator`.
+        :class:`~ccflow.evaluators.dry_run.DryRunEvaluator`.
     """
 
     START = "START"
@@ -111,14 +111,11 @@ class AlertPriority(str, Enum):
     P5 = "P5"
 
 
-# *****************************************************************************
 # Span correlation
-#
 # A module-level ContextVar tracks the *current* span so that nested evaluations
 # (e.g. a RetryModel wrapping a CallableModel, or dependencies evaluated within a
 # parent) link together into a span tree. ContextVars are per-thread / per-async
 # context, so this preserves the thread-safety guarantee of the evaluators.
-# *****************************************************************************
 
 _CURRENT_SPAN: ContextVar[Optional[Tuple[str, int]]] = ContextVar("ccflow_report_span", default=None)
 _CURRENT_RUN: ContextVar[Optional[str]] = ContextVar("ccflow_report_run", default=None)
@@ -217,9 +214,7 @@ class ReportEvent(BaseModel):
     extra: Dict[str, Any] = Field(default_factory=dict, description="Additional sink-specific metadata.")
 
 
-# *****************************************************************************
-# Reporters (pluggable sinks)
-# *****************************************************************************
+# Pluggable reporter sinks
 
 
 class Reporter(BaseModel):
@@ -452,9 +447,7 @@ class ReportingStateStore:
         return [n for n in self.nodes.values() if n.parent_span_id == span_id]
 
 
-# *****************************************************************************
-# Reporting policies (orchestration mixins)
-# *****************************************************************************
+# Reporting policy mixins
 
 
 class ReportingPolicy(BaseModel):
@@ -501,15 +494,19 @@ class ReportingPolicy(BaseModel):
             **kwargs,
         )
 
-    # -- lifecycle hooks (override in subclasses) ----------------------------
-
     def _on_start(self, ctx: ReportContext, span: "Optional[Span]") -> None:
+        if self.reporter is None:
+            return
         self._emit(self._event(ctx, ReportPhase.START))
 
     def _on_success(self, ctx: ReportContext, span: "Optional[Span]", result: ResultType) -> None:
+        if self.reporter is None:
+            return
         self._emit(self._event(ctx, ReportPhase.SUCCESS, duration=ctx.elapsed()))
 
     def _on_error(self, ctx: ReportContext, span: "Optional[Span]", exc: BaseException) -> None:
+        if self.reporter is None:
+            return
         self._emit(
             self._event(
                 ctx,
@@ -521,6 +518,8 @@ class ReportingPolicy(BaseModel):
         )
 
     def _on_end(self, ctx: ReportContext, span: "Optional[Span]") -> None:
+        if self.reporter is None:
+            return
         self._emit(self._event(ctx, ReportPhase.END, duration=ctx.elapsed()))
 
     @contextmanager
@@ -531,8 +530,6 @@ class ReportingPolicy(BaseModel):
         yields ``None`` and relies on the lifecycle hooks for emission.
         """
         yield None
-
-    # -- orchestration -------------------------------------------------------
 
     def _make_context(self, *, model_name: str, model_type: str, fn: str, context: Any) -> ReportContext:
         parent = _CURRENT_SPAN.get()
@@ -590,9 +587,7 @@ class ReportingPolicy(BaseModel):
             _CURRENT_SPAN.reset(token)
 
 
-# *****************************************************************************
-# Logging policy (the default, back-compat reporting signal)
-# *****************************************************************************
+# Default logging policy
 
 
 class FormatConfig(BaseModel):
@@ -727,6 +722,8 @@ class MetricsPolicy(ReportingPolicy):
     metric_prefix: str = Field("ccflow.model", description="Prefix applied to emitted metric names.")
 
     def _on_success(self, ctx: ReportContext, span: "Optional[Span]", result: ResultType) -> None:
+        if self.reporter is None:
+            return
         self._emit(
             self._event(
                 ctx,
@@ -737,6 +734,8 @@ class MetricsPolicy(ReportingPolicy):
         )
 
     def _on_error(self, ctx: ReportContext, span: "Optional[Span]", exc: BaseException) -> None:
+        if self.reporter is None:
+            return
         self._emit(
             self._event(
                 ctx,
@@ -749,6 +748,8 @@ class MetricsPolicy(ReportingPolicy):
         )
 
     def _on_end(self, ctx: ReportContext, span: "Optional[Span]") -> None:
+        if self.reporter is None:
+            return
         self._emit(
             self._event(
                 ctx,
@@ -763,8 +764,8 @@ class AlertsPolicy(ReportingPolicy):
     """Reporting policy specialised for *alerting*.
 
     Emits a prioritised alert event when an evaluation fails (and, optionally, when it succeeds again
-    after previously failing). Concrete backends (PagerDuty / Opsgenie / JSM / ...) override the hooks
-    to route alerts to an on-call system.
+    after previously failing). Concrete backends override the hooks to route alerts to an on-call
+    system.
     """
 
     priority: AlertPriority = Field(AlertPriority.P3, description="Priority tag applied to emitted alerts (P1 = most severe).")
@@ -776,11 +777,11 @@ class AlertsPolicy(ReportingPolicy):
         pass
 
     def _on_success(self, ctx: ReportContext, span: "Optional[Span]", result: ResultType) -> None:
-        if self.alert_on_success:
+        if self.reporter is not None and self.alert_on_success:
             self._emit(self._event(ctx, ReportPhase.SUCCESS, duration=ctx.elapsed(), priority=self.priority))
 
     def _on_error(self, ctx: ReportContext, span: "Optional[Span]", exc: BaseException) -> None:
-        if self.alert_on_error:
+        if self.reporter is not None and self.alert_on_error:
             self._emit(
                 self._event(
                     ctx,
@@ -796,9 +797,7 @@ class AlertsPolicy(ReportingPolicy):
         pass
 
 
-# *****************************************************************************
-# OpenTelemetry policies (real, optional-dependency backends)
-# *****************************************************************************
+# OpenTelemetry policies
 
 
 def _require_opentelemetry():

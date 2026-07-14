@@ -1,6 +1,6 @@
 import logging
 import pickle
-from typing import Callable
+from typing import Callable, ClassVar
 from unittest import TestCase
 
 from ccflow.utils.reporting import (
@@ -97,6 +97,18 @@ class TestReportingPolicy(TestCase):
     def test_no_reporter_is_passthrough(self):
         policy = ReportingPolicy()
         self.assertEqual(self._run(policy, _ok), "ok")
+
+    def test_no_reporter_does_not_construct_events(self):
+        class CountingPolicy(ReportingPolicy):
+            event_calls: ClassVar[int] = 0
+
+            def _event(self, *args, **kwargs):
+                type(self).event_calls += 1
+                return super()._event(*args, **kwargs)
+
+        policy = CountingPolicy()
+        self.assertEqual(self._run(policy, _ok), "ok")
+        self.assertEqual(policy.event_calls, 0)
 
     def test_error_reports_and_reraises(self):
         reporter = InMemoryReporter()

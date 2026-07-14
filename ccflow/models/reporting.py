@@ -108,5 +108,5 @@ class OpenTelemetryMetricsReportingModel(MetricsReportingModel[CallableModelType
     """Metrics model backed by OpenTelemetry counters/histograms (requires ``opentelemetry-api``)."""
 
 
-#: Convenience alias for the most common OpenTelemetry use case (tracing).
+# Convenience alias for the most common OpenTelemetry use case (tracing).
 OpenTelemetryModel = OpenTelemetryTracingReportingModel

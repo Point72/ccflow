@@ -35,6 +35,7 @@ Notes for editors:
 - [Contexts and Results](Contexts-and-Results)
 - [Built-in Models](Built-in-Models)
 - [Flow Model](Flow-Model)
+- [Reporting](Reporting)
 
 **Explanation**
 

@@ -5,26 +5,17 @@ from unittest import TestCase
 from ccflow import DateContext, FlowOptionsOverride, GenericResult, ModelEvaluationContext, TransparentModelEvaluationContext
 from ccflow.evaluators import (
     AlertsReportingEvaluator,
-    DatadogAlertsReportingEvaluator,
-    DatadogMetricsReportingEvaluator,
-    DatadogTracingReportingEvaluator,
     DryRunEvaluator,
-    JSMAlertsReportingEvaluator,
     MemoryCacheEvaluator,
     MetricsReportingEvaluator,
     MultiEvaluator,
-    NewRelicAlertsReportingEvaluator,
-    NewRelicMetricsReportingEvaluator,
-    NewRelicTracingReportingEvaluator,
     OpenTelemetryEvaluator,
     OpenTelemetryMetricsReportingEvaluator,
     OpenTelemetryTracingReportingEvaluator,
-    OpsgenieAlertsReportingEvaluator,
-    OpsgenieMetricsReportingEvaluator,
     ReportingEvaluator,
     TracingReportingEvaluator,
 )
-from ccflow.utils.reporting import AlertPriority, InMemoryReporter, ReportPhase
+from ccflow.utils.reporting import AlertPriority, InMemoryReporter, ReportingPolicy, ReportPhase
 
 from .util import MyFlakyCallable, MyResult, NodeModel
 
@@ -94,27 +85,6 @@ class TestReportingEvaluator(TestCase):
         self.assertEqual(TracingReportingEvaluator.model_validate(dumped), evaluator)
 
 
-class TestNotImplementedReportingEvaluators(TestCase):
-    def setUp(self):
-        self.context = ModelEvaluationContext(model=MyFlakyCallable(fail_times=0), context=DateContext(date=date(2022, 1, 1)))
-
-    def test_placeholders_raise(self):
-        placeholders = [
-            DatadogTracingReportingEvaluator,
-            DatadogMetricsReportingEvaluator,
-            DatadogAlertsReportingEvaluator,
-            OpsgenieMetricsReportingEvaluator,
-            OpsgenieAlertsReportingEvaluator,
-            JSMAlertsReportingEvaluator,
-            NewRelicTracingReportingEvaluator,
-            NewRelicMetricsReportingEvaluator,
-            NewRelicAlertsReportingEvaluator,
-        ]
-        for cls in placeholders:
-            with self.assertRaises(NotImplementedError):
-                cls()(self.context)
-
-
 class TestOpenTelemetryEvaluator(TestCase):
     def setUp(self):
         self.context = ModelEvaluationContext(model=MyFlakyCallable(offset=1, fail_times=0), context=DateContext(date=date(2022, 1, 1)))
@@ -150,16 +120,20 @@ class TestDryRunEvaluator(TestCase):
     def _eval_context(self, model):
         return ModelEvaluationContext(model=model, context=self.context)
 
+    def test_composes_reporting_policy(self):
+        evaluator = DryRunEvaluator(reporting={"capture_context_repr": False})
+        self.assertIsInstance(evaluator.reporting, ReportingPolicy)
+
     def test_does_not_execute_bodies(self):
         reporter = InMemoryReporter()
-        evaluator = DryRunEvaluator(reporter=reporter)
+        evaluator = DryRunEvaluator(reporting={"reporter": reporter})
         evaluator(self._eval_context(self.root))
         # No __call__ bodies ran (NodeModel records call bodies in _calls).
         self.assertEqual(NodeModel._calls, [])
 
     def test_emits_queued_and_skipped_for_each_node(self):
         reporter = InMemoryReporter()
-        evaluator = DryRunEvaluator(reporter=reporter)
+        evaluator = DryRunEvaluator(reporting={"reporter": reporter})
         evaluator(self._eval_context(self.root))
         phases = [e.phase for e in reporter.events]
         self.assertEqual(phases.count(ReportPhase.QUEUED), 2)
@@ -169,7 +143,7 @@ class TestDryRunEvaluator(TestCase):
 
     def test_parent_child_span_tree(self):
         reporter = InMemoryReporter()
-        evaluator = DryRunEvaluator(reporter=reporter)
+        evaluator = DryRunEvaluator(reporting={"reporter": reporter})
         evaluator(self._eval_context(self.root))
         queued = {e.model_name: e for e in reporter.events if e.phase == ReportPhase.QUEUED}
         self.assertIsNone(queued["root"].parent_span_id)
@@ -197,7 +171,7 @@ class TestDryRunEvaluator(TestCase):
         # Regression: the documented FlowOptionsOverride path used to recurse while discovering deps
         # because __deps__ is evaluated through the active (dry-run) evaluator.
         reporter = InMemoryReporter()
-        with FlowOptionsOverride(options={"evaluator": DryRunEvaluator(reporter=reporter)}):
+        with FlowOptionsOverride(options={"evaluator": DryRunEvaluator(reporting={"reporter": reporter})}):
             out = self.root(self.context)
         self.assertIsInstance(out, self.root.result_type)
         self.assertEqual(NodeModel._calls, [])
@@ -219,7 +193,7 @@ class TestDryRunEvaluator(TestCase):
 
     def test_node_key_in_extra(self):
         reporter = InMemoryReporter()
-        DryRunEvaluator(reporter=reporter)(self._eval_context(self.root))
+        DryRunEvaluator(reporting={"reporter": reporter})(self._eval_context(self.root))
         for event in reporter.events:
             self.assertIn("node_key", event.extra)
 
@@ -230,13 +204,13 @@ class TestDryRunEvaluator(TestCase):
         # (The dependency `leaf` is built by the framework identically in both styles; the root differs
         # only because a bare direct MEC carries different FlowOptions than the framework-built one.)
         direct_reporter = InMemoryReporter()
-        DryRunEvaluator(reporter=direct_reporter)(self._eval_context(self.root))
+        DryRunEvaluator(reporting={"reporter": direct_reporter})(self._eval_context(self.root))
         direct_leaf = next(e.extra["node_key"] for e in direct_reporter.events if e.phase == ReportPhase.QUEUED and e.model_name == "leaf")
 
         NodeModel._calls.clear()
         NodeModel._deps_calls.clear()
         override_reporter = InMemoryReporter()
-        with FlowOptionsOverride(options={"evaluator": DryRunEvaluator(reporter=override_reporter)}):
+        with FlowOptionsOverride(options={"evaluator": DryRunEvaluator(reporting={"reporter": override_reporter})}):
             self.root(self.context)
         override_leaf = next(e.extra["node_key"] for e in override_reporter.events if e.phase == ReportPhase.QUEUED and e.model_name == "leaf")
 
@@ -249,7 +223,7 @@ class TestDryRunEvaluator(TestCase):
         from ccflow.evaluators.common import _flatten_cache_key_context, cache_key, get_dependency_graph
 
         reporter = InMemoryReporter()
-        with FlowOptionsOverride(options={"evaluator": DryRunEvaluator(reporter=reporter)}):
+        with FlowOptionsOverride(options={"evaluator": DryRunEvaluator(reporting={"reporter": reporter})}):
             self.root(self.context)
         emitted = {e.model_name: e.extra["node_key"] for e in reporter.events if e.phase == ReportPhase.QUEUED}
 
@@ -271,12 +245,12 @@ class TestDryRunEvaluator(TestCase):
         from ccflow.evaluators.common import cache_key
 
         default_reporter = InMemoryReporter()
-        DryRunEvaluator(reporter=default_reporter)(ModelEvaluationContext(model=self.root, context=self.context))
+        DryRunEvaluator(reporting={"reporter": default_reporter})(ModelEvaluationContext(model=self.root, context=self.context))
         default_key = next(e.extra["node_key"] for e in default_reporter.events if e.phase == ReportPhase.QUEUED and e.model_name == "root")
 
         other_reporter = InMemoryReporter()
         other_context = ModelEvaluationContext(model=self.root, context=self.context, options={"validate_result": False})
-        DryRunEvaluator(reporter=other_reporter)(other_context)
+        DryRunEvaluator(reporting={"reporter": other_reporter})(other_context)
         other_key = next(e.extra["node_key"] for e in other_reporter.events if e.phase == ReportPhase.QUEUED and e.model_name == "root")
 
         self.assertNotEqual(default_key, other_key)
