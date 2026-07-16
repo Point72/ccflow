@@ -64,6 +64,9 @@ full = [
     "ray",
     "scipy",
     "smart_open",
+    "spaday",
+    "starlette",
+    "uvicorn",
     "xarray",
 ]
 otel = [
@@ -96,6 +99,9 @@ develop = [
     "ray",
     "scipy",
     "smart_open",
+    "spaday",
+    "starlette",
+    "uvicorn",
     "xarray",
     # Reporting deps
     "opentelemetry-api",
@@ -119,6 +125,7 @@ test = [
 ]
 
 [project.scripts]
+ccflow-ui-spaday = "ccflow.ui.spaday.cli:main"
 
 [project.urls]
 Repository = "https://github.com/Point72/ccflow"

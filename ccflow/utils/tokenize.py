@@ -441,11 +441,6 @@ _SKIPPED_METHODS = frozenset(
 )
 
 
-# ---------------------------------------------------------------------------
-# Behavior hashing — bytecode-based fingerprinting of class methods
-# ---------------------------------------------------------------------------
-
-
 def _unwrap_function(func: object) -> Callable | None:
     """Unwrap descriptors and decorator chains to get the underlying function.
 
