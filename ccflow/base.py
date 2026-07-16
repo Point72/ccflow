@@ -286,7 +286,7 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
         Requires ccflow UI dependencies (panel, panel_material_ui).
         """
         try:
-            from ccflow.ui.model import ModelViewer
+            from ccflow.ui.panel.model import ModelViewer
         except ImportError:
             raise ImportError(
                 "panel and other optional dependencies must be installed to use ModelViewer. Pip install ccflow[full] to install all optional dependencies."
@@ -480,7 +480,7 @@ class ModelRegistry(BaseModel, collections.abc.Mapping):
 
         Requires ccflow UI dependencies (panel, panel_material_ui).
         """
-        from ccflow.ui.registry import ModelRegistryViewer
+        from ccflow.ui.panel.registry import ModelRegistryViewer
 
         return ModelRegistryViewer(self)
 

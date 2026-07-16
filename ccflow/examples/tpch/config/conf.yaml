@@ -24,19 +24,15 @@
 #      (``load_config(overrides=["tpch.backend.scale_factor=1.0"])``) reconfigures
 #      every table, answer and query consistently.
 
-# ---------------------------------------------------------------------------
 # Shared DuckDB backend. Plain ``ccflow.BaseModel`` — not callable itself,
 # but registered so all providers share one connection and one ``dbgen`` call.
-# ---------------------------------------------------------------------------
 tpch:
   backend:
     _target_: ccflow.examples.tpch.TPCHDuckDBBackend
     scale_factor: 0.1
 
-# ---------------------------------------------------------------------------
 # Per-table providers. One instance per TPC-H table; the output schema of
 # each instance is fixed by its ``table`` field.
-# ---------------------------------------------------------------------------
 table:
   customer:
     _target_: ccflow.examples.tpch.TPCHTableProvider
@@ -71,10 +67,8 @@ table:
     backend: /tpch/backend
     table: supplier
 
-# ---------------------------------------------------------------------------
 # Reference answers, one per query, served straight from DuckDB's
 # ``tpch_answers()`` table at the configured scale factor.
-# ---------------------------------------------------------------------------
 answer:
   Q1:
     _target_: ccflow.examples.tpch.TPCHAnswerProvider
@@ -165,12 +159,10 @@ answer:
     backend: /tpch/backend
     query_id: 22
 
-# ---------------------------------------------------------------------------
 # The 22 TPC-H queries. Each ``TPCHQuery`` is the same Python class with a
 # different ``query_id`` and a different tuple of table-provider inputs.
 # Wiring the inputs in YAML makes each query's table dependencies explicit
 # and overridable per-query.
-# ---------------------------------------------------------------------------
 query:
   Q1:
     _target_: ccflow.examples.tpch.TPCHQuery
