@@ -50,15 +50,11 @@ def registry_viewer_cli(
 ):
     """CLI entry point for serving ModelRegistryViewer.
 
-    Parameters
-    ----------
-    config_path
-        The config_path specified in hydra.main()
-    config_name
-        The config_name specified in hydra.main()
-    hydra_main
-        The function decorated with hydra.main(). Used to resolve config_path
-        relative to the decorated function's file location.
+    Args:
+        config_path: The config_path specified in hydra.main()
+        config_name: The config_name specified in hydra.main()
+        hydra_main: The function decorated with hydra.main(). Used to resolve config_path
+            relative to the decorated function's file location.
     """
     parser = _get_ui_args_parser()
     args = parser.parse_args()
