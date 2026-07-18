@@ -14,7 +14,7 @@ from spaday.components import App, Body, Column, Gutter, Main, Nav, Show, WaOpti
 
 import ccflow
 
-from .model import model_view
+from .model import model_view, pending_model_view
 
 __all__ = ("SELECTED_FIELD", "registry_store", "registry_leaves", "registry_tree", "registry_viewer")
 
@@ -29,7 +29,13 @@ def registry_store() -> dict:
 
 def _sorted_items(registry, sort_children: bool):
     """Registry entries, optionally with subregistries first and each group sorted alphabetically."""
-    items = registry.models.items()
+    if isinstance(registry, ccflow.LazyRegistry):
+        items = []
+        for name in registry.models:
+            loaded = registry.get_loaded(name)
+            items.append((name, loaded if loaded is not None else registry.get_pending_config(name)))
+    else:
+        items = list(registry.models.items())
     if sort_children:
         items = sorted(items, key=lambda kv: (not isinstance(kv[1], ccflow.ModelRegistry), kv[0]))
     return list(items)
@@ -89,7 +95,8 @@ def registry_viewer(registry, *, title: str = "ccflow Model Registry", browser_w
 
     panels: List[Component] = [Show(_placeholder(), when=eq(field(SELECTED_FIELD), lit("")))]
     for path, model in leaves:
-        panels.append(Show(model_view(model, path), when=eq(field(SELECTED_FIELD), lit(path))))
+        detail = pending_model_view(model, path) if isinstance(model, dict) and "_target_" in model else model_view(model, path)
+        panels.append(Show(detail, when=eq(field(SELECTED_FIELD), lit(path))))
 
     return App(
         Nav(Strong(title)),
