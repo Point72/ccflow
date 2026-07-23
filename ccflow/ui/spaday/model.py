@@ -6,14 +6,19 @@ an instance summary, the model / context / result types with their fields, and t
 """
 
 import json
+from urllib.parse import urlencode
 
 from pydantic._internal._repr import display_as_type
 from spaday import Component, Strong, Text, element
-from spaday.components import Column, Row, Tabs, WaBadge, WaCard, WaDivider
+from spaday.components import Column, Row, Tabs, WaBadge, WaButton, WaCard, WaDivider
 
 import ccflow
 
-__all__ = ("model_type_view", "model_config_view", "model_view", "pending_model_view")
+#: Path of the endpoint (served by :func:`ccflow.ui.spaday.cli.serve_registry`) that materializes a
+#: pending model server-side and redirects back with it selected.
+MATERIALIZE_ENDPOINT = "/materialize"
+
+__all__ = ("MATERIALIZE_ENDPOINT", "model_type_view", "model_config_view", "model_view", "pending_model_view")
 
 _PRE_STYLE = {
     "white_space": "pre-wrap",
@@ -120,15 +125,27 @@ def model_view(model, path: str = "") -> Component:
     return WaCard(appearance="outlined").child(Column(header, WaDivider(), tabs, gap="0.75rem"))
 
 
+def _materialize_button(path: str) -> Component:
+    """A link that asks the server to instantiate the pending model and reselect it once loaded."""
+    href = f"{MATERIALIZE_ENDPOINT}?{urlencode({'path': path})}"
+    return WaButton(variant="brand", href=href).text("Materialize")
+
+
 def pending_model_view(config, path: str) -> Component:
-    """A card showing configuration for a model that has not been instantiated."""
+    """A card showing configuration for a model that has not been instantiated.
+
+    The model is only inspected as its unresolved config here; the ``Materialize`` action instantiates
+    it on the server (in a try/except) and reloads the page with the now-loaded model selected, so its
+    full :func:`model_view` detail is shown.
+    """
     target = str(config.get("_target_", "Pending model"))
     tabs = Tabs(active="summary")
     tabs.tab(
         "Summary",
         Column(
             _labeled("Registry Path", _code(path)),
-            Text("This model will be instantiated when accessed from Python."),
+            Text("This model has not been instantiated. Materialize it to inspect its type, context, result, and parameters."),
+            _materialize_button(path),
             gap="0.75rem",
         ),
         name="summary",
