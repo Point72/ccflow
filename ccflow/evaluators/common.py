@@ -1,6 +1,7 @@
 import logging
+from collections.abc import Callable
 from types import MappingProxyType
-from typing import Any, Callable, Dict, List, Optional, Set, Union
+from typing import Any
 
 from pydantic import Field, PrivateAttr
 from typing_extensions import override
@@ -21,16 +22,16 @@ from ..utils.tokenize import compute_cache_token
 from .reporting import ReportingEvaluator, _descriptor
 
 __all__ = [
-    "cache_key",
-    "combine_evaluators",
+    "CallableModelGraph",
     "FallbackEvaluator",
     "FormatConfig",
+    "GraphEvaluator",
     "LazyEvaluator",
     "LoggingEvaluator",
     "MemoryCacheEvaluator",
     "MultiEvaluator",
-    "CallableModelGraph",
-    "GraphEvaluator",
+    "cache_key",
+    "combine_evaluators",
     "get_dependency_graph",
 ]
 
@@ -54,7 +55,7 @@ class _IdentityMemoKey:
     equality still checks object identity, so hash collisions are harmless.
     """
 
-    __slots__ = ("model", "context", "_hash")
+    __slots__ = ("_hash", "context", "model")
 
     def __init__(self, model: CallableModel, context: Any):
         self.model = model
@@ -64,11 +65,11 @@ class _IdentityMemoKey:
     def __hash__(self) -> int:
         return self._hash
 
-    def __eq__(self, other: Any) -> bool:
+    def __eq__(self, other: object) -> bool:
         return isinstance(other, _IdentityMemoKey) and self.model is other.model and self.context is other.context
 
 
-def combine_evaluators(first: Optional[EvaluatorBase], second: Optional[EvaluatorBase]) -> EvaluatorBase:
+def combine_evaluators(first: EvaluatorBase | None, second: EvaluatorBase | None) -> EvaluatorBase:
     """Helper function to combine evaluators into a new evaluator.
 
     Args:
@@ -90,9 +91,9 @@ def combine_evaluators(first: Optional[EvaluatorBase], second: Optional[Evaluato
         return MultiEvaluator(evaluators=[first, second])
 
 
-def _flatten_cache_key_context(flow_obj: ModelEvaluationContext) -> tuple[ModelEvaluationContext, str, List[EvaluatorBase]]:
+def _flatten_cache_key_context(flow_obj: ModelEvaluationContext) -> tuple[ModelEvaluationContext, str, list[EvaluatorBase]]:
     fn = flow_obj.fn
-    non_transparent: List[EvaluatorBase] = []
+    non_transparent: list[EvaluatorBase] = []
     while isinstance(flow_obj.context, ModelEvaluationContext):
         fn = flow_obj.fn if flow_obj.fn != "__call__" else fn
         if not isinstance(flow_obj, TransparentModelEvaluationContext):
@@ -110,7 +111,7 @@ class MultiEvaluator(EvaluatorBase):
     cache key computation.
     """
 
-    evaluators: List[EvaluatorBase] = Field(
+    evaluators: list[EvaluatorBase] = Field(
         description="The list of evaluators to combine. The first evaluator in the list will be called first during evaluation."
     )
 
@@ -127,7 +128,7 @@ class MultiEvaluator(EvaluatorBase):
 class FallbackEvaluator(EvaluatorBase):
     """An evaluator that tries a list of evaluators in turn until one succeeds."""
 
-    evaluators: List[EvaluatorBase] = Field(description="The list of evaluators to try (in order).")
+    evaluators: list[EvaluatorBase] = Field(description="The list of evaluators to try (in order).")
 
     def is_transparent(self, context: ModelEvaluationContext) -> bool:
         return all(e.is_transparent(context) for e in self.evaluators)
@@ -137,8 +138,8 @@ class FallbackEvaluator(EvaluatorBase):
         for evaluator in self.evaluators:
             try:
                 return evaluator(context)
-            except Exception as e:
-                log.exception("Evaluator %s failed: \n%s", evaluator, e)
+            except Exception:
+                log.exception("Evaluator %s failed", evaluator)
         raise RuntimeError("All evaluators failed.")
 
 
@@ -178,9 +179,9 @@ class LoggingEvaluator(ReportingEvaluator, LoggingPolicy):
 def _effective_model_key(
     model: CallableModel,
     context: Any,
-    memo: Dict[_IdentityMemoKey, bytes],
-    active: Set[int],
-) -> Optional[bytes]:
+    memo: dict[_IdentityMemoKey, bytes],
+    active: set[int],
+) -> bytes | None:
     """Return a model's opt-in effective key, or ``None`` for normal opt-out.
 
     Plain ``CallableModel`` instances opt out by returning ``None`` from
@@ -215,8 +216,8 @@ def _effective_model_key(
 
 def _resolve_effective_identity_payload(
     value: Any,
-    memo: Dict[_IdentityMemoKey, bytes],
-    active: Set[int],
+    memo: dict[_IdentityMemoKey, bytes],
+    active: set[int],
 ) -> Any:
     """Replace dependency invocation markers with recursive effective keys."""
     if isinstance(value, EvaluationDependency):
@@ -236,8 +237,8 @@ def _resolve_effective_identity_payload(
 
 def _effective_evaluation_key(
     evaluation_context: ModelEvaluationContext,
-    memo: Optional[Dict[_IdentityMemoKey, bytes]] = None,
-    active: Optional[Set[int]] = None,
+    memo: dict[_IdentityMemoKey, bytes] | None = None,
+    active: set[int] | None = None,
     fallback: bool = True,
 ) -> bytes:
     """Use opt-in effective identity for ``__call__``; otherwise preserve ``cache_key()``."""
@@ -292,7 +293,7 @@ def _effective_evaluation_key(
     ).encode("utf-8")
 
 
-def cache_key(flow_obj: Union[ModelEvaluationContext, ContextBase, CallableModel], *, effective: bool = False) -> bytes:
+def cache_key(flow_obj: ModelEvaluationContext | ContextBase | CallableModel, *, effective: bool = False) -> bytes:
     """Returns a key suitable for caching and dependency graph deduplication.
 
     For ``ModelEvaluationContext`` inputs, strips ``TransparentModelEvaluationContext``
@@ -339,8 +340,8 @@ class MemoryCacheEvaluator(EvaluatorBase):
     """Evaluator that caches results in memory."""
 
     # Note: We make the cache attributes private, so they don't affect tokenization of the MemoryCacheEvaluator itself
-    _cache: Dict[bytes, ResultType] = PrivateAttr({})
-    _ids: Dict[bytes, ModelEvaluationContext] = PrivateAttr({})
+    _cache: dict[bytes, ResultType] = PrivateAttr({})
+    _ids: dict[bytes, ModelEvaluationContext] = PrivateAttr({})
 
     def is_transparent(self, context: ModelEvaluationContext) -> bool:
         return True
@@ -388,16 +389,16 @@ class CallableModelGraph(BaseModel):
     the graph was built from.
     """
 
-    graph: Dict[bytes, Set[bytes]]
-    ids: Dict[bytes, ModelEvaluationContext]
+    graph: dict[bytes, set[bytes]]
+    ids: dict[bytes, ModelEvaluationContext]
     root_id: bytes
 
 
 def _build_dependency_graph(
     evaluation_context: ModelEvaluationContext,
     graph: CallableModelGraph,
-    parent_key: Optional[bytes] = None,
-    parent_model: Optional[CallableModel] = None,
+    parent_key: bytes | None = None,
+    parent_model: CallableModel | None = None,
 ) -> bytes:
     # Generated/bound ``@Flow.model`` nodes can use effective identity so unused
     # ambient FlowContext fields do not split the graph. Normal CallableModel

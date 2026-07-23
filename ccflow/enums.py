@@ -15,18 +15,19 @@ Notes:
 """
 
 import inspect
+from collections.abc import Callable
 from os import environ
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Union
+from typing import TYPE_CHECKING, Any
 
 from pydantic import GetJsonSchemaHandler
 from pydantic.json_schema import JsonSchemaValue
 from pydantic_core import core_schema
 
-__all__ = ("auto", "Enum", "make_enum")
+__all__ = ("Enum", "auto", "make_enum")
 
 
 from enum import (
-    Enum as BaseEnum,  # noqa: F401
+    Enum as BaseEnum,
     auto,
 )
 
@@ -83,7 +84,7 @@ class Enum(BaseEnum):
         field_schema.update(
             type="string",
             title=cls.__name__,
-            description=cls.__doc__ or "An enumeration of {}".format(cls.__name__),
+            description=cls.__doc__ or f"An enumeration of {cls.__name__}",
             enum=list(cls.__members__.keys()),
         )
         return field_schema
@@ -103,7 +104,7 @@ class Enum(BaseEnum):
         )
 
 
-def make_enum(name: str, values: Union[Dict[str, float], List], start=0):
+def make_enum(name: str, values: dict[str, float] | list, start=0):
     """Create an enum type dynamically
 
     :param name: name of the class type

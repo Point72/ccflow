@@ -1,7 +1,7 @@
-from typing import Any, Dict, List
+from typing import Any
 from unittest import TestCase, mock
 
-from pydantic import BaseModel as PydanticBaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field, ValidationError
 
 from ccflow import BaseModel, CallableModel, ContextBase, Flow, GenericResult, NullContext, PyObjectPath
 from ccflow.local_persistence import LOCAL_ARTIFACTS_MODULE_NAME
@@ -23,8 +23,8 @@ class ModelC(BaseModel):
 class MyTestModel(BaseModel):
     a: str
     b: float
-    c: List[str] = []
-    d: Dict[str, float] = {}
+    c: list[str] = Field(default_factory=list)
+    d: dict[str, float] = Field(default_factory=dict)
 
 
 class MyTestModelSubclass(MyTestModel):
@@ -46,8 +46,8 @@ class MyNestedModel(BaseModel):
 
 
 class DoubleNestedModel(BaseModel):
-    a: Dict[str, MyNestedModel] = {}
-    b: List[MyTestModel] = []
+    a: dict[str, MyNestedModel] = Field(default_factory=dict)
+    b: list[MyTestModel] = Field(default_factory=list)
 
 
 class CopyModel(BaseModel):
@@ -141,7 +141,7 @@ class TestBaseModel(TestCase):
         class Parent(BaseModel):
             c: Child  # Note that under the hood, ccflow turns this into SerializeAsAny[Child] so that child classes of Child will be fully serialized
 
-        p = Parent(c=dict(a=""))
+        p = Parent(c={"a": ""})
         self.assertIsInstance(p.model_dump(), dict)
 
     def test_widget(self):

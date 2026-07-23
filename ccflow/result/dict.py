@@ -1,4 +1,4 @@
-from typing import Dict, Generic, TypeVar
+from typing import Generic, TypeVar
 
 from ..base import ResultBase
 
@@ -10,4 +10,4 @@ V = TypeVar("V")
 
 
 class DictResult(ResultBase, Generic[K, V]):
-    value: Dict[K, V]
+    value: dict[K, V]

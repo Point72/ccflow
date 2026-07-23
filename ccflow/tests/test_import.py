@@ -6,7 +6,7 @@ from unittest import TestCase
 class TestImports(TestCase):
     def test(self):
         # Assert that importing ccflow doesn't cause expensive modules to be imported.
-        res = subprocess.run([sys.executable, __file__], capture_output=True, text=True)
+        res = subprocess.run([sys.executable, __file__], capture_output=True, check=False, text=True)
         if res.returncode != 0:
             raise AssertionError(res.stderr)
 

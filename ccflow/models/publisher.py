@@ -1,4 +1,4 @@
-from typing import Generic, Type
+from typing import Generic
 
 from pydantic import Field
 from typing_extensions import override
@@ -24,7 +24,7 @@ class PublisherModel(
     )
 
     @property
-    def result_type(self) -> Type[ResultType]:
+    def result_type(self) -> type[ResultType]:
         """Result type that will be returned. Could be over-ridden by child class."""
         if self.return_data:
             return self.model.result_type

@@ -1,7 +1,5 @@
 """Tests for ccflow.models.narwhals."""
 
-from typing import List
-
 import narwhals.stable.v1 as nw
 import polars as pl
 import pytest
@@ -63,7 +61,7 @@ class FrameSource(CallableModel):
         return NarwhalsFrameResult(df=pl.LazyFrame(self.data))
 
 
-def _values(df: nw.LazyFrame, col: str) -> List:
+def _values(df: nw.LazyFrame, col: str) -> list:
     return df.collect().to_native()[col].to_list()
 
 

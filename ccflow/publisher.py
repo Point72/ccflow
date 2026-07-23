@@ -1,5 +1,5 @@
 import abc
-from typing import Any, Dict, TypeVar
+from typing import Any, TypeVar
 
 from pydantic import ConfigDict, Field
 from typing_extensions import override
@@ -24,7 +24,7 @@ class BasePublisher(BaseModel, abc.ABC):
         arbitrary_types_allowed=True,
     )
     name: JinjaTemplate = Field(None, description="The 'name' by which to publish that data element")
-    name_params: Dict[str, Any] = Field(default_factory=dict, description="The parameters for the name template")
+    name_params: dict[str, Any] = Field(default_factory=dict, description="The parameters for the name template")
     data: Any = Field(None, description="The data we are going to publish")
 
     def get_name(self):
@@ -38,7 +38,7 @@ class BasePublisher(BaseModel, abc.ABC):
         """Publish the data."""
 
 
-PublisherType = TypeVar("CallableModelType", bound=BasePublisher)
+PublisherType = TypeVar("PublisherType", bound=BasePublisher)
 
 
 class NullPublisher(BasePublisher):

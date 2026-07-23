@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 """Hydra + Flow.model builder demo.
 
 This example shows a clean way to mix:

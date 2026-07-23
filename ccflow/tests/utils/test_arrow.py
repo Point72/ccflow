@@ -28,7 +28,7 @@ class TestArrowUtil(TestCase):
                 "large_list_float": [[1.0, 2.0], [3.0, 4.0]],
                 "large_list_str": [["foo", "bar"], ["baz", "qux"]],
                 "large_string": ["foo", "bar"],
-                "large_binary": [bytes(b"abc"), bytes(b"def")],
+                "large_binary": [b"abc", b"def"],
             },
             schema=schema,
         )
@@ -64,7 +64,7 @@ class TestArrowUtil(TestCase):
 
     def test_convert_decimal_types_to_float(self):
         table = pa.Table.from_pydict(
-            {"sym": ["A", "B", "C"], "price": [Decimal(2.0), Decimal(3.0), Decimal(50.0)]},
+            {"sym": ["A", "B", "C"], "price": [Decimal("2.0"), Decimal("3.0"), Decimal("50.0")]},
             pa.schema([pa.field("sym", pa.string()), pa.field("price", pa.decimal128(8, 3))]),
         )
 

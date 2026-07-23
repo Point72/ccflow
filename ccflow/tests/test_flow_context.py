@@ -93,7 +93,7 @@ def test_flow_context_hash_handles_nested_models_and_rejects_opaque_unhashable_v
     nested = FlowContext(model=NumberContext(x=1), values={"items": [{2, 1}]})
     same = FlowContext(model=NumberContext(x=1), values={"items": [{1, 2}]})
 
-    assert nested == nested
+    assert nested == nested  # noqa: PLR0124
     assert nested != {"model": NumberContext(x=1)}
     assert hash(nested) == hash(same)
 
@@ -243,7 +243,7 @@ def test_bound_flow_api_rejects_conflicting_runtime_input_annotations():
     bound = add().flow.with_context(b=from_int(), c=from_str())
 
     with pytest.raises(TypeError, match="Conflicting runtime context annotations for 'seed'"):
-        bound.flow.inspect().runtime_inputs
+        _ = bound.flow.inspect().runtime_inputs
 
 
 def test_bound_flow_api_keeps_dynamic_transform_source_inputs_after_later_field_bindings():

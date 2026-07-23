@@ -1,5 +1,5 @@
 import logging
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from unittest import TestCase
 from zoneinfo import ZoneInfo
 
@@ -12,22 +12,22 @@ class A:
 
 class TestValidators(TestCase):
     def test_normalize_date(self):
-        c = date.today()
+        c = datetime.now().astimezone().date()
         self.assertEqual(normalize_date(c), c)
         self.assertEqual(normalize_date("0d"), c)
-        c1 = date.today() - timedelta(1)
+        c1 = datetime.now().astimezone().date() - timedelta(1)
         self.assertEqual(normalize_date("-1d"), c1)
 
-        self.assertEqual(normalize_date(datetime.now()), c)
-        self.assertEqual(normalize_date(datetime.now().isoformat()), c)
+        self.assertEqual(normalize_date(datetime.now()), c)  # noqa: DTZ005
+        self.assertEqual(normalize_date(datetime.now().isoformat()), c)  # noqa: DTZ005
 
         self.assertEqual(normalize_date("foo"), "foo")
         self.assertEqual(normalize_date(None), None)
 
     def test_normalize_datetime(self):
-        today = datetime.today()
-        now = datetime.now()
-        c = datetime(today.year, today.month, today.day)
+        today = datetime.today()  # noqa: DTZ002
+        now = datetime.now()  # noqa: DTZ005
+        c = datetime(today.year, today.month, today.day)  # noqa: DTZ001
 
         self.assertEqual(normalize_datetime(c), c)
         self.assertEqual(normalize_datetime("0d"), c)

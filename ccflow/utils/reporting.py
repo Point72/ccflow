@@ -23,13 +23,14 @@ import secrets
 import threading
 import time
 from collections import deque
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pprint import pformat
-from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Optional
 
 from pydantic import ConfigDict, Field, PrivateAttr, field_validator
 
@@ -39,30 +40,30 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
 __all__ = [
-    "ReportPhase",
     "AlertPriority",
-    "ReportEvent",
-    "ReportContext",
-    "Reporter",
-    "NoOpReporter",
-    "InMemoryReporter",
-    "LoggingReporter",
-    "CompositeReporter",
-    "UIReporter",
-    "ReportingStateStore",
-    "NodeState",
-    "current_span_id",
-    "current_span_depth",
-    "current_run_id",
-    "run_scope",
-    "FormatConfig",
-    "ReportingPolicy",
-    "LoggingPolicy",
-    "TracingPolicy",
-    "MetricsPolicy",
     "AlertsPolicy",
-    "OpenTelemetryTracingPolicy",
+    "CompositeReporter",
+    "FormatConfig",
+    "InMemoryReporter",
+    "LoggingPolicy",
+    "LoggingReporter",
+    "MetricsPolicy",
+    "NoOpReporter",
+    "NodeState",
     "OpenTelemetryMetricsPolicy",
+    "OpenTelemetryTracingPolicy",
+    "ReportContext",
+    "ReportEvent",
+    "ReportPhase",
+    "Reporter",
+    "ReportingPolicy",
+    "ReportingStateStore",
+    "TracingPolicy",
+    "UIReporter",
+    "current_run_id",
+    "current_span_depth",
+    "current_span_id",
+    "run_scope",
 ]
 
 log = logging.getLogger(__name__)
@@ -117,17 +118,17 @@ class AlertPriority(str, Enum):
 # parent) link together into a span tree. ContextVars are per-thread / per-async
 # context, so this preserves the thread-safety guarantee of the evaluators.
 
-_CURRENT_SPAN: ContextVar[Optional[Tuple[str, int]]] = ContextVar("ccflow_report_span", default=None)
-_CURRENT_RUN: ContextVar[Optional[str]] = ContextVar("ccflow_report_run", default=None)
+_CURRENT_SPAN: ContextVar[tuple[str, int] | None] = ContextVar("ccflow_report_span", default=None)
+_CURRENT_RUN: ContextVar[str | None] = ContextVar("ccflow_report_run", default=None)
 
 
-def current_span_id() -> Optional[str]:
+def current_span_id() -> str | None:
     """Return the span id of the currently-active reporting span, or ``None``."""
     current = _CURRENT_SPAN.get()
     return current[0] if current else None
 
 
-def current_span_depth() -> Optional[int]:
+def current_span_depth() -> int | None:
     """Return the depth of the currently-active reporting span, or ``None`` if there is none.
 
     Useful for events emitted outside the :meth:`ReportingPolicy._run_with_reporting` flow (e.g. retry
@@ -137,7 +138,7 @@ def current_span_depth() -> Optional[int]:
     return current[1] if current else None
 
 
-def current_run_id() -> Optional[str]:
+def current_run_id() -> str | None:
     """Return the id of the currently-active run, or ``None``.
 
     A *run* scopes all events emitted while a root evaluation is in flight, so a UI can group events
@@ -151,7 +152,7 @@ def _new_span_id() -> str:
 
 
 @contextmanager
-def run_scope(run_id: Optional[str] = None) -> Iterator[str]:
+def run_scope(run_id: str | None = None) -> Iterator[str]:
     """Bind a ``run_id`` for the duration of the ``with`` block.
 
     Events emitted inside the block (via any reporting policy) are tagged with this run id. If no id is
@@ -181,11 +182,11 @@ class ReportContext:
     fn: str
     context_repr: str
     span_id: str
-    parent_span_id: Optional[str]
+    parent_span_id: str | None
     depth: int
     start_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     _start_perf: float = field(default_factory=time.perf_counter)
-    extra: Dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
 
     def elapsed(self) -> float:
         """Seconds elapsed since the context was created."""
@@ -201,17 +202,17 @@ class ReportEvent(BaseModel):
     fn: str = Field("__call__", description="The function being evaluated.")
     context_repr: str = Field("", description="A bounded repr of the context the model is evaluated on.")
     span_id: str = Field(description="Unique id of this evaluation span.")
-    parent_span_id: Optional[str] = Field(None, description="Span id of the enclosing evaluation, if any.")
-    run_id: Optional[str] = Field(None, description="Id of the run this event belongs to, if a run scope is active.")
+    parent_span_id: str | None = Field(None, description="Span id of the enclosing evaluation, if any.")
+    run_id: str | None = Field(None, description="Id of the run this event belongs to, if a run scope is active.")
     depth: int = Field(0, ge=0, description="Nesting depth of this span in the evaluation tree.")
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="When the event was emitted.")
-    duration: Optional[float] = Field(None, ge=0.0, description="Elapsed seconds for the evaluation (set on terminal phases).")
-    attempt: Optional[int] = Field(None, ge=1, description="Attempt number, for retry lifecycle events.")
-    max_attempts: Optional[int] = Field(None, ge=1, description="Maximum attempts, for retry lifecycle events.")
-    exception_type: Optional[str] = Field(None, description="Type name of the exception, for ERROR/GIVE_UP events.")
-    exception_message: Optional[str] = Field(None, description="Message of the exception, for ERROR/GIVE_UP events.")
-    priority: Optional[AlertPriority] = Field(None, description="Alert priority, for alert events.")
-    extra: Dict[str, Any] = Field(default_factory=dict, description="Additional sink-specific metadata.")
+    duration: float | None = Field(None, ge=0.0, description="Elapsed seconds for the evaluation (set on terminal phases).")
+    attempt: int | None = Field(None, ge=1, description="Attempt number, for retry lifecycle events.")
+    max_attempts: int | None = Field(None, ge=1, description="Maximum attempts, for retry lifecycle events.")
+    exception_type: str | None = Field(None, description="Type name of the exception, for ERROR/GIVE_UP events.")
+    exception_message: str | None = Field(None, description="Message of the exception, for ERROR/GIVE_UP events.")
+    priority: AlertPriority | None = Field(None, description="Alert priority, for alert events.")
+    extra: dict[str, Any] = Field(default_factory=dict, description="Additional sink-specific metadata.")
 
 
 # Pluggable reporter sinks
@@ -240,10 +241,10 @@ class InMemoryReporter(Reporter):
     """
 
     # Private so it does not affect tokenization/serialization of the reporter itself.
-    _events: List[ReportEvent] = PrivateAttr(default_factory=list)
+    _events: list[ReportEvent] = PrivateAttr(default_factory=list)
 
     @property
-    def events(self) -> List[ReportEvent]:
+    def events(self) -> list[ReportEvent]:
         """The collected events, in emission order."""
         return list(self._events)
 
@@ -284,7 +285,7 @@ class LoggingReporter(Reporter):
 class CompositeReporter(Reporter):
     """A reporter that fans events out to a list of child reporters."""
 
-    reporters: List[Reporter] = Field(default_factory=list, description="Child reporters to fan events out to.")
+    reporters: list[Reporter] = Field(default_factory=list, description="Child reporters to fan events out to.")
 
     def emit(self, event: ReportEvent) -> None:
         for reporter in self.reporters:
@@ -310,7 +311,7 @@ class UIReporter(Reporter):
     _buffer: "deque[ReportEvent]" = PrivateAttr(default=None)
     _lock: Any = PrivateAttr(default=None)
 
-    def model_post_init(self, __context: Any) -> None:
+    def model_post_init(self, __context: Any, /) -> None:
         self._buffer = deque(maxlen=self.maxlen)
         self._lock = threading.Lock()
 
@@ -318,7 +319,7 @@ class UIReporter(Reporter):
         with self._lock:
             self._buffer.append(event)
 
-    def drain(self) -> List[ReportEvent]:
+    def drain(self) -> list[ReportEvent]:
         """Atomically remove and return all currently-buffered events, in emission order."""
         with self._lock:
             events = list(self._buffer)
@@ -340,15 +341,15 @@ class NodeState:
     model_type: str
     fn: str
     context_repr: str
-    parent_span_id: Optional[str]
-    run_id: Optional[str]
+    parent_span_id: str | None
+    run_id: str | None
     depth: int
     phase: ReportPhase
-    attempt: Optional[int] = None
-    max_attempts: Optional[int] = None
-    duration: Optional[float] = None
-    exception_type: Optional[str] = None
-    exception_message: Optional[str] = None
+    attempt: int | None = None
+    max_attempts: int | None = None
+    duration: float | None = None
+    exception_type: str | None = None
+    exception_message: str | None = None
     priority: Optional["AlertPriority"] = None
 
 
@@ -378,8 +379,8 @@ class ReportingStateStore:
     )
 
     def __init__(self) -> None:
-        self.nodes: Dict[str, NodeState] = {}
-        self.runs: Dict[str, ReportPhase] = {}
+        self.nodes: dict[str, NodeState] = {}
+        self.runs: dict[str, ReportPhase] = {}
 
     def _next_phase(self, current: ReportPhase, incoming: ReportPhase) -> ReportPhase:
         """Decide the node phase after folding ``incoming`` onto ``current``."""
@@ -387,9 +388,8 @@ class ReportingStateStore:
         if incoming == ReportPhase.END and current in self._OUTCOME:
             return current
         # Once an outcome is recorded, only allow ERROR -> RETRY (a failed attempt that will retry).
-        if current in self._OUTCOME and incoming not in self._OUTCOME:
-            if not (current == ReportPhase.ERROR and incoming == ReportPhase.RETRY):
-                return current
+        if current in self._OUTCOME and incoming not in self._OUTCOME and not (current == ReportPhase.ERROR and incoming == ReportPhase.RETRY):
+            return current
         return incoming
 
     def apply(self, event: ReportEvent) -> None:
@@ -433,16 +433,16 @@ class ReportingStateStore:
         if event.priority is not None:
             node.priority = event.priority
 
-    def apply_all(self, events: List[ReportEvent]) -> None:
+    def apply_all(self, events: list[ReportEvent]) -> None:
         """Fold a batch of events into the store, in order."""
         for event in events:
             self.apply(event)
 
-    def roots(self) -> List[NodeState]:
+    def roots(self) -> list[NodeState]:
         """Return the nodes that have no parent within the store (the run roots)."""
         return [n for n in self.nodes.values() if n.parent_span_id is None or n.parent_span_id not in self.nodes]
 
-    def children(self, span_id: str) -> List[NodeState]:
+    def children(self, span_id: str) -> list[NodeState]:
         """Return the nodes whose parent is ``span_id``."""
         return [n for n in self.nodes.values() if n.parent_span_id == span_id]
 
@@ -459,7 +459,7 @@ class ReportingPolicy(BaseModel):
     configured :attr:`reporter`, and always returns the wrapped result unchanged (transparency).
     """
 
-    reporter: Optional[Reporter] = Field(None, description="Sink that events are emitted to. If None, the policy is a transparent pass-through.")
+    reporter: Reporter | None = Field(None, description="Sink that events are emitted to. If None, the policy is a transparent pass-through.")
     capture_context_repr: bool = Field(True, description="Whether to include a bounded repr of the context in events.")
     max_context_repr: int = Field(200, ge=0, description="Maximum length of the captured context repr.")
 
@@ -494,17 +494,17 @@ class ReportingPolicy(BaseModel):
             **kwargs,
         )
 
-    def _on_start(self, ctx: ReportContext, span: "Optional[Span]") -> None:
+    def _on_start(self, ctx: ReportContext, span: "Span | None") -> None:
         if self.reporter is None:
             return
         self._emit(self._event(ctx, ReportPhase.START))
 
-    def _on_success(self, ctx: ReportContext, span: "Optional[Span]", result: ResultType) -> None:
+    def _on_success(self, ctx: ReportContext, span: "Span | None", result: ResultType) -> None:
         if self.reporter is None:
             return
         self._emit(self._event(ctx, ReportPhase.SUCCESS, duration=ctx.elapsed()))
 
-    def _on_error(self, ctx: ReportContext, span: "Optional[Span]", exc: BaseException) -> None:
+    def _on_error(self, ctx: ReportContext, span: "Span | None", exc: BaseException) -> None:
         if self.reporter is None:
             return
         self._emit(
@@ -517,13 +517,13 @@ class ReportingPolicy(BaseModel):
             )
         )
 
-    def _on_end(self, ctx: ReportContext, span: "Optional[Span]") -> None:
+    def _on_end(self, ctx: ReportContext, span: "Span | None") -> None:
         if self.reporter is None:
             return
         self._emit(self._event(ctx, ReportPhase.END, duration=ctx.elapsed()))
 
     @contextmanager
-    def _span(self, ctx: ReportContext) -> Iterator["Optional[Span]"]:
+    def _span(self, ctx: ReportContext) -> Iterator["Span | None"]:
         """Context manager that is active for the duration of the wrapped evaluation.
 
         Subclasses (e.g. OpenTelemetry) override this to open a real span; the base implementation
@@ -553,7 +553,7 @@ class ReportingPolicy(BaseModel):
         model_type: str,
         fn: str,
         context: Any,
-        extra: Optional[Dict[str, Any]] = None,
+        extra: dict[str, Any] | None = None,
     ) -> ResultType:
         """Run ``attempt_fn`` once, wrapped in a reporting span. Returns its result unchanged.
 
@@ -601,9 +601,9 @@ class FormatConfig(BaseModel):
         False,
         description="Whether to convert pyarrow tables to polars tables for formatting, as arrow formatting does not work well with large tables or provide control over options",
     )
-    pformat_config: Dict[str, Any] = Field({}, description="pformat config to use for formatting data")
-    polars_config: Dict[str, Any] = Field({}, description="polars config to use for formatting polars frames")
-    pandas_config: Dict[str, Any] = Field({}, description="pandas config to use for formatting pandas objects")
+    pformat_config: dict[str, Any] = Field({}, description="pformat config to use for formatting data")
+    polars_config: dict[str, Any] = Field({}, description="polars config to use for formatting polars frames")
+    pandas_config: dict[str, Any] = Field({}, description="pandas config to use for formatting pandas objects")
 
 
 class LoggingPolicy(ReportingPolicy):
@@ -640,7 +640,7 @@ class LoggingPolicy(ReportingPolicy):
         options = ctx.extra.get("options") or {}
         return options.get("verbose", self.verbose)
 
-    def _on_start(self, ctx: ReportContext, span: "Optional[Span]") -> None:
+    def _on_start(self, ctx: ReportContext, span: "Span | None") -> None:
         log_level = self._log_level(ctx)
         raw_context = ctx.extra.get("raw_context")
         log.log(log_level, "[%s]: Start evaluation of %s on %s.", ctx.model_name, ctx.fn, raw_context)
@@ -648,7 +648,7 @@ class LoggingPolicy(ReportingPolicy):
             log.log(log_level, "[%s]: %s", ctx.model_name, ctx.extra.get("model"))
         super()._on_start(ctx, span)
 
-    def _on_success(self, ctx: ReportContext, span: "Optional[Span]", result: ResultType) -> None:
+    def _on_success(self, ctx: ReportContext, span: "Span | None", result: ResultType) -> None:
         if self.log_result and result is not None:
             log.log(
                 self._log_level(ctx),
@@ -659,7 +659,7 @@ class LoggingPolicy(ReportingPolicy):
             )
         super()._on_success(ctx, span, result)
 
-    def _on_end(self, ctx: ReportContext, span: "Optional[Span]") -> None:
+    def _on_end(self, ctx: ReportContext, span: "Span | None") -> None:
         log.log(
             self._log_level(ctx),
             "[%s]: End evaluation of %s on %s (time elapsed: %s).",
@@ -721,7 +721,7 @@ class MetricsPolicy(ReportingPolicy):
 
     metric_prefix: str = Field("ccflow.model", description="Prefix applied to emitted metric names.")
 
-    def _on_success(self, ctx: ReportContext, span: "Optional[Span]", result: ResultType) -> None:
+    def _on_success(self, ctx: ReportContext, span: "Span | None", result: ResultType) -> None:
         if self.reporter is None:
             return
         self._emit(
@@ -733,7 +733,7 @@ class MetricsPolicy(ReportingPolicy):
             )
         )
 
-    def _on_error(self, ctx: ReportContext, span: "Optional[Span]", exc: BaseException) -> None:
+    def _on_error(self, ctx: ReportContext, span: "Span | None", exc: BaseException) -> None:
         if self.reporter is None:
             return
         self._emit(
@@ -747,7 +747,7 @@ class MetricsPolicy(ReportingPolicy):
             )
         )
 
-    def _on_end(self, ctx: ReportContext, span: "Optional[Span]") -> None:
+    def _on_end(self, ctx: ReportContext, span: "Span | None") -> None:
         if self.reporter is None:
             return
         self._emit(
@@ -772,15 +772,15 @@ class AlertsPolicy(ReportingPolicy):
     alert_on_error: bool = Field(True, description="Whether to emit an alert when an evaluation fails.")
     alert_on_success: bool = Field(False, description="Whether to emit a (recovery) alert when an evaluation succeeds.")
 
-    def _on_start(self, ctx: ReportContext, span: "Optional[Span]") -> None:
+    def _on_start(self, ctx: ReportContext, span: "Span | None") -> None:
         # Alerts are only interesting on terminal phases.
         pass
 
-    def _on_success(self, ctx: ReportContext, span: "Optional[Span]", result: ResultType) -> None:
+    def _on_success(self, ctx: ReportContext, span: "Span | None", result: ResultType) -> None:
         if self.reporter is not None and self.alert_on_success:
             self._emit(self._event(ctx, ReportPhase.SUCCESS, duration=ctx.elapsed(), priority=self.priority))
 
-    def _on_error(self, ctx: ReportContext, span: "Optional[Span]", exc: BaseException) -> None:
+    def _on_error(self, ctx: ReportContext, span: "Span | None", exc: BaseException) -> None:
         if self.reporter is not None and self.alert_on_error:
             self._emit(
                 self._event(
@@ -793,7 +793,7 @@ class AlertsPolicy(ReportingPolicy):
                 )
             )
 
-    def _on_end(self, ctx: ReportContext, span: "Optional[Span]") -> None:
+    def _on_end(self, ctx: ReportContext, span: "Span | None") -> None:
         pass
 
 
@@ -839,7 +839,7 @@ class OpenTelemetryTracingPolicy(TracingPolicy):
         return self._tracer
 
     @contextmanager
-    def _span(self, ctx: ReportContext) -> Iterator["Optional[Span]"]:
+    def _span(self, ctx: ReportContext) -> Iterator["Span | None"]:
         tracer = self._get_tracer()
         with tracer.start_as_current_span(f"{self.span_name_prefix}.{ctx.model_name}") as span:
             span.set_attribute("ccflow.model_name", ctx.model_name)
@@ -848,16 +848,16 @@ class OpenTelemetryTracingPolicy(TracingPolicy):
             span.set_attribute("ccflow.depth", ctx.depth)
             yield span
 
-    def _on_start(self, ctx: ReportContext, span: "Optional[Span]") -> None:
+    def _on_start(self, ctx: ReportContext, span: "Span | None") -> None:
         super()._on_start(ctx, span)
 
-    def _on_success(self, ctx: ReportContext, span: "Optional[Span]", result: ResultType) -> None:
+    def _on_success(self, ctx: ReportContext, span: "Span | None", result: ResultType) -> None:
         trace = _require_opentelemetry()
         if span is not None:
             span.set_status(trace.Status(trace.StatusCode.OK))
         super()._on_success(ctx, span, result)
 
-    def _on_error(self, ctx: ReportContext, span: "Optional[Span]", exc: BaseException) -> None:
+    def _on_error(self, ctx: ReportContext, span: "Span | None", exc: BaseException) -> None:
         trace = _require_opentelemetry()
         if span is not None:
             span.record_exception(exc)
@@ -887,20 +887,20 @@ class OpenTelemetryMetricsPolicy(MetricsPolicy):
             self._error_counter = self._meter.create_counter(f"{self.metric_prefix}.error")
             self._latency = self._meter.create_histogram(f"{self.metric_prefix}.latency", unit="s")
 
-    def _on_success(self, ctx: ReportContext, span: "Optional[Span]", result: ResultType) -> None:
+    def _on_success(self, ctx: ReportContext, span: "Span | None", result: ResultType) -> None:
         self._ensure_instruments()
         attrs = {"model_name": ctx.model_name, "fn": ctx.fn}
         self._success_counter.add(1, attrs)
         self._latency.record(ctx.elapsed(), attrs)
         super()._on_success(ctx, span, result)
 
-    def _on_error(self, ctx: ReportContext, span: "Optional[Span]", exc: BaseException) -> None:
+    def _on_error(self, ctx: ReportContext, span: "Span | None", exc: BaseException) -> None:
         self._ensure_instruments()
         attrs = {"model_name": ctx.model_name, "fn": ctx.fn, "exception_type": type(exc).__name__}
         self._error_counter.add(1, attrs)
         self._latency.record(ctx.elapsed(), attrs)
         super()._on_error(ctx, span, exc)
 
-    def _on_end(self, ctx: ReportContext, span: "Optional[Span]") -> None:
+    def _on_end(self, ctx: ReportContext, span: "Span | None") -> None:
         # The histogram is recorded on success/error; avoid double-counting here.
         ReportingPolicy._on_end(self, ctx, span)

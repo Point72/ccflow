@@ -24,7 +24,9 @@ from pydantic import conint, model_validator
 from ccflow import BaseModel, CallableModel, Flow, NullContext
 from ccflow.result.narwhals import NarwhalsDataFrameResult
 
-__all__ = ("TPCHTable", "TPCHDuckDBBackend", "TPCHTableProvider", "TPCHAnswerProvider")
+__all__ = ("TPCHAnswerProvider", "TPCHDuckDBBackend", "TPCHTable", "TPCHTableProvider")
+
+_NULL_CONTEXT = NullContext()
 
 
 TPCHTable = Literal["customer", "lineitem", "nation", "orders", "part", "partsupp", "region", "supplier"]
@@ -122,7 +124,7 @@ class TPCHTableProvider(CallableModel):
     table: TPCHTable
 
     @Flow.call
-    def __call__(self, context: NullContext = NullContext()) -> NarwhalsDataFrameResult:
+    def __call__(self, context: NullContext = _NULL_CONTEXT) -> NarwhalsDataFrameResult:
         return NarwhalsDataFrameResult(df=self.backend.get_table(self.table))
 
 
@@ -133,5 +135,5 @@ class TPCHAnswerProvider(CallableModel):
     query_id: conint(ge=1, le=22)
 
     @Flow.call
-    def __call__(self, context: NullContext = NullContext()) -> NarwhalsDataFrameResult:
+    def __call__(self, context: NullContext = _NULL_CONTEXT) -> NarwhalsDataFrameResult:
         return NarwhalsDataFrameResult(df=self.backend.get_answer(self.query_id))

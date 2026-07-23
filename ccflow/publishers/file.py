@@ -1,12 +1,13 @@
 import pickle
-from typing import IO, Any, Callable, Dict, Generic
+from collections.abc import Callable
+from typing import IO, Any, Generic, Literal
 
 import narwhals.stable.v1 as nw
 import pandas as pd
 import yaml
 from cloudpathlib import AnyPath
 from pydantic import Field, field_validator
-from typing_extensions import Literal, override
+from typing_extensions import override
 
 from ..exttypes import JinjaTemplate
 from ..exttypes.narwhals import DataFrameT
@@ -46,7 +47,7 @@ class GenericFilePublisher(BasePublisher):
     dump: Callable[[Any, IO, Any], Any] = _write_to_io
     suffix: str = Field("", description="The file suffix to use for the output")
     mode: str = Field("w", description="The mode to open the file")
-    kwargs: Dict[str, Any] = Field({}, description="The kwargs to pass to the dump function")
+    kwargs: dict[str, Any] = Field({}, description="The kwargs to pass to the dump function")
 
     @override
     def __call__(self) -> AnyPath:
@@ -69,7 +70,7 @@ class GenericFilePublisher(BasePublisher):
 class JSONPublisher(BasePublisher):
     """Publish data to file in JSON format."""
 
-    kwargs: Dict[str, Any] = Field(default_factory=dict)
+    kwargs: dict[str, Any] = Field(default_factory=dict)
 
     @override
     def __call__(self) -> AnyPath:
@@ -86,7 +87,7 @@ class JSONPublisher(BasePublisher):
 class YAMLPublisher(BasePublisher):
     """Publish data to file in YAML format."""
 
-    kwargs: Dict[str, Any] = Field(default_factory=dict)
+    kwargs: dict[str, Any] = Field(default_factory=dict)
 
     @override
     def __call__(self) -> AnyPath:
@@ -104,7 +105,7 @@ class PicklePublisher(BasePublisher):
     """Publish data to a pickle file."""
 
     protocol: int = -1
-    kwargs: Dict[str, Any] = Field(default_factory=dict)
+    kwargs: dict[str, Any] = Field(default_factory=dict)
 
     @override
     def __call__(self) -> AnyPath:
@@ -124,7 +125,7 @@ class PicklePublisher(BasePublisher):
 class DictTemplateFilePublisher(BasePublisher):
     """Publish data to a file after populating a Jinja template."""
 
-    data: Dict = None
+    data: dict = None
     suffix: str
     template: JinjaTemplate
 
@@ -147,7 +148,7 @@ class PydanticJSONPublisher(BasePublisher, Generic[PydanticModelType]):
 
     data: PydanticModelType = None
     options: PydanticDictOptions = Field(default_factory=PydanticDictOptions)
-    kwargs: Dict[str, Any] = Field(default_factory=dict)
+    kwargs: dict[str, Any] = Field(default_factory=dict)
 
     _normalize_data = field_validator("data", mode="before")(dict_to_model)
 
@@ -177,7 +178,7 @@ class PandasFilePublisher(BasePublisher):
     """
 
     data: pd.DataFrame = None
-    kwargs: Dict[str, Any] = Field(default_factory=dict)
+    kwargs: dict[str, Any] = Field(default_factory=dict)
     func: str = "to_html"  # The access function must be able to write to a buffer or file-like object.
     suffix: str = ".html"
     mode: Literal["w", "wb"] = "w"
@@ -199,7 +200,7 @@ class NarwhalsFilePublisher(BasePublisher):
     """Publish a narwhals data frame to a file using an appropriate method on nw.DataFrame."""
 
     data: DataFrameT = None
-    kwargs: Dict[str, Any] = Field(default_factory=dict)
+    kwargs: dict[str, Any] = Field(default_factory=dict)
     func: str = "write_csv"  # The access function must be able to write to a buffer or file-like object.
     suffix: str = ".csv"
     mode: Literal["w", "wb"] = "w"

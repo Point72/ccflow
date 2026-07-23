@@ -23,6 +23,6 @@ class TestJinjaTemplate(TestCase):
         t = JinjaTemplate(v)
 
         # First access the template
-        t.template
+        _ = t.template
         # Then attempt the copy
         self.assertEqual(deepcopy(t), t)

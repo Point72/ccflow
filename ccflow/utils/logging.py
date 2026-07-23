@@ -1,7 +1,7 @@
 from logging import FileHandler as BaseFileHandler, StreamHandler
 from pathlib import Path
 
-__all__ = ("StreamHandler", "FileHandler")
+__all__ = ("FileHandler", "StreamHandler")
 
 
 class FileHandler(BaseFileHandler):

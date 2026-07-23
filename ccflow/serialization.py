@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Union
+from typing import Any
 
 import numpy as np
 import orjson
@@ -6,7 +6,7 @@ import orjson
 from .enums import Enum
 
 
-def _remove_dict_enums(obj: Any) -> Dict:
+def _remove_dict_enums(obj: Any) -> dict:
     if isinstance(obj, Enum):
         return obj.name
     elif isinstance(obj, dict):
@@ -38,7 +38,7 @@ def orjson_dumps(v, default=None, *arga, **kwargs) -> str:
         ).decode()
 
 
-def make_ndarray_orjson_valid(arr: np.ndarray) -> Union[List[Any], np.ndarray]:
+def make_ndarray_orjson_valid(arr: np.ndarray) -> list[Any] | np.ndarray:
     """Returns a numpy array or list that is compatible with orjson serialization."""
     if not isinstance(arr, np.ndarray):
         raise TypeError(f"Expected np.ndarray instance, got {type(arr)}")

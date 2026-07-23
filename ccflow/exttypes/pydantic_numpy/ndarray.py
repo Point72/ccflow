@@ -24,11 +24,10 @@ SOFTWARE.
 """
 
 import sys
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, TypeVar, get_args
 
 import numpy as np
 from numpy.lib import NumpyVersion
-from typing_extensions import get_args
 
 T = TypeVar("T", bound=np.generic)
 
@@ -38,7 +37,7 @@ else:
     nd_array_type = np.ndarray[Any, T]
 
 
-class NDArray(Generic[T], nd_array_type):
+class NDArray(nd_array_type, Generic[T]):
     @classmethod
     def _serialize(cls, v, nxt):
         # Not as efficient as using orjson, but we need a list type to pass to pydantic,

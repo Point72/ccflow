@@ -51,7 +51,7 @@ def test_narwhals_frame_result_validation(data, schema):
     assert isinstance(result.df, nw.DataFrame)
     assert result.df.to_native() is df
 
-    result = NarwhalsFrameResult.model_validate(dict(df=df))
+    result = NarwhalsFrameResult.model_validate({"df": df})
     assert isinstance(result.df, nw.DataFrame)
     assert result.df.to_native() is df
 
@@ -60,7 +60,7 @@ def test_narwhals_frame_result_validation(data, schema):
     assert isinstance(result.df, nw.LazyFrame)
     assert result.df.to_native() is df
 
-    result = NarwhalsFrameResult.model_validate(dict(df=df))
+    result = NarwhalsFrameResult.model_validate({"df": df})
     assert isinstance(result.df, nw.LazyFrame)
     assert result.df.to_native() is df
 
