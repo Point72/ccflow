@@ -6,9 +6,9 @@ from pydantic import Field
 from spaday.validate import validate
 
 from ccflow import BaseModel, CallableModel, ContextBase, Flow, GenericResult, ModelRegistry
-from ccflow.ui.spaday.model import model_config_view, model_type_view, model_view
+from ccflow.ui.spaday.model import MATERIALIZE_ENDPOINT, model_config_view, model_type_view, model_view, pending_model_view
 
-from .utils import all_text, nodes_with_tag, text_of
+from .utils import all_text, nodes_with_tag, prop_str, text_of
 
 
 class SimpleModel(BaseModel):
@@ -112,3 +112,30 @@ class TestModelView:
 
     def test_validates(self):
         validate(model_view(MyCallable(), "m").to_node())
+
+
+class TestPendingModelView:
+    _config = {"_target_": "ccflow.tests.ui.spaday.test_model.SimpleModel", "name": "pending"}
+
+    def test_is_card(self):
+        node = pending_model_view(self._config, "group/model").to_node()
+        assert node["tag"] == "wa-card"
+
+    def test_shows_pending_badge_and_target(self):
+        text = " ".join(all_text(pending_model_view(self._config, "group/model").to_node()))
+        assert "Pending" in text
+        assert "SimpleModel" in text
+
+    def test_configuration_tab_shows_target(self):
+        text = " ".join(all_text(pending_model_view(self._config, "group/model").to_node()))
+        assert "_target_" in text
+
+    def test_materialize_button_links_to_endpoint_with_path(self):
+        from urllib.parse import urlencode
+
+        node = pending_model_view(self._config, "group/model").to_node()
+        hrefs = [prop_str(button, "href") for button in nodes_with_tag(node, "wa-button")]
+        assert f"{MATERIALIZE_ENDPOINT}?{urlencode({'path': 'group/model'})}" in hrefs
+
+    def test_validates(self):
+        validate(pending_model_view(self._config, "group/model").to_node())

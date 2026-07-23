@@ -6,16 +6,21 @@ hydra-config-driven command wrapped by the ``ccflow-ui-spaday`` console script.
 """
 
 import argparse
+import logging
 import os
 from pathlib import Path
 from typing import Callable, Optional
+from urllib.parse import quote
 
 from ccflow import ModelRegistry
 from ccflow.utils.hydra import add_hydra_config_args, load_config, resolve_config_paths
 
-from .registry import registry_store, registry_viewer
+from .model import MATERIALIZE_ENDPOINT
+from .registry import SELECTED_FIELD, registry_store, registry_viewer
 
 __all__ = ("serve_registry", "registry_viewer_cli", "main")
+
+log = logging.getLogger(__name__)
 
 
 def _asset_layout() -> str:
@@ -59,18 +64,51 @@ def serve_registry(
     try:
         import uvicorn
         from spaday.backends.starlette import serve
+        from spaday.bootstrap import bootstrap
+        from starlette.responses import HTMLResponse, RedirectResponse
+        from starlette.routing import Route
     except ImportError:
         raise ImportError(
             "spaday, starlette and uvicorn must be installed to serve the spaday UI. Pip install ccflow[full] to install all optional dependencies."
         ) from None
 
+    layout = _asset_layout()
+
+    def page():
+        return registry_viewer(registry, title=title, browser_width=browser_width, sort_children=sort_children)
+
+    async def materialize(request):
+        """Instantiate a pending (lazily-loaded) model, then redirect back with it selected.
+
+        Materialization is best-effort: if the model cannot be constructed (e.g. it needs live data
+        or an unavailable dependency) the failure is logged and the page still reloads, leaving the
+        entry pending so it can be retried.
+        """
+        path = request.query_params.get("path", "")
+        if path:
+            try:
+                registry[path]
+            except Exception:
+                log.exception("Failed to materialize lazy registry model %r", path)
+        return RedirectResponse(url=f"/?sel={quote(path)}", status_code=303)
+
+    def homepage(request):
+        """Serve the page with the ``?sel=`` model preselected (used by the materialize redirect)."""
+        selected = request.query_params.get("sel", "")
+        return HTMLResponse(bootstrap(bundles=["webawesome"], store={SELECTED_FIELD: selected}, title=title, layout=layout))
+
     app = serve(
-        lambda: registry_viewer(registry, title=title, browser_width=browser_width, sort_children=sort_children),
+        page,
         bundles=["webawesome"],
         store=registry_store(),
         title=title,
-        layout=_asset_layout(),
+        layout=layout,
+        routes=[Route(MATERIALIZE_ENDPOINT, materialize, methods=["GET"])],
     )
+    # Prepend a homepage that seeds the selection from ?sel= so the freshly materialized model's detail
+    # card is shown immediately after the materialize redirect (Starlette matches routes in order).
+    app.routes.insert(0, Route("/", homepage, methods=["GET"]))
+
     if run:
         uvicorn.run(app, host=address, port=port)
     return app

@@ -2,9 +2,10 @@
 
 from pathlib import Path
 
+import pytest
 from spaday.bootstrap import _ASSETS, bundles_dir
 
-from ccflow import BaseModel, ModelRegistry
+from ccflow import BaseModel, LazyRegistry, ModelRegistry
 from ccflow.ui.spaday.cli import _asset_layout, _get_ui_args_parser, serve_registry
 
 
@@ -70,6 +71,53 @@ class TestServeRegistry:
         # The tree route serializes the viewer; the model path should appear in it.
         tree_route = next(r for r in app.routes if getattr(r, "path", None) == "/tree.json")
         assert tree_route is not None
+
+    def test_materialize_route_present(self):
+        registry = ModelRegistry(name="test")
+        registry.add("m", SimpleModel(name="m"))
+        app = serve_registry(registry, run=False)
+        paths = {getattr(route, "path", None) for route in app.routes}
+        assert "/materialize" in paths
+
+
+class TestMaterializeEndpoint:
+    def _lazy_registry(self):
+        return LazyRegistry(
+            name="root",
+            group={"model": {"_target_": "ccflow.tests.ui.spaday.test_cli.SimpleModel", "name": "pending"}},
+        )
+
+    def test_materialize_instantiates_pending_model(self):
+        starlette_testclient = pytest.importorskip("starlette.testclient")
+        registry = self._lazy_registry()
+        app = serve_registry(registry, run=False)
+        assert not registry["group"].is_loaded("model")
+
+        client = starlette_testclient.TestClient(app)
+        response = client.get("/materialize", params={"path": "group/model"}, follow_redirects=False)
+
+        assert response.status_code == 303
+        assert "sel=group/model" in response.headers["location"]
+        assert registry["group"].is_loaded("model")
+
+    def test_materialize_missing_path_redirects_without_error(self):
+        starlette_testclient = pytest.importorskip("starlette.testclient")
+        registry = self._lazy_registry()
+        app = serve_registry(registry, run=False)
+
+        client = starlette_testclient.TestClient(app)
+        response = client.get("/materialize", follow_redirects=False)
+
+        assert response.status_code == 303
+
+    def test_homepage_seeds_selected_model(self):
+        starlette_testclient = pytest.importorskip("starlette.testclient")
+        registry = self._lazy_registry()
+        app = serve_registry(registry, run=False)
+
+        client = starlette_testclient.TestClient(app)
+        assert "group/model" in client.get("/", params={"sel": "group/model"}).text
+        assert "group/model" not in client.get("/").text
 
 
 class TestAssetLayout:
