@@ -3,7 +3,7 @@ import json
 import os
 import pickle
 import sys
-from typing import Dict, List
+from typing import ClassVar, Dict, List
 from unittest import TestCase
 
 import pytest
@@ -12,7 +12,7 @@ from omegaconf import OmegaConf
 from omegaconf.errors import InterpolationKeyError
 from pydantic import ConfigDict
 
-from ccflow import BaseModel, ModelRegistry, RegistryLookupContext, RootModelRegistry, model_alias
+from ccflow import BaseModel, LazyRegistry, ModelRegistry, RegistryLookupContext, RootModelRegistry, model_alias
 from ccflow.base import RegistryKeyError, resolve_str
 
 
@@ -29,6 +29,14 @@ class MyTestModel2(BaseModel):
 
 class MyTestModelSubclass(MyTestModel):
     pass
+
+
+class LazyTestModel(MyTestModel):
+    constructions: ClassVar[int] = 0
+
+    def __init__(self, **data):
+        type(self).constructions += 1
+        super().__init__(**data)
 
 
 class MyClass:
@@ -662,6 +670,127 @@ class TestRegistryLoading(TestCase):
         )
         r.load_config(cfg, resolve_from=r)
         self.assertEqual(r["foo"], MyTestModel(a="test", b=0.0))
+
+
+class TestLazyRegistry(TestCase):
+    def setUp(self) -> None:
+        ModelRegistry.root().clear()
+        LazyTestModel.constructions = 0
+
+    def tearDown(self) -> None:
+        ModelRegistry.root().clear()
+
+    @staticmethod
+    def _load_registry():
+        cfg = OmegaConf.create(
+            {
+                "lazy": {
+                    "_target_": "ccflow.base.LazyRegistry",
+                    "_recursive_": False,
+                    "group": {
+                        "source": {
+                            "_target_": "ccflow.tests.test_base_registry.LazyTestModel",
+                            "a": "source",
+                            "b": 1.0,
+                        },
+                        "dependent": {
+                            "_target_": "ccflow.tests.test_base_registry.MyNestedModel",
+                            "x": "/lazy/group/source",
+                            "y": "source",
+                        },
+                    },
+                }
+            }
+        )
+        root = ModelRegistry.root()
+        root.load_config(cfg)
+        return root
+
+    def test_defers_models_until_access(self):
+        root = self._load_registry()
+        lazy = root["lazy"]
+
+        self.assertIsInstance(lazy, LazyRegistry)
+        self.assertEqual(lazy.name, "lazy")
+        self.assertEqual(LazyTestModel.constructions, 0)
+        self.assertIn("lazy/group/source", root)
+        self.assertIn("group/source", lazy)
+        self.assertIn("source", lazy["group"].models)
+        self.assertIn("lazy/group/source", list(root.keys()))
+        self.assertEqual(LazyTestModel.constructions, 0)
+
+        source = root["/lazy/group/source"]
+        self.assertIsInstance(source, LazyTestModel)
+        self.assertEqual(LazyTestModel.constructions, 1)
+        self.assertIs(root["/lazy/group/source"], source)
+        self.assertEqual(LazyTestModel.constructions, 1)
+
+    def test_materializes_dependency_closure(self):
+        root = self._load_registry()
+
+        dependent = root["/lazy/group/dependent"]
+
+        self.assertEqual(LazyTestModel.constructions, 1)
+        self.assertIs(dependent.x, root["/lazy/group/source"])
+        self.assertIs(dependent.y, root["/lazy/group/source"])
+
+    def test_pending_entries_support_mutation(self):
+        registry = LazyRegistry(
+            name="lazy",
+            pending={
+                "_target_": "ccflow.tests.test_base_registry.LazyTestModel",
+                "a": "pending",
+                "b": 1.0,
+            },
+        )
+        replacement = MyTestModel(a="replacement", b=2.0)
+
+        with self.assertRaises(ValueError):
+            registry.add("pending", replacement)
+        registry.add("pending", replacement, overwrite=True)
+        self.assertIs(registry["pending"], replacement)
+        self.assertEqual(LazyTestModel.constructions, 0)
+
+        registry.load_config(
+            OmegaConf.create(
+                {
+                    "other": {
+                        "_target_": "ccflow.tests.test_base_registry.LazyTestModel",
+                        "a": "other",
+                        "b": 3.0,
+                    }
+                }
+            )
+        )
+        registry.remove("other")
+        self.assertNotIn("other", registry)
+        self.assertEqual(LazyTestModel.constructions, 0)
+
+    def test_cycle_reports_dependency_chain(self):
+        root = ModelRegistry.root()
+        root.load_config(
+            OmegaConf.create(
+                {
+                    "lazy": {
+                        "_target_": "ccflow.base.LazyRegistry",
+                        "_recursive_": False,
+                        "a": {
+                            "_target_": "ccflow.tests.test_base_registry.MyNestedModel",
+                            "x": "b",
+                            "y": "b",
+                        },
+                        "b": {
+                            "_target_": "ccflow.tests.test_base_registry.MyNestedModel",
+                            "x": "a",
+                            "y": "a",
+                        },
+                    }
+                }
+            )
+        )
+
+        with self.assertRaisesRegex(Exception, "Circular lazy registry dependency detected: a -> b -> a"):
+            root["/lazy/a"]
 
 
 class TestRegistryLoadingErrors(TestCase):

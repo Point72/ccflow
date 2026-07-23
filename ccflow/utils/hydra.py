@@ -349,28 +349,19 @@ def resolve_config_paths(
     This helper extracts the common logic for resolving config paths from either
     CLI arguments or default values provided by the decorated hydra.main function.
 
-    Parameters
-    ----------
-    args
-        Parsed argparse namespace containing config_path and config_name attributes
-    config_path
-        Default config_path, typically from hydra.main() decorator
-    config_name
-        Default config_name, typically from hydra.main() decorator
-    hydra_main
-        The function decorated with hydra.main(). Used to resolve config_path
-        relative to the decorated function's file location.
+    Args:
+        args: Parsed argparse namespace containing config_path and config_name attributes
+        config_path: Default config_path, typically from hydra.main() decorator
+        config_name: Default config_name, typically from hydra.main() decorator
+        hydra_main: The function decorated with hydra.main(). Used to resolve config_path
+            relative to the decorated function's file location.
 
-    Returns
-    -------
-    tuple
-        (root_config_dir, root_config_name)
+    Returns:
+        tuple: (root_config_dir, root_config_name)
 
-    Raises
-    ------
-    ValueError
-        If neither args.config_path nor hydra_main+config_path are provided
-        If neither args.config_name nor config_name are provided
+    Raises:
+        ValueError: If neither args.config_path nor hydra_main+config_path are provided
+            If neither args.config_name nor config_name are provided
     """
     if args.config_path:
         root_config_dir = args.config_path

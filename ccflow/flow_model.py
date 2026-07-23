@@ -125,11 +125,6 @@ __all__ = (
 _AnyCallable = Callable[..., Any]
 
 
-# ---------------------------------------------------------------------------
-# Internal data structures
-# ---------------------------------------------------------------------------
-
-
 class _UnsetFlowInput:
     def __repr__(self) -> str:
         return "<unset>"
@@ -404,11 +399,6 @@ class _LocalFlowModelPicklePayload(NamedTuple):
     factory_kwargs: Dict[str, Any]
 
 
-# ---------------------------------------------------------------------------
-# Small value helpers
-# ---------------------------------------------------------------------------
-
-
 def _context_values(context: ContextBase) -> Dict[str, Any]:
     return dict(context)
 
@@ -478,11 +468,6 @@ def _concrete_context_type(context_type: Any) -> Optional[Type[ContextBase]]:
                 return arg
 
     return None
-
-
-# ---------------------------------------------------------------------------
-# Type coercion, lazy thunks, and registry references
-# ---------------------------------------------------------------------------
 
 
 def _remember_type_adapter(cache: "OrderedDict[Any, Any]", key: Any, value: Any) -> Any:
@@ -681,11 +666,6 @@ def _ensure_named_python_function(fn: _AnyCallable, *, decorator_name: str) -> N
         raise TypeError(f"{decorator_name} only supports named Python functions.")
 
 
-# ---------------------------------------------------------------------------
-# Context-transform serialization and generated-model persistence
-# ---------------------------------------------------------------------------
-
-
 def _serialize_context_transform_config(config: _FlowModelConfig) -> str:
     payload = cloudpickle.dumps(_serialize_flow_model_config(config), protocol=5)
     return b64encode(payload).decode("ascii")
@@ -878,11 +858,6 @@ def _register_generated_model_class(config: _FlowModelConfig, generated_cls: typ
     )
 
 
-# ---------------------------------------------------------------------------
-# Runtime context contracts and dependency projection
-# ---------------------------------------------------------------------------
-
-
 def _runtime_context_for_model(model: CallableModel, values: Dict[str, Any]) -> ContextBase:
     """Build the runtime context object expected by ``model`` from raw values."""
 
@@ -1035,11 +1010,6 @@ def _missing_regular_param_names(model: "_GeneratedFlowModelBase", config: _Flow
         if _is_unset_flow_input(value):
             missing.append(param.name)
     return missing
-
-
-# ---------------------------------------------------------------------------
-# Generated model input resolution
-# ---------------------------------------------------------------------------
 
 
 def _resolve_regular_param_value(model: "_GeneratedFlowModelBase", param: _FlowModelParam, context: ContextBase) -> Any:
@@ -1481,10 +1451,6 @@ def _coerce_model_context_value(model: CallableModel, field_name: str, value: An
     return _coerce_value(field_name, value, contract.input_types[field_name], source)
 
 
-# ---------------------------------------------------------------------------
-# Effective identity helpers
-# ---------------------------------------------------------------------------
-
 # Identity terms used below:
 # - config identity: stable hash of the analyzed Flow.model contract, fixed at
 #   generated-class construction time and carried through local restore.
@@ -1854,11 +1820,6 @@ def _generated_model_identity_payload(
     )
 
 
-# ---------------------------------------------------------------------------
-# Static binding resolution and with_context normalization
-# ---------------------------------------------------------------------------
-
-
 def _resolved_static_contextual_values(
     model: "_GeneratedFlowModelBase",
     config: _FlowModelConfig,
@@ -2113,11 +2074,6 @@ def _normalize_with_context(model: CallableModel, patches: Tuple[Any, ...], fiel
 
     context_spec = _BoundContextSpec(operations=operations)
     return _validate_static_context_spec_declared_context(model, context_spec)
-
-
-# ---------------------------------------------------------------------------
-# Bound context application and compute context construction
-# ---------------------------------------------------------------------------
 
 
 def _context_from_values_preserving_private_state(context: ContextBase, values: Dict[str, Any]) -> ContextBase:
@@ -2546,11 +2502,6 @@ def _recursive_dependency_specs_for_flow(
         return tuple(result)
     finally:
         active.remove(model_id)
-
-
-# ---------------------------------------------------------------------------
-# model.flow API and BoundModel wrapper
-# ---------------------------------------------------------------------------
 
 
 class FlowAPI:
@@ -3169,11 +3120,6 @@ class _GeneratedFlowModelBase(CallableModel):
         context: ContextBase,
     ) -> Optional[Any]:
         return _generated_model_identity_payload(self, context)
-
-
-# ---------------------------------------------------------------------------
-# Generated model method builders and decorators
-# ---------------------------------------------------------------------------
 
 
 def _make_call_impl(config: _FlowModelConfig) -> _AnyCallable:
