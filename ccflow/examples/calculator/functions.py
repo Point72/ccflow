@@ -6,15 +6,17 @@ the functions interchangeable from configuration: the context carries *what to
 compute on*, while the bound fields carry *how to compute*.
 """
 
+from pydantic import Field
+
 from ccflow import ContextBase, Flow, FromContext
 
-__all__ = ("Numbers", "add", "scale", "power", "rounded", "mean", "upper_gap", "lower_gap", "tail_ratio")
+__all__ = ("Numbers", "add", "lower_gap", "mean", "power", "rounded", "scale", "tail_ratio", "upper_gap")
 
 
 class Numbers(ContextBase):
     """Runtime input for the calculators: the operands to compute on."""
 
-    values: list[float] = []
+    values: list[float] = Field(default_factory=list)
 
 
 @Flow.model(context_type=Numbers)

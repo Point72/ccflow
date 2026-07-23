@@ -1,4 +1,4 @@
-from typing import Generic, List, TypeVar
+from typing import Generic, TypeVar
 
 from ..base import ResultBase
 
@@ -9,4 +9,4 @@ V = TypeVar("V")
 
 
 class ListResult(ResultBase, Generic[V]):
-    value: List[V]
+    value: list[V]

@@ -1,9 +1,9 @@
 import logging
 from datetime import date, datetime, timezone
-from typing import Any, ClassVar, List, Optional
+from typing import Any, ClassVar
 
 import pandas as pd
-from pydantic import PrivateAttr
+from pydantic import Field, PrivateAttr
 
 from ccflow import CallableModel, DateContext, DateRangeContext, Flow, GenericContext, GenericResult, GraphDepList, ResultBase
 
@@ -56,8 +56,8 @@ class MyRaisingCallable(MyDateCallable):
 class MySometimesRaisingCallable(CallableModel):
     offset: int
     any: Any = None
-    dates_to_raise: List[date]
-    _called_dates: List[date] = PrivateAttr(default_factory=lambda **kwargs: [])
+    dates_to_raise: list[date]
+    _called_dates: list[date] = PrivateAttr(default_factory=lambda **kwargs: [])
 
     @Flow.call
     def __call__(self, context: DateContext) -> MyResult:
@@ -68,7 +68,7 @@ class MySometimesRaisingCallable(CallableModel):
 
         return MyResult(x=context.date.day + self.offset)
 
-    def get_called_dates(self) -> List[date]:
+    def get_called_dates(self) -> list[date]:
         return self._called_dates
 
 
@@ -100,7 +100,7 @@ class MyDateRangeCallable(CallableModel):
     """Set up some more complex model that references the underlying ones"""
 
     model1: CallableModel
-    model2: Optional[MyDateCallable] = None
+    model2: MyDateCallable | None = None
 
     @Flow.call
     def __call__(self, context: DateRangeContext) -> MyResult:
@@ -122,12 +122,12 @@ class MyDateRangeCallable(CallableModel):
 class NodeModel(CallableModel):
     """Useful helper model for testing dependencies"""
 
-    deps_model: List["NodeModel"] = []
-    deps_context: List[DateContext] = []
+    deps_model: list["NodeModel"] = Field(default_factory=list)
+    deps_context: list[DateContext] = Field(default_factory=list)
     run_deps: bool = False  # Whether to call the dependencies in the call function
 
-    _calls: ClassVar[List[Any]] = []  # To hold the outputs for testing
-    _deps_calls: ClassVar[List[Any]] = []  # To hold the outputs for testing
+    _calls: ClassVar[list[Any]] = []  # To hold the outputs for testing
+    _deps_calls: ClassVar[list[Any]] = []  # To hold the outputs for testing
 
     @Flow.call
     def __call__(self, context: DateContext) -> GenericResult:

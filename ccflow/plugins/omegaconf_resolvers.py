@@ -4,7 +4,6 @@ from datetime import date, datetime, time
 from pathlib import Path
 from socket import gethostname
 from subprocess import check_output
-from typing import Dict, List, Optional, Union
 from zoneinfo import ZoneInfo
 
 from omegaconf import DictConfig, ListConfig, OmegaConf
@@ -14,7 +13,7 @@ from pydantic import TypeAdapter
 __all__ = ("register_omegaconf_resolver",)
 
 
-def register_omegaconf_resolver(name: str, func, replace: bool = True, prefix: Optional[str] = "cc") -> None:
+def register_omegaconf_resolver(name: str, func, replace: bool = True, prefix: str | None = "cc") -> None:
     if OmegaConf.has_resolver(name) and replace:
         OmegaConf.clear_resolver(name)
         if prefix and not name.startswith(f"{prefix}."):
@@ -26,9 +25,9 @@ def register_omegaconf_resolver(name: str, func, replace: bool = True, prefix: O
             OmegaConf.register_new_resolver(f"{prefix}.{name}", func)
 
 
-def today_resolver(tz_name: Optional[str] = None) -> str:
+def today_resolver(tz_name: str | None = None) -> date:
     if tz_name is None:
-        return datetime.now().date()  # we use local time if None
+        return datetime.now().astimezone().date()
     tz = ZoneInfo(tz_name)
     local_time = datetime.now(ZoneInfo("UTC")).astimezone(tz)
     return local_time.date()
@@ -39,9 +38,9 @@ _param_pattern = re.compile(r"^[+-]*(?P<key>[^=]+)=(?P<value>.+)$")
 
 
 def date_resolver(
-    dt: Union[DictConfig, ListConfig, str, datetime, date],
+    dt: DictConfig | ListConfig | str | datetime | date,
     datetime_format: str,
-    date_format: str = None,
+    date_format: str | None = None,
 ) -> str:
     """Convert Omegaconf config/datetime/string into a `datetime_format` formatted string.
     If the the input `dt` parameter has zero time (e.g. 2023-10-01 00:00:00) and the optional `date_format`
@@ -57,16 +56,16 @@ def date_resolver(
         dt = OmegaConf.to_container(dt, resolve=True)
     if isinstance(dt, dict):
         # e.g. DatetimeContext object, {"dt": datetime(...)}
-        dt = list(dt.values())[0]
+        dt = next(iter(dt.values()))
     if isinstance(dt, list):
         dt = dt[0]
-    dt = TypeAdapter(Union[datetime, date]).validate_python(dt)
+    dt = TypeAdapter(datetime | date).validate_python(dt)
     if dt.time() == time(0, 0) and date_format:
         return dt.strftime(date_format)
     return dt.strftime(datetime_format)
 
 
-def param_resolver(param_name: str = None, args: List[str] = None) -> Union[str, Dict[str, str]]:
+def param_resolver(param_name: str | None = None, args: list[str] | None = None) -> str | dict[str, str]:
     """Resolve a parameter from the command line arguments in the form of key=value.
     If the parameter is not found, it returns an empty string.
     If `param_name` is not provided, it returns a dictionary of all parameters found.
@@ -91,13 +90,13 @@ register_omegaconf_resolver("today_at_tz", today_resolver)
 
 # Taking a list of keys to create a dictionary and an element to populate each entry in the dictionary with,
 # produce a dictionary from list element to static dict elements
-register_omegaconf_resolver("list_to_static_dict", lambda keys, static_val: {x: static_val for x in keys})
+register_omegaconf_resolver("list_to_static_dict", lambda keys, static_val: dict.fromkeys(keys, static_val))
 
 # Merge a list of tuples together to build a dictionary, can be used as a workaround for OmegaConf being
 # unable to interpolate var values used as dictionary keys
 register_omegaconf_resolver(
     "dict_from_tuples",
-    lambda tuples: {k: v for k, v in tuples},
+    lambda tuples: dict(tuples),
 )
 
 register_omegaconf_resolver("trim_null_values", lambda dict_val: {k: v for k, v in dict_val.items() if v is not None})

@@ -68,10 +68,10 @@ class _PolarsExprPydanticAnnotation:
             try:
                 expression = eval(value, cls._eval_locals(), {})
             except Exception as ex:
-                raise ValueError(f"Error encountered constructing expression - {str(ex)}")
+                raise ValueError(f"Error encountered constructing expression - {ex!s}") from ex
 
             if not isinstance(expression, pl.Expr):
-                raise ValueError(f"Supplied value '{value}' does not evaluate to a Polars expression")
+                raise ValueError(f"Supplied value '{value}' does not evaluate to a Polars expression")  # noqa: TRY004
             return cls._coerce_from_expr(expression)
 
         raise ValueError(f"Supplied value '{value}' cannot be converted to a Polars expression")

@@ -3,7 +3,7 @@ from unittest import TestCase
 
 import pyarrow as pa
 import pyarrow.dataset as ds
-import pyarrow.fs as fs
+from pyarrow import fs
 from pydantic import TypeAdapter
 
 from ccflow import (

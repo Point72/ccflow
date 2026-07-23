@@ -3,7 +3,6 @@ import os
 import tempfile
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Dict
 from unittest import TestCase
 
 import numpy as np
@@ -32,7 +31,7 @@ class ComplexTestModel(PydanticBaseModel):
     a: str = "foo"
     b: str = "bar"
     c: MyTestModel = MyTestModel(foo=5, bar=date(2020, 1, 1), baz=np.array([]))
-    d: Dict[str, float] = {"x": 0.0, "y": 1.0}
+    d: dict[str, float] = {"x": 0.0, "y": 1.0}
     e: date = date(2022, 1, 1)
 
 
@@ -75,11 +74,11 @@ class TestCompositePublishers(TestCase):
                 self.assertTrue(path.exists())
 
             # Test actual values to make sure empty files aren't written
-            with open(paths["b"], "r") as f:
+            with open(paths["b"]) as f:
                 self.assertEqual(f.read(), "bar")
-            with open(paths["c"], "r") as f:
+            with open(paths["c"]) as f:
                 self.assertEqual(f.read(), "<html>5 on 2020-01-01</html>")
-            with open(paths["d"], "r") as f:
+            with open(paths["d"]) as f:
                 self.assertEqual(f.read(), '{"x":0.0,"y":1.0}')
 
     def test_default_publishers(self):
@@ -104,11 +103,11 @@ class TestCompositePublishers(TestCase):
                 self.assertTrue(path.exists())
 
             # Test actual values to make sure empty files aren't written
-            with open(paths["a"], "r") as f:
+            with open(paths["a"]) as f:
                 self.assertEqual(f.read(), "foo")
-            with open(paths["b"], "r") as f:
+            with open(paths["b"]) as f:
                 self.assertEqual(f.read(), "bar")
-            with open(paths["e"], "r") as f:
+            with open(paths["e"]) as f:
                 self.assertEqual(f.read(), "2022-01-01")
 
     def test_root_publisher(self):
@@ -143,7 +142,7 @@ class TestCompositePublishers(TestCase):
             self.assertDictEqual(paths, target)
             for path in paths.values():
                 self.assertTrue(path.exists())
-            with open(paths["__root__"], "r") as f:
+            with open(paths["__root__"]) as f:
                 self.assertEqual(
                     f.read(),
                     '{"a":"foo","b":"bar","d":{"x":0.0,"y":1.0},"e":"2022-01-01"}',
@@ -188,11 +187,11 @@ class TestCompositePublishers(TestCase):
             }
             self.assertDictEqual(paths, target)
 
-            with open(paths["a"], "r") as f:
+            with open(paths["a"]) as f:
                 self.assertEqual(f.read(), "foo")
-            with open(paths["b"]["c"], "r") as f:
+            with open(paths["b"]["c"]) as f:
                 self.assertEqual(f.read(), "bar")
-            with open(paths["b"]["d"], "r") as f:
+            with open(paths["b"]["d"]) as f:
                 self.assertEqual(f.read(), "baz")
 
     def test_no_publisher_found(self):
@@ -222,11 +221,11 @@ class TestCompositePublishers(TestCase):
                 a: str = "foo"
                 b: str = "bar"
                 c: MyTestModel = MyTestModel(foo=5, bar=date(2020, 1, 1), baz=np.array([]))
-                d: Dict[timedelta, float] = {timedelta(seconds=1): 0.0}
+                d: dict[timedelta, float] = {timedelta(seconds=1): 0.0}
                 e: date = date(2022, 1, 1)
 
             p.data = InnerComplexTestModel()
-            self.assertRaises(Exception, p)
+            self.assertRaises(RuntimeError, p)
 
             # Test that other results are still written!
             paths = {
@@ -238,9 +237,9 @@ class TestCompositePublishers(TestCase):
                 self.assertTrue(path.exists())
 
             # Test actual values to make sure empty files aren't written
-            with open(paths["a"], "r") as f:
+            with open(paths["a"]) as f:
                 self.assertEqual(f.read(), "foo")
-            with open(paths["b"], "r") as f:
+            with open(paths["b"]) as f:
                 self.assertEqual(f.read(), "bar")
-            with open(paths["e"], "r") as f:
+            with open(paths["e"]) as f:
                 self.assertEqual(f.read(), "2022-01-01")

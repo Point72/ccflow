@@ -1,16 +1,16 @@
 """This module contains extension types for pydantic."""
 
 import importlib
-from functools import cached_property, lru_cache
+from functools import cache, cached_property
 from types import FunctionType, MethodType, ModuleType
-from typing import Any, Type, get_origin
+from typing import Any, get_origin
 
 from pydantic import TypeAdapter
 from pydantic_core import core_schema
 from typing_extensions import Self
 
 
-@lru_cache(maxsize=None)
+@cache
 def import_string(dotted_path: str) -> Any:
     """Import an object from a dotted path string.
 
@@ -88,7 +88,7 @@ class PyObjectPath(str):
     #  However, this doesn't work: https://github.com/python/typing/issues/629
 
     @cached_property
-    def object(self) -> Type:
+    def object(self) -> type:
         """Return the underlying object that the path corresponds to."""
         return import_string(str(self))
 
@@ -110,9 +110,9 @@ class PyObjectPath(str):
 
         # Verify the path is actually importable
         try:
-            path.object
+            _ = path.object
         except ImportError as e:
-            raise ValueError(f"ensure this value contains valid import path or importable object: {str(e)}")
+            raise ValueError(f"ensure this value contains valid import path or importable object: {e!s}")
 
         return path
 
@@ -137,7 +137,7 @@ class PyObjectPath(str):
         raise ValueError(f"ensure this value contains valid import path or importable object: unable to import path for {value}")
 
     @classmethod
-    @lru_cache(maxsize=None)
+    @cache
     def _validate_cached(cls, value: str) -> Self:
         return _TYPE_ADAPTER.validate_python(value)
 

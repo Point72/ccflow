@@ -12,7 +12,7 @@ pn.extension()
 pn.extension("jsoneditor")
 
 
-__all__ = ("ModelTypeViewer", "ModelViewer", "ModelConfigViewer")
+__all__ = ("ModelConfigViewer", "ModelTypeViewer", "ModelViewer")
 
 
 _FIELD_STYLES = {

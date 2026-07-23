@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 """Small `@Flow.model` example.
 
 Shows how to:

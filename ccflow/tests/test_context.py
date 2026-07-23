@@ -31,6 +31,10 @@ from ccflow.context import (
 from ccflow.result import GenericResult
 
 
+def _local_today() -> date:
+    return datetime.now().astimezone().date()
+
+
 class MyDefaultContext(ContextBase):
     b: float = 3.14
     c: bool = False
@@ -71,19 +75,19 @@ class TestContexts(TestCase):
         self.assertEqual(TypeAdapter(MyDefaultContext).validate_python({"b": 10.0}), MyDefaultContext(b=10.0, c=False))
 
     def test_date_validation(self):
-        c = DateContext(date=date.today())
-        self.assertEqual(DateContext(date=str(date.today())), c)
-        self.assertEqual(DateContext(date=pd.Timestamp(date.today())), c)
+        c = DateContext(date=_local_today())
+        self.assertEqual(DateContext(date=str(_local_today())), c)
+        self.assertEqual(DateContext(date=pd.Timestamp(_local_today())), c)
         self.assertEqual(DateContext(date="0d"), c)
-        c1 = DateContext(date=date.today() - timedelta(1))
+        c1 = DateContext(date=_local_today() - timedelta(1))
         self.assertEqual(DateContext(date="-1d"), c1)
         self.assertRaises(ValueError, DateContext, date="foo")
 
         # Test validation from other types
-        self.assertEqual(TypeAdapter(DateContext).validate_python({"date": date.today()}), c)
-        self.assertEqual(TypeAdapter(DateContext).validate_python(date.today()), c)
-        self.assertEqual(TypeAdapter(DateContext).validate_python([date.today()]), c)
-        self.assertEqual(TypeAdapter(DateContext).validate_python(str(date.today())), c)
+        self.assertEqual(TypeAdapter(DateContext).validate_python({"date": _local_today()}), c)
+        self.assertEqual(TypeAdapter(DateContext).validate_python(_local_today()), c)
+        self.assertEqual(TypeAdapter(DateContext).validate_python([_local_today()]), c)
+        self.assertEqual(TypeAdapter(DateContext).validate_python(str(_local_today())), c)
         self.assertEqual(TypeAdapter(DateContext).validate_python("0d"), c)
         self.assertEqual(TypeAdapter(DateContext).validate_python("-1d"), c1)
         self.assertRaises(ValidationError, TypeAdapter(DateContext).validate_python, "foo")
@@ -98,7 +102,7 @@ class TestContexts(TestCase):
         dt = datetime(2022, 1, 1, 12, 0, tzinfo=timezone.utc)
         c = DatetimeContext(dt=dt)
         self.assertEqual(DatetimeContext(dt=str(dt)), c)
-        self.assertEqual(DatetimeContext(dt=dt.date()), DatetimeContext(dt=datetime(2022, 1, 1)))
+        self.assertEqual(DatetimeContext(dt=dt.date()), DatetimeContext(dt=datetime(2022, 1, 1)))  # noqa: DTZ001
 
         # Test validation from other types
         self.assertEqual(TypeAdapter(DatetimeContext).validate_python({"dt": dt}), c)
@@ -115,10 +119,10 @@ class TestContexts(TestCase):
         self.assertRaises(ValidationError, FreqDateContext.model_validate, d)
 
     def test_date_range(self):
-        d0 = date.today() - timedelta(1)
-        d1 = date.today()
+        d0 = _local_today() - timedelta(1)
+        d1 = _local_today()
         c = DateRangeContext(start_date=d0, end_date=d1)
-        self.assertEqual(DateRangeContext(start_date=str(d0), end_date=pd.Timestamp(date.today())), c)
+        self.assertEqual(DateRangeContext(start_date=str(d0), end_date=pd.Timestamp(_local_today())), c)
         self.assertEqual(DateRangeContext(start_date="-1d", end_date="0d"), c)
         self.assertRaises(ValueError, DateRangeContext, start_date="foo", end_date=d1)
 
@@ -126,11 +130,11 @@ class TestContexts(TestCase):
         self.assertEqual(TypeAdapter(DateRangeContext).validate_python({"start_date": d0, "end_date": d1}), c)
         self.assertEqual(TypeAdapter(DateRangeContext).validate_python(("-1d", "0d")), c)
         self.assertEqual(TypeAdapter(DateRangeContext).validate_python(["-1d", "0d"]), c)
-        self.assertEqual(TypeAdapter(DateRangeContext).validate_python(["-1d", datetime.now()]), c)
+        self.assertEqual(TypeAdapter(DateRangeContext).validate_python(["-1d", datetime.now().astimezone()]), c)
 
     def test_date_range_from_date(self):
         # Test validation from a DateContext
-        d0 = date.today()
+        d0 = _local_today()
         self.assertEqual(TypeAdapter(DateRangeContext).validate_python(DateContext(date=d0)), DateRangeContext(start_date=d0, end_date=d0))
 
     def test_freq(self):

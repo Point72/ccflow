@@ -16,7 +16,7 @@ can fall back to Pydantic's default reducer.
 
 import types
 from functools import singledispatch
-from typing import Any, NamedTuple, Optional, Tuple, Type, get_args, get_origin
+from typing import Any, NamedTuple, get_args, get_origin
 
 from pydantic import BaseModel as PydanticBaseModel
 
@@ -27,7 +27,7 @@ class _GenericTypeSpec(NamedTuple):
     # Pickle must not rely on process-local names like ``GenericResult[int]``.
     # Store generic args as data so the receiver can rebuild ``origin[args]``.
     origin: Any
-    args: Tuple[Any, ...]
+    args: tuple[Any, ...]
 
 
 def _is_pydantic_generic_specialization(value: Any) -> bool:
@@ -95,7 +95,7 @@ def _(value: _GenericTypeSpec) -> Any:
     restored_args = tuple(_restore_generic_type_arg(arg) for arg in args)
     try:
         return origin[restored_args]
-    except TypeError as exc:
+    except TypeError:
         if len(restored_args) == 1:
             try:
                 return origin[restored_args[0]]
@@ -109,7 +109,7 @@ def _(value: _GenericTypeSpec) -> Any:
             for arg in restored_args[1:]:
                 result = result | arg
             return result
-        raise exc
+        raise
 
 
 @_restore_generic_type_arg.register(list)
@@ -122,14 +122,14 @@ def _(value: tuple) -> tuple:
     return tuple(_restore_generic_type_arg(item) for item in value)
 
 
-def _new_ccflow_generic_model(origin: Type[PydanticBaseModel], args: Tuple[Any, ...]) -> PydanticBaseModel:
+def _new_ccflow_generic_model(origin: type[PydanticBaseModel], args: tuple[Any, ...]) -> PydanticBaseModel:
     """Restore a Pydantic generic specialization without a process-local global."""
 
     cls = origin[tuple(_restore_generic_type_arg(arg) for arg in args)]
     return cls.__new__(cls)
 
 
-def reduce_generic_model_instance(model: PydanticBaseModel) -> Optional[tuple[Any, tuple[Any, ...], dict[str, Any]]]:
+def reduce_generic_model_instance(model: PydanticBaseModel) -> tuple[Any, tuple[Any, ...], dict[str, Any]] | None:
     """Return a portable reducer for Pydantic generic specializations."""
 
     if not _is_pydantic_generic_specialization(type(model)):

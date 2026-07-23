@@ -20,7 +20,6 @@ so the change flows through everywhere)::
 """
 
 from pathlib import Path
-from typing import List, Optional
 
 from ccflow import RootModelRegistry, load_config as _load_config_base
 
@@ -28,11 +27,11 @@ from .data_generators import TPCHAnswerProvider, TPCHDuckDBBackend, TPCHTable, T
 from .query import TPCHQuery
 
 __all__ = (
-    "TPCHTable",
-    "TPCHDuckDBBackend",
-    "TPCHTableProvider",
     "TPCHAnswerProvider",
+    "TPCHDuckDBBackend",
     "TPCHQuery",
+    "TPCHTable",
+    "TPCHTableProvider",
     "load_config",
 )
 
@@ -40,7 +39,7 @@ __all__ = (
 def load_config(
     config_dir: str = "",
     config_name: str = "",
-    overrides: Optional[List[str]] = None,
+    overrides: list[str] | None = None,
     *,
     overwrite: bool = True,
     basepath: str = "",

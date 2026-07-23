@@ -3,10 +3,7 @@ import unittest
 from typing import (
     Annotated,
     Any,
-    Dict,
     Generic,
-    List,
-    Optional,
     TypeVar,
 )
 
@@ -34,8 +31,6 @@ class NestedModel(BaseModel):
 
 class A(BaseModel):
     """Base class."""
-
-    pass
 
 
 class ArbitraryType:
@@ -71,7 +66,7 @@ class F(BaseModel):
 
 
 class G(BaseModel):
-    foo: Optional[F] = None
+    foo: F | None = None
 
 
 class H_float64(BaseModel):
@@ -207,8 +202,6 @@ class TestBaseModelSerialization(unittest.TestCase):
         class A(BaseModel):
             """No overriding of configs."""
 
-            pass
-
         class B(BaseModel):
             """Override the config. Hopefully the config from our BaseModel doesn't get overridden."""
 
@@ -233,8 +226,8 @@ class TestBaseModelSerialization(unittest.TestCase):
 
         class MyNestedModel(BaseModel):
             a1: A
-            a2: Optional[A]
-            a3: Dict[str, Optional[List[A]]]
+            a2: A | None
+            a3: dict[str, list[A] | None]
             a4: A | int
 
         model = MyNestedModel(

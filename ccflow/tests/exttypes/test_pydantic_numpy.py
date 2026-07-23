@@ -23,8 +23,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
-from typing import Dict, Optional, Union
-
 import numpy as np
 from numpy.testing import assert_allclose
 from pydantic import BaseModel
@@ -70,7 +68,7 @@ def test_json():
 
     assert "K" in jdata
     assert isinstance(jdata["K"], list)
-    assert jdata["K"] == list([1, 2])
+    assert jdata["K"] == [1, 2]
 
     # Test round-trip
     cfg2 = MySettingsNoGeneric.model_validate_json(cfg.model_dump_json())
@@ -79,7 +77,7 @@ def test_json():
 
 def test_optional_construction():
     class MySettingsOptional(BaseModel):
-        K: Optional[NDArray[float32]] = None
+        K: NDArray[float32] | None = None
 
     cfg = MySettingsOptional()
     assert cfg.K is None
@@ -94,7 +92,7 @@ def test_subclass_basemodel():
         K: NDArray[float32]
 
     class MyModel(BaseModel):
-        L: Dict[str, MyModelField]
+        L: dict[str, MyModelField]
 
     model_field = MyModelField(K=[1.0, 2.0])
     assert model_field.model_dump_json()
@@ -113,7 +111,7 @@ def test_default_value():
 
 
 class MyDictArrayModel(BaseModel):
-    x: Union[NDArray[float32], Dict[int, NDArray[float32]]]
+    x: NDArray[float32] | dict[int, NDArray[float32]]
 
 
 def test_union_field():

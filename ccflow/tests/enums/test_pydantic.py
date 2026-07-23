@@ -1,6 +1,5 @@
 import importlib
 import json
-from typing import Dict
 
 import pytest
 from pydantic import BaseModel, ConfigDict, RootModel
@@ -21,7 +20,7 @@ class MyModel(BaseModel):
 class MyDictModel(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
 
-    enum_dict: Dict[MyEnum, int] = None
+    enum_dict: dict[MyEnum, int] = None
 
 
 def test_validation():
@@ -45,7 +44,7 @@ def test_serialization():
     assert json.loads(tm.model_dump_json()) == json.loads('{"enum": "FIELD2", "enum_default": "FIELD1"}')
 
 
-class DictWrapper(RootModel[Dict[MyEnum, int]]):
+class DictWrapper(RootModel[dict[MyEnum, int]]):
     model_config = ConfigDict(use_enum_values=True)
 
     def __getitem__(self, item):

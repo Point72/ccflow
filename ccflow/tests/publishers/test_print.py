@@ -49,7 +49,7 @@ class TestPrintPublishers(TestCase):
             p = PrintJSONPublisher(
                 name="test_{{param}}",
                 name_params={"param": "JSON"},
-                kwargs=dict(default=str),
+                kwargs={"default": str},
             )
             p.data = {"foo": 5, "bar": date(2020, 1, 1)}
             p()

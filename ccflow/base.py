@@ -8,8 +8,9 @@ import pathlib
 import platform
 import sys
 import warnings
+from collections.abc import Callable
 from types import GenericAlias, MappingProxyType
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, Generic, List, Optional, Tuple, Type, TypeVar, Union, get_args, get_origin
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Optional, TypeVar, Union, get_args, get_origin
 
 import pydantic
 from packaging import version
@@ -38,17 +39,17 @@ from .pickling import reduce_generic_model_instance
 log = logging.getLogger(__name__)
 
 __all__ = (
+    "REGISTRY_SEPARATOR",
     "BaseModel",
+    "ContextBase",
+    "ContextType",
     "ModelRegistry",
     "ModelType",
     "RegistryLookupContext",
-    "RootModelRegistry",
-    "REGISTRY_SEPARATOR",
-    "load_config",
-    "ContextBase",
-    "ContextType",
     "ResultBase",
     "ResultType",
+    "RootModelRegistry",
+    "load_config",
     "make_lazy_result",
 )
 
@@ -59,15 +60,13 @@ REGISTRY_SEPARATOR = "/"
 class RegistryKeyError(KeyError):
     """Subclass for KeyError specific to Registry lookup errors."""
 
-    ...
-
 
 class _RegistryMixin:
-    def get_registrations(self) -> List[Tuple["ModelRegistry", str]]:
+    def get_registrations(self) -> list[tuple["ModelRegistry", str]]:
         """Return the set of registrations that has happened for this model"""
         return self._registrations.copy()
 
-    def get_registered_names(self, include_orphaned: bool = False) -> List[str]:
+    def get_registered_names(self, include_orphaned: bool = False) -> list[str]:
         """Return the set of names for this model in the root registry.
 
         Args:
@@ -95,7 +94,7 @@ class _RegistryMixin:
             return [f"{REGISTRY_SEPARATOR}{self.name}"]
         return []
 
-    def get_registry_dependencies(self, types: Optional[Tuple["ModelType"]] = None) -> List[List[str]]:
+    def get_registry_dependencies(self, types: tuple["ModelType"] | None = None) -> list[list[str]]:
         """Return the set of registered models that are contained by this model.
         It only returns names that are relative to the root registry.
 
@@ -115,14 +114,14 @@ class _RegistryMixin:
 # https://github.com/pydantic/pydantic/issues/6423
 # https://github.com/pydantic/pydantic-core/pull/740
 # See https://github.com/pydantic/pydantic/issues/6381 for inspiration on implementation
-from pydantic._internal._model_construction import ModelMetaclass  # noqa: E402
+from pydantic._internal._model_construction import ModelMetaclass
 
 _IS_PY39 = version.parse(platform.python_version()) < version.parse("3.10")
 _PYDANTIC_VERSION = version.parse(pydantic.__version__)
 _USE_RUNTIME_POLYMORPHIC_SERIALIZATION = _PYDANTIC_VERSION >= version.parse("2.13")
 
 
-def _namespace_annotations(namespaces: Dict[str, Any]) -> dict:
+def _namespace_annotations(namespaces: dict[str, Any]) -> dict:
     if "__annotations__" in namespaces:
         return dict(namespaces["__annotations__"])
 
@@ -164,7 +163,7 @@ def _adjust_annotations(annotation):
 
 
 class _SerializeAsAnyMeta(ModelMetaclass):
-    def __new__(self, name: str, bases: Tuple[type], namespaces: Dict[str, Any], **kwargs):
+    def __new__(cls, name: str, bases: tuple[type], namespaces: dict[str, Any], **kwargs):
         # The metaclass must be referenced statically on BaseModel so that pyright
         # recognizes it as a pydantic ModelMetaclass and synthesizes __init__ with
         # field defaults. On pydantic >= 2.13 the annotation rewrite is unnecessary,
@@ -183,7 +182,7 @@ class _SerializeAsAnyMeta(ModelMetaclass):
 
             namespaces["__annotations__"] = annotations
 
-        return super().__new__(self, name, bases, namespaces, **kwargs)
+        return super().__new__(cls, name, bases, namespaces, **kwargs)
 
 
 class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta):
@@ -230,7 +229,7 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
         return PyObjectPath.validate(cls)
 
     # We want to track under what names a model has been registered
-    _registrations: List[Tuple["ModelRegistry", str]] = PrivateAttr(default_factory=list)
+    _registrations: list[tuple["ModelRegistry", str]] = PrivateAttr(default_factory=list)
     _was_registered: bool = PrivateAttr(default=False)
 
     model_config = ConfigDict(
@@ -242,14 +241,14 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
         # where the default behavior is just to drop the mis-named value. This prevents that
         extra="forbid",
         ser_json_timedelta="float",
-        **(dict(polymorphic_serialization=True) if _USE_RUNTIME_POLYMORPHIC_SERIALIZATION else {}),
+        **({"polymorphic_serialization": True} if _USE_RUNTIME_POLYMORPHIC_SERIALIZATION else {}),
     )
 
     def __str__(self):
         # Because the standard string representation does not include class name
         return repr(self)
 
-    def __eq__(self, other: Any) -> bool:
+    def __eq__(self, other: object) -> bool:
         # Override the method from pydantic's base class so as not to include private attributes,
         # which was a change made in V2 (https://docs.pydantic.dev/latest/migration/)
         if isinstance(other, BaseModel):
@@ -264,8 +263,8 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
 
     def get_widget(
         self,
-        json_kwargs: Optional[Dict[str, Any]] = None,
-        widget_kwargs: Optional[Dict[str, Any]] = None,
+        json_kwargs: dict[str, Any] | None = None,
+        widget_kwargs: dict[str, Any] | None = None,
     ):
         """Get an IPython widget to view the object.
 
@@ -371,16 +370,15 @@ class _ModelRegistryData(PydanticBaseModel):
         repr=False,
     )
     name: str
-    models: SerializeAsAny[Dict[str, BaseModel]]
+    models: SerializeAsAny[dict[str, BaseModel]]
 
 
-def _get_registry_dependencies(value, types: Optional[Tuple[Type]]) -> List[List[str]]:
+def _get_registry_dependencies(value, types: tuple[type] | None) -> list[list[str]]:
     deps = []
-    if isinstance(value, BaseModel):
-        if not types or isinstance(value, types):
-            names = value.get_registered_names()
-            if names:
-                deps.append(names)
+    if isinstance(value, BaseModel) and (not types or isinstance(value, types)):
+        names = value.get_registered_names()
+        if names:
+            deps.append(names)
     if isinstance(value, PydanticBaseModel):
         for _field_name, v in value:
             deps.extend(_get_registry_dependencies(v, types))
@@ -395,7 +393,7 @@ def _get_registry_dependencies(value, types: Optional[Tuple[Type]]) -> List[List
     return deps
 
 
-def _is_config_model(value: Dict):
+def _is_config_model(value: dict):
     """Test whether a config value is a model, i.e. it is a dict which contains a _target_ key."""
     if "_target_" in value:
         return True
@@ -435,9 +433,9 @@ class ModelRegistry(BaseModel, collections.abc.Mapping):
         default="",
         description="The 'name' of the registry, purely for descriptive purposes",
     )
-    _models: Dict[str, BaseModel] = PrivateAttr({})
+    _models: dict[str, BaseModel] = PrivateAttr({})
 
-    def __eq__(self, other: Any) -> bool:
+    def __eq__(self, other: object) -> bool:
         # Since our BaseModel ignored private attributes, the registry needs to explicitly compare them
         # Note that we want RootModelRegistry to compare as equal to a ModelRegistry, so we use isinstance.
         return isinstance(other, BaseModel) and self.name == other.name and self._models == other._models
@@ -448,7 +446,7 @@ class ModelRegistry(BaseModel, collections.abc.Mapping):
             models = kwargs.pop("models")
             if not isinstance(models, (dict, MappingProxyType)):
                 raise TypeError("models must be a dict")
-        super(ModelRegistry, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
         for name, model in models.items():
             self.add(name, model)
 
@@ -496,7 +494,7 @@ class ModelRegistry(BaseModel, collections.abc.Mapping):
             self.remove(name)
         return self
 
-    def clone(self, name: Optional[str] = None) -> Self:
+    def clone(self, name: str | None = None) -> Self:
         """Shallow clone the registry (but not the models within it)."""
         return ModelRegistry(name=name or self.name, models=self.models)
 
@@ -541,7 +539,7 @@ class ModelRegistry(BaseModel, collections.abc.Mapping):
         log.debug("Added '%s' to registry '%s': %s", name, self._debug_name, model)
         return model
 
-    def get(self, name: str, default=None) -> Optional[ModelType]:
+    def get(self, name: str, default=None) -> ModelType | None:
         """Accessor for models by name with default value.
 
         Differs from calling self.models.get because it parses names from nested registries containing "/",
@@ -626,8 +624,8 @@ class ModelRegistry(BaseModel, collections.abc.Mapping):
     def create_config_from_path(
         self,
         path: str,
-        overrides: Optional[List[str]] = None,
-        version_base: Optional[str] = None,
+        overrides: list[str] | None = None,
+        version_base: str | None = None,
     ) -> "DictConfig":
         """Create the config from the path.
 
@@ -652,10 +650,10 @@ class ModelRegistry(BaseModel, collections.abc.Mapping):
     def load_config_from_path(
         self,
         path: str,
-        config_key: Optional[str] = None,
-        overrides: Optional[List[str]] = None,
+        config_key: str | None = None,
+        overrides: list[str] | None = None,
         overwrite: bool = False,
-        version_base: Optional[str] = None,
+        version_base: str | None = None,
     ) -> Self:
         """Create the config from the path, and then load that data into the registry.
 
@@ -692,7 +690,7 @@ class RootModelRegistry(ModelRegistry):
         """Returns the "full name" of the registry. Since registries can have multiple names"""
         return "RootModelRegistry"
 
-    def get_registered_names(self, include_orphaned: bool = False) -> List[str]:
+    def get_registered_names(self, include_orphaned: bool = False) -> list[str]:
         """The root registry is always the empty-prefix anchor of every path.
 
         Overrides the base implementation so that a deserialized copy of the
@@ -711,7 +709,7 @@ class _ModelRegistryLoader:
     def __init__(self, overwrite: bool):
         self._overwrite = overwrite
 
-    def _make_subregistries(self, cfg, registries: List[ModelRegistry]) -> List[Tuple[List[ModelRegistry], str, "DictConfig", Optional[Exception]]]:
+    def _make_subregistries(self, cfg, registries: list[ModelRegistry]) -> list[tuple[list[ModelRegistry], str, "DictConfig", Exception | None]]:
         from omegaconf import DictConfig
 
         registry = registries[-1]
@@ -732,7 +730,7 @@ class _ModelRegistryLoader:
         return models_to_register
 
     def load_config(
-        self, cfg: "DictConfig", registry: ModelRegistry, skip_exceptions: bool = False, resolve_from: Optional[ModelRegistry] = None
+        self, cfg: "DictConfig", registry: ModelRegistry, skip_exceptions: bool = False, resolve_from: ModelRegistry | None = None
     ) -> ModelRegistry:
         """Load from OmegaConf DictConfig that follows hydra conventions."""
         # Here we use hydra's 'instantiate' to instantiate models,
@@ -760,7 +758,7 @@ class _ModelRegistryLoader:
                         if isinstance(e.__cause__, (RegistryKeyError, ValidationError)):
                             unresolved_models.append((registries, k, v, e))
                         elif not skip_exceptions:
-                            raise e
+                            raise
                         continue
                 # If model is a simple type or a config, don't try to add it to the registry (which would raise an error)
                 # It could be a config value that was programmatically generated via _target_ and which used elsewhere via interpolation
@@ -819,9 +817,9 @@ class RegistryLookupContext:
     Do not confuse the name with "Context" from callable.py.
     """
 
-    _REGISTRIES = []
+    _REGISTRIES: ClassVar[list[ModelRegistry]] = []
 
-    def __init__(self, registries: List[ModelRegistry] = None):
+    def __init__(self, registries: list[ModelRegistry] | None = None):
         """Constructor.
 
         Args:
@@ -832,7 +830,7 @@ class RegistryLookupContext:
         self._previous_registries = []
 
     @classmethod
-    def registry_search_paths(cls) -> List[ModelRegistry]:
+    def registry_search_paths(cls) -> list[ModelRegistry]:
         """Return the active list of additional registry search paths."""
         return cls._REGISTRIES
 
@@ -886,7 +884,7 @@ def load_config(
     root_config_name: str,
     config_dir: str = "config",
     config_name: str = "",
-    overrides: Optional[List[str]] = None,
+    overrides: list[str] | None = None,
     *,
     overwrite: bool = False,
     basepath: str = "",
@@ -932,7 +930,6 @@ class ResultBase(BaseModel):
 
     def _onaccess_callback(*args, **kwargs):
         """Function to be called on every attribute access"""
-        pass
 
     def __getattribute__(self, attr):
         """Call _onaccess_callback before allowing attribute access.
@@ -973,15 +970,15 @@ class ContextBase(ResultBase):
         BaseValidator = TypeAdapter(BaseModel)
         try:
             return handler(BaseValidator.validate_python(v))
-        except Exception as e:
+        except Exception:
             if isinstance(v, (str, tuple, list)):
                 if isinstance(v, str):
                     v = v.split(cls.model_config["separator"])
                 if len(v) > len(cls.model_fields):  # Do not allow extra elements
-                    raise e
+                    raise
                 v = dict(zip(cls.model_fields, v))
                 return handler(v)
-            raise e
+            raise
 
 
 ContextType = TypeVar("ContextType", bound=ContextBase)

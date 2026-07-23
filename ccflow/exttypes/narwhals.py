@@ -3,20 +3,20 @@ import inspect
 import pprint
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Annotated, Any, Optional, Union, get_args, get_origin
+from typing import Annotated, Any, get_args, get_origin
 
 import narwhals.stable.v1 as nw
 from pydantic import AfterValidator, ConfigDict, GetCoreSchemaHandler, TypeAdapter
 from pydantic_core import core_schema
 
 __all__ = (
-    "FrameValidator",
-    "DataFrameValidator",
-    "LazyFrameValidator",
-    "FrameT",
-    "DataFrameT",
-    "LazyFrameT",
     "DType",
+    "DataFrameT",
+    "DataFrameValidator",
+    "FrameT",
+    "FrameValidator",
+    "LazyFrameT",
+    "LazyFrameValidator",
     "Schema",
     "SchemaValidator",
 )
@@ -28,7 +28,7 @@ class FrameValidator:
     When used directly (with lazy=None), it will raise a validation error if an eager frame is passed to a lazy frame source or vice versa.
     """
 
-    lazy: Optional[bool] = None
+    lazy: bool | None = None
 
     @classmethod
     def __get_pydantic_core_schema__(
@@ -101,7 +101,9 @@ class FrameValidator:
                     "backend": value.implementation.value,
                 }
             else:
-                raise ValueError("Cannot serialize a LazyFrame to JSON. Please use the collect() method to convert it to a DataFrame first.")
+                raise ValueError(  # noqa: TRY004
+                    "Cannot serialize a LazyFrame to JSON. Please use the collect() method to convert it to a DataFrame first."
+                )
 
         from_any_schema = core_schema.no_info_plain_validator_function(validate_from_any)
         return core_schema.json_or_python_schema(
@@ -117,7 +119,7 @@ class DataFrameValidator(FrameValidator):
     Will collect lazy frames and convert them to eager frames.
     """
 
-    lazy: Optional[bool] = False
+    lazy: bool | None = False
 
 
 class LazyFrameValidator(FrameValidator):
@@ -126,13 +128,13 @@ class LazyFrameValidator(FrameValidator):
     Will create lazy frames out of eager data frames.
     """
 
-    lazy: Optional[bool] = True
+    lazy: bool | None = True
 
 
 # Mirror nw.DataFrameT and nw.FrameT (but with validation) for consistency. LazyFrameT added for convenience and symmetry.
 DataFrameT = Annotated[nw.DataFrame, DataFrameValidator()]
 LazyFrameT = Annotated[nw.LazyFrame, LazyFrameValidator()]
-FrameT = Union[Annotated[nw.DataFrame, FrameValidator()], Annotated[nw.LazyFrame, FrameValidator()]]
+FrameT = Annotated[nw.DataFrame, FrameValidator()] | Annotated[nw.LazyFrame, FrameValidator()]
 
 
 class _DTypeValidator:
@@ -154,14 +156,14 @@ class _DTypeValidator:
             if inspect.isclass(value) and issubclass(value, nw.dtypes.DType):
                 value = value()
             if not isinstance(value, nw.dtypes.DType):
-                raise ValueError(f"Expected a Narwhals DType but got {type(value)}")
+                raise ValueError(f"Expected a Narwhals DType but got {type(value)}")  # noqa: TRY004
             return value
 
         def serialize(value: Any):
             if inspect.isclass(value) and issubclass(value, nw.dtypes.DType):
                 value = value()
             if not isinstance(value, nw.dtypes.DType):
-                raise ValueError(f"Expected a Narwhals DType but got {type(value)}")
+                raise ValueError(f"Expected a Narwhals DType but got {type(value)}")  # noqa: TRY004
             return str(value)
 
         from_any_schema = core_schema.no_info_plain_validator_function(validate_from_any)
@@ -197,7 +199,7 @@ class SchemaValidator:
     def __get_pydantic_core_schema__(self, source_type: Any, handler: GetCoreSchemaHandler) -> core_schema.CoreSchema:
         def validate_schema(value: Any):
             if not isinstance(value, (nw.DataFrame, nw.LazyFrame)):
-                raise ValueError(f"Expected a Narwhals DataFrame or LazyFrame but got {type(value)}")
+                raise ValueError(f"Expected a Narwhals DataFrame or LazyFrame but got {type(value)}")  # noqa: TRY004
             schema = value.collect_schema()
             if self.allow_subset:
                 schema = nw.Schema({k: v for k, v in schema.items() if k in self.schema})
@@ -212,7 +214,7 @@ class SchemaValidator:
                     if col in self.schema and self.schema[col] != dtype:
                         try:
                             new_values[col] = value[col].cast(self.schema[col])
-                        except Exception:
+                        except Exception:  # noqa: BLE001
                             raise ValueError(f"Failed to cast column {col} from {dtype} to {self.schema[col]}") from None
                         new_schema[col] = self.schema[col]
                     else:

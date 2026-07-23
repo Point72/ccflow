@@ -24,7 +24,7 @@ class TestObjectConfig(TestCase):
     def test_construction(self):
         config = ObjectConfig(
             object_type="ccflow.tests.test_object_config.MyClass",
-            object_kwargs=dict(p="foo"),
+            object_kwargs={"p": "foo"},
         )
         self.assertIsInstance(config.object, MyClass)
         self.assertEqual(config.object.p, "foo")
@@ -35,13 +35,13 @@ class TestObjectConfig(TestCase):
         with pytest.raises(TypeError):
             config = ObjectConfig(
                 object_type="ccflow.tests.test_object_config.MyClass",
-                object_kwargs=dict(garbage="foo"),
+                object_kwargs={"garbage": "foo"},
             )
 
     def test_lazy_construction(self):
         config = LazyObjectConfig(
             object_type="ccflow.tests.test_object_config.MyClass",
-            object_kwargs=dict(p="foo"),
+            object_kwargs={"p": "foo"},
         )
         self.assertIsInstance(config.object, MyClass)
         self.assertEqual(config.object.p, "foo")
@@ -51,10 +51,10 @@ class TestObjectConfig(TestCase):
 
         config = LazyObjectConfig(
             object_type="ccflow.tests.test_object_config.MyClass",
-            object_kwargs=dict(garbage="foo"),
+            object_kwargs={"garbage": "foo"},
         )
         with pytest.raises(TypeError):
-            config.object
+            _ = config.object
 
     def test_validation(self):
         for Config in [ObjectConfig, LazyObjectConfig]:
@@ -73,7 +73,7 @@ class TestObjectConfig(TestCase):
         for Config in [ObjectConfig, LazyObjectConfig]:
             config = Config(
                 object_type="ccflow.tests.test_object_config.MyClass",
-                object_kwargs=dict(p="foo", q=5),
+                object_kwargs={"p": "foo", "q": 5},
             )
             # Insert pickling step
             config = pickle.loads(pickle.dumps(config))
@@ -87,7 +87,7 @@ class TestObjectConfig(TestCase):
         for Config in [ObjectConfig, LazyObjectConfig]:
             config = Config(
                 object_type="ccflow.tests.test_object_config.MyClass",
-                object_kwargs=dict(p="foo", q=5),
+                object_kwargs={"p": "foo", "q": 5},
             )
             r = ModelRegistry.root()
             r.add("foo", config, overwrite=True)

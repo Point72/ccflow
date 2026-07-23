@@ -45,15 +45,15 @@ def _structural_graph(evaluation_context):
 
 def _models():
     ctx = DateContext(date=date(2022, 1, 1))
-    leaf = NodeModel(meta=dict(name="leaf"))
+    leaf = NodeModel(meta={"name": "leaf"})
     # diamond: root -> n1, n2 -> shared leaf
-    n1 = NodeModel(meta=dict(name="n1"), deps_model=[leaf])
-    n2 = NodeModel(meta=dict(name="n2"), deps_model=[leaf])
-    diamond = NodeModel(meta=dict(name="root"), deps_model=[n1, n2])
+    n1 = NodeModel(meta={"name": "n1"}, deps_model=[leaf])
+    n2 = NodeModel(meta={"name": "n2"}, deps_model=[leaf])
+    diamond = NodeModel(meta={"name": "root"}, deps_model=[n1, n2])
     # simple chain: a -> b -> c
-    c = NodeModel(meta=dict(name="c"))
-    b = NodeModel(meta=dict(name="b"), deps_model=[c])
-    a = NodeModel(meta=dict(name="a"), deps_model=[b])
+    c = NodeModel(meta={"name": "c"})
+    b = NodeModel(meta={"name": "b"}, deps_model=[c])
+    a = NodeModel(meta={"name": "a"}, deps_model=[b])
     return ctx, {"leaf": leaf, "diamond": diamond, "chain": a}
 
 
