@@ -85,6 +85,13 @@ def param_resolver(param_name: str | None = None, args: list[str] | None = None)
     return params
 
 
+def dict_from_tuples_resolver(tuples: list[list]) -> dict:
+    result = {}
+    for key, value in tuples:
+        result[key] = value
+    return result
+
+
 # Register a resolver to return the current date in a specified timezone. If none, uses local time
 register_omegaconf_resolver("today_at_tz", today_resolver)
 
@@ -96,7 +103,7 @@ register_omegaconf_resolver("list_to_static_dict", lambda keys, static_val: dict
 # unable to interpolate var values used as dictionary keys
 register_omegaconf_resolver(
     "dict_from_tuples",
-    lambda tuples: dict(tuples),
+    dict_from_tuples_resolver,
 )
 
 register_omegaconf_resolver("trim_null_values", lambda dict_val: {k: v for k, v in dict_val.items() if v is not None})

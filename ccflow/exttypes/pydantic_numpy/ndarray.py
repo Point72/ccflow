@@ -37,7 +37,7 @@ else:
     nd_array_type = np.ndarray[Any, T]
 
 
-class NDArray(nd_array_type, Generic[T]):
+class NDArray(Generic[T], nd_array_type):  # noqa: PYI059
     @classmethod
     def _serialize(cls, v, nxt):
         # Not as efficient as using orjson, but we need a list type to pass to pydantic,
