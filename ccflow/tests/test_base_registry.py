@@ -3,14 +3,13 @@ import json
 import os
 import pickle
 import sys
-from typing import Dict, List
 from unittest import TestCase
 
 import pytest
 from hydra.errors import InstantiationException
 from omegaconf import OmegaConf
 from omegaconf.errors import InterpolationKeyError
-from pydantic import ConfigDict
+from pydantic import ConfigDict, Field
 
 from ccflow import BaseModel, ModelRegistry, RegistryLookupContext, RootModelRegistry, model_alias
 from ccflow.base import RegistryKeyError, resolve_str
@@ -19,8 +18,8 @@ from ccflow.base import RegistryKeyError, resolve_str
 class MyTestModel(BaseModel):
     a: str
     b: float
-    c: List[str] = []
-    d: Dict[str, float] = {}
+    c: list[str] = Field(default_factory=list)
+    d: dict[str, float] = Field(default_factory=dict)
 
 
 class MyTestModel2(BaseModel):
@@ -37,7 +36,7 @@ class MyClass:
         self.q = q
 
 
-def my_list() -> List[str]:
+def my_list() -> list[str]:
     return ["i", "j"]
 
 
@@ -70,8 +69,8 @@ class MyNestedModel(BaseModel):
 
 
 class DoubleNestedModel(BaseModel):
-    a: Dict[str, MyNestedModel] = {}
-    b: List[MyTestModel] = []
+    a: dict[str, MyNestedModel] = Field(default_factory=dict)
+    b: list[MyTestModel] = Field(default_factory=list)
 
 
 class TestRegistry(TestCase):

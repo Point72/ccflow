@@ -7,8 +7,6 @@ they differ only in required-ness:
 - ``Optional[FromContext[int]]`` is optional: when absent from context it is bound to ``None``.
 """
 
-from typing import Optional, Union
-
 import pytest
 
 from ccflow import Flow, FlowContext, FromContext, Lazy, ModelEvaluationContext
@@ -16,22 +14,22 @@ from ccflow.evaluators.common import cache_key
 
 
 @Flow.model
-def required_ctx(a: FromContext[Optional[int]]) -> int:
+def required_ctx(a: FromContext[int | None]) -> int:
     return -1 if a is None else a
 
 
 @Flow.model
-def optional_ctx(a: Optional[FromContext[int]]) -> int:
+def optional_ctx(a: FromContext[int] | None) -> int:
     return -1 if a is None else a
 
 
 @Flow.model
-def explicit_none_default(a: FromContext[Optional[int]] = None) -> int:
+def explicit_none_default(a: FromContext[int | None] = None) -> int:
     return -1 if a is None else a
 
 
 @Flow.model
-def optional_with_default(a: Optional[FromContext[int]] = 3) -> int:
+def optional_with_default(a: FromContext[int] | None = 3) -> int:
     return -1 if a is None else a
 
 
@@ -89,12 +87,12 @@ class TestRejections:
         with pytest.raises(TypeError, match="Lazy"):
 
             @Flow.model
-            def bad(a: Optional[Lazy[int]]) -> int:
+            def bad(a: Lazy[int] | None) -> int:
                 return 0
 
     def test_non_optional_union_with_fromcontext_rejected(self):
         with pytest.raises(TypeError, match="only supported as Optional"):
 
             @Flow.model
-            def bad(a: Union[FromContext[int], str]) -> int:
+            def bad(a: FromContext[int] | str) -> int:
                 return 0

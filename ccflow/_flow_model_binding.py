@@ -7,10 +7,11 @@ annotations from the original defining scope.
 """
 
 import inspect
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import wraps
 from types import FunctionType, UnionType
-from typing import Annotated, Any, Callable, Dict, Literal, NamedTuple, Optional, Tuple, Type, Union, get_args, get_origin, get_type_hints
+from typing import Annotated, Any, Literal, NamedTuple, Union, get_args, get_origin, get_type_hints
 
 from .base import ContextBase, ResultBase
 from .context import FlowContext
@@ -122,17 +123,17 @@ class _FlowModelParam:
 class _FlowModelConfig:
     func: _AnyCallable
     return_annotation: Any
-    context_type: Type[ContextBase]
-    result_type: Type[ResultBase]
+    context_type: type[ContextBase]
+    result_type: type[ResultBase]
     auto_wrap_result: bool
     auto_unwrap: bool
-    parameters: Tuple[_FlowModelParam, ...]
-    declared_context_type: Optional[Type[ContextBase]] = None
-    _regular_params: Tuple[_FlowModelParam, ...] = field(init=False, repr=False)
-    _contextual_params: Tuple[_FlowModelParam, ...] = field(init=False, repr=False)
-    _regular_param_names: Tuple[str, ...] = field(init=False, repr=False)
-    _contextual_param_names: Tuple[str, ...] = field(init=False, repr=False)
-    _params_by_name: Dict[str, _FlowModelParam] = field(init=False, repr=False)
+    parameters: tuple[_FlowModelParam, ...]
+    declared_context_type: type[ContextBase] | None = None
+    _regular_params: tuple[_FlowModelParam, ...] = field(init=False, repr=False)
+    _contextual_params: tuple[_FlowModelParam, ...] = field(init=False, repr=False)
+    _regular_param_names: tuple[str, ...] = field(init=False, repr=False)
+    _contextual_param_names: tuple[str, ...] = field(init=False, repr=False)
+    _params_by_name: dict[str, _FlowModelParam] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         regular = tuple(param for param in self.parameters if not param.is_contextual)
@@ -144,27 +145,27 @@ class _FlowModelConfig:
         object.__setattr__(self, "_params_by_name", {param.name: param for param in self.parameters})
 
     @property
-    def regular_params(self) -> Tuple[_FlowModelParam, ...]:
+    def regular_params(self) -> tuple[_FlowModelParam, ...]:
         return self._regular_params
 
     @property
-    def contextual_params(self) -> Tuple[_FlowModelParam, ...]:
+    def contextual_params(self) -> tuple[_FlowModelParam, ...]:
         return self._contextual_params
 
     @property
-    def regular_param_names(self) -> Tuple[str, ...]:
+    def regular_param_names(self) -> tuple[str, ...]:
         return self._regular_param_names
 
     @property
-    def contextual_param_names(self) -> Tuple[str, ...]:
+    def contextual_param_names(self) -> tuple[str, ...]:
         return self._contextual_param_names
 
     @property
-    def context_input_types(self) -> Dict[str, Any]:
+    def context_input_types(self) -> dict[str, Any]:
         return {param.name: param.validation_annotation for param in self.contextual_params}
 
     @property
-    def context_required_names(self) -> Tuple[str, ...]:
+    def context_required_names(self) -> tuple[str, ...]:
         return tuple(param.name for param in self.contextual_params if not param.has_function_default)
 
     def param(self, name: str) -> _FlowModelParam:
@@ -174,15 +175,15 @@ class _FlowModelConfig:
 @dataclass(frozen=True)
 class _AutoContextSpec:
     signature: inspect.Signature
-    base_class: Type[ContextBase]
+    base_class: type[ContextBase]
     class_name: str
-    fields: Dict[str, Tuple[Any, Any]]
+    fields: dict[str, tuple[Any, Any]]
 
 
 class _SerializedAnnotation(NamedTuple):
     kind: str
     value: Any
-    args: Tuple[Any, ...] = ()
+    args: tuple[Any, ...] = ()
 
 
 class _SerializedFlowModelParam(NamedTuple):
@@ -203,7 +204,7 @@ class _SerializedFlowModelConfig(NamedTuple):
     result_type: _SerializedAnnotation
     auto_wrap_result: bool
     auto_unwrap: bool
-    parameters: Tuple[_SerializedFlowModelParam, ...]
+    parameters: tuple[_SerializedFlowModelParam, ...]
     declared_context_type: _SerializedAnnotation
 
 
@@ -303,7 +304,11 @@ def _restore_annotation(payload: Any) -> Any:
     if payload.kind == "annotated":
         return Annotated[(_restore_annotation(value), *payload.args)]
     if payload.kind == "union":
-        return Union[tuple(_restore_annotation(arg) for arg in value)]
+        members = tuple(_restore_annotation(arg) for arg in value)
+        annotation = members[0]
+        for member in members[1:]:
+            annotation |= member
+        return annotation
     if payload.kind == "literal":
         return Literal[value]
     if payload.kind == "generic_alias":
@@ -383,12 +388,12 @@ def _restore_flow_model_config(payload: _SerializedFlowModelConfig) -> _FlowMode
 def _resolved_flow_signature(
     fn: _AnyCallable,
     *,
-    resolved_hints: Optional[Dict[str, Any]] = None,
+    resolved_hints: dict[str, Any] | None = None,
     skip_self: bool = False,
     require_return_annotation: bool = False,
     annotation_error_suffix: str = "",
     return_error_suffix: str = "",
-    function_name: Optional[str] = None,
+    function_name: str | None = None,
 ) -> inspect.Signature:
     sig = inspect.signature(fn)
     resolved_hints = resolved_hints or {}
@@ -455,7 +460,7 @@ def _parse_annotation(annotation: Any) -> _ParsedAnnotation:
                     "required-but-nullable contextual input."
                 )
             inner = marker_members[0][1].base
-            annotation = Optional[inner]
+            annotation = inner | None
             is_from_context = True
             optional_context = True
 
@@ -481,7 +486,7 @@ def _strip_annotated(annotation: Any) -> Any:
     return annotation
 
 
-def _pop_dep_marker(annotation: Any) -> Tuple[Any, bool]:
+def _pop_dep_marker(annotation: Any) -> tuple[Any, bool]:
     """Remove only the outer Dependency marker while preserving other Annotated metadata."""
 
     if get_origin(annotation) is not Annotated:
@@ -559,7 +564,7 @@ def _is_result_annotation(annotation: Any) -> bool:
     return isinstance(origin, type) and issubclass(origin, ResultBase)
 
 
-def _result_union_members(annotation: Any) -> Tuple[Any, ...]:
+def _result_union_members(annotation: Any) -> tuple[Any, ...]:
     annotation = _strip_annotated(annotation)
     if get_origin(annotation) not in _UNION_ORIGINS:
         return ()
@@ -646,7 +651,7 @@ def _analyze_flow_function(
     sig: inspect.Signature,
     *,
     is_model_dependency: Callable[[Any], bool],
-) -> Tuple[_FlowModelParam, ...]:
+) -> tuple[_FlowModelParam, ...]:
     analyzed_params = []
 
     for param in sig.parameters.values():
@@ -695,10 +700,10 @@ def _analyze_flow_function(
 
 def _validate_declared_context_type(
     context_type: Any,
-    contextual_params: Tuple[_FlowModelParam, ...],
+    contextual_params: tuple[_FlowModelParam, ...],
     *,
     strict: bool = False,
-) -> Type[ContextBase]:
+) -> type[ContextBase]:
     if not isinstance(context_type, type) or not issubclass(context_type, ContextBase):
         raise TypeError(f"context_type must be a ContextBase subclass, got {context_type!r}")
 
@@ -739,7 +744,7 @@ def _analyze_flow_model(
     fn: _AnyCallable,
     sig: inspect.Signature,
     *,
-    context_type: Optional[Type[ContextBase]],
+    context_type: type[ContextBase] | None,
     auto_unwrap: bool,
     is_model_dependency: Callable[[Any], bool],
     strict: bool = False,
@@ -824,8 +829,8 @@ def _analyze_flow_context_transform(
 def _analyze_auto_context_function(
     func: _AnyCallable,
     *,
-    parent: Optional[Type[ContextBase]],
-    resolved_hints: Dict[str, Any],
+    parent: type[ContextBase] | None,
+    resolved_hints: dict[str, Any],
     is_model_dependency: Callable[[Any], bool],
 ) -> _AutoContextSpec:
     sig = _resolved_flow_signature(
@@ -883,7 +888,7 @@ def _analyze_auto_context_function(
     )
 
 
-def _normalize_auto_context_parent(auto_context: Any) -> Type[ContextBase]:
+def _normalize_auto_context_parent(auto_context: Any) -> type[ContextBase]:
     if auto_context is True:
         return ContextBase
     if inspect.isclass(auto_context) and issubclass(auto_context, ContextBase):
@@ -894,7 +899,7 @@ def _normalize_auto_context_parent(auto_context: Any) -> Type[ContextBase]:
 def _wrap_auto_context_call(
     func: _AnyCallable,
     *,
-    parent: Type[ContextBase],
+    parent: type[ContextBase],
     is_model_dependency: Callable[[Any], bool],
 ) -> _AnyCallable:
     resolved_hints = get_type_hints(func, include_extras=True)

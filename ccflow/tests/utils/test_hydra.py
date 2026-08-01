@@ -148,14 +148,14 @@ class TestResolveConfigPaths:
     def test_uses_args_config_name(self):
         """Test that args.config_name takes precedence."""
         args = argparse.Namespace(config_path="/path", config_name="from_args")
-        root_dir, root_name = resolve_config_paths(args, config_path="", config_name="default")
+        _root_dir, root_name = resolve_config_paths(args, config_path="", config_name="default")
 
         assert root_name == "from_args"
 
     def test_falls_back_to_config_name_default(self):
         """Test fallback to config_name parameter when args.config_name is None."""
         args = argparse.Namespace(config_path="/path", config_name=None)
-        root_dir, root_name = resolve_config_paths(args, config_path="", config_name="default_name")
+        _root_dir, root_name = resolve_config_paths(args, config_path="", config_name="default_name")
 
         assert root_name == "default_name"
 
@@ -186,7 +186,7 @@ class TestResolveConfigPaths:
         try:
             hydra_module.inspect.getfile = lambda x: "/some/module/path.py"
             args = argparse.Namespace(config_path=None, config_name="name")
-            root_dir, root_name = resolve_config_paths(args, config_path="config", config_name="name", hydra_main=mock_func)
+            root_dir, _root_name = resolve_config_paths(args, config_path="config", config_name="name", hydra_main=mock_func)
 
             assert root_dir == "/some/module/config"
         finally:

@@ -1,4 +1,4 @@
-from typing import Any, Dict
+from typing import Any
 
 from pydantic import ConfigDict, PrivateAttr, model_validator
 from pydantic.fields import Field
@@ -7,8 +7,8 @@ from .base import BaseModel
 from .exttypes.pyobjectpath import PyObjectPath
 
 __all__ = (
-    "ObjectConfig",
     "LazyObjectConfig",
+    "ObjectConfig",
 )
 
 
@@ -28,7 +28,7 @@ class ObjectConfig(BaseModel):  # TODO: Generic model version for type checking
         None,
         description="The type of the object this model wraps.",
     )
-    object_kwargs: Dict[str, Any] = {}
+    object_kwargs: dict[str, Any] = Field(default_factory=dict)
     _object: Any = PrivateAttr(None)
 
     @model_validator(mode="wrap")

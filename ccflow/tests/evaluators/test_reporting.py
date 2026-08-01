@@ -272,7 +272,7 @@ class TestDryRunEvaluator(TestCase):
                 barrier.wait()
                 for _ in range(20):
                     evaluator(self._eval_context(self.root))
-            except Exception as exc:  # pragma: no cover - surfaced via errors list
+            except Exception as exc:  # noqa: BLE001  # pragma: no cover - surfaced via errors list
                 errors.append(exc)
 
         threads = [threading.Thread(target=run) for _ in range(2)]

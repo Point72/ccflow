@@ -7,10 +7,11 @@ import inspect
 import pickle
 import subprocess
 import sys
+from collections.abc import Callable
 from datetime import date, timedelta
 from pathlib import Path
 from types import ModuleType
-from typing import Annotated, Any, Callable, Literal, Optional, get_args
+from typing import Annotated, Any, Literal, get_args
 
 import cloudpickle
 import pytest
@@ -301,7 +302,7 @@ def test_context_transform_defaults_and_public_validation():
 def test_plain_and_bound_optional_compute_paths():
     class OptionalContextModel(CallableModel):
         @Flow.call
-        def __call__(self, context: Optional[SimpleContext] = None) -> GenericResult[int]:
+        def __call__(self, context: SimpleContext | None = None) -> GenericResult[int]:
             return GenericResult(value=0 if context is None else context.value)
 
     assert OptionalContextModel().flow.compute(None).value == 0
@@ -324,11 +325,11 @@ def test_bound_optional_none_context_preserves_wrapped_dependencies():
         dep: Dep
 
         @Flow.call
-        def __call__(self, context: Optional[FlowContext] = None) -> GenericResult[int]:
+        def __call__(self, context: FlowContext | None = None) -> GenericResult[int]:
             return GenericResult(value=self.dep(FlowContext()).value + (0 if context is None else context.bonus))
 
         @Flow.deps
-        def __deps__(self, context: Optional[FlowContext]) -> list[tuple[CallableModel, list[ContextBase]]]:
+        def __deps__(self, context: FlowContext | None) -> list[tuple[CallableModel, list[ContextBase]]]:
             return [(self.dep, [FlowContext()])]
 
     root = Root(dep=Dep())
@@ -1142,7 +1143,7 @@ def test_flow_model_rejects_union_resultbase_return_annotations():
     with pytest.raises(TypeError, match="does not support Union or Optional ResultBase"):
 
         @Flow.model
-        def optional_result(value: FromContext[int]) -> Optional[GenericResult[int]]:
+        def optional_result(value: FromContext[int]) -> GenericResult[int] | None:
             return GenericResult(value=value)
 
     with pytest.raises(TypeError, match="does not support Union or Optional ResultBase"):
@@ -1294,7 +1295,7 @@ def test_context_named_regular_parameter_can_coexist_with_from_context():
 @pytest.mark.parametrize("reserved_name", ["meta", "context_type", "result_type", "type_"])
 def test_flow_model_rejects_reserved_parameter_names(reserved_name):
     namespace = {"Flow": Flow, "FromContext": FromContext}
-    exec(
+    exec(  # noqa: S102
         f"def bad({reserved_name}: str, value: FromContext[int]) -> str:\n    return str(value)\n",
         namespace,
     )
@@ -1650,7 +1651,7 @@ def test_bound_model_pickle_preserves_external_ccflow_context_transform_bound_ar
 def test_local_generated_model_plain_pickle_handles_function_default_state():
     def make_model():
         @Flow.model
-        def first(xs: list[int] = [1], b: FromContext[int] = 2) -> int:
+        def first(xs: list[int] = [1], b: FromContext[int] = 2) -> int:  # noqa: B006
             return xs[0] + b
 
         return first()
@@ -1852,7 +1853,7 @@ def test_importable_generated_model_uses_stable_module_path_for_type_serializati
     model = basic_loader(source="library", multiplier=3)
     stable_path = f"{__name__}._basic_loader_Model"
 
-    assert getattr(sys.modules[__name__], "_basic_loader_Model") is type(model)
+    assert sys.modules[__name__]._basic_loader_Model is type(model)
     assert "__ccflow_import_path__" not in type(model).__dict__
     assert str(PyObjectPath.validate(type(model))) == stable_path
     assert str(model.model_dump(mode="python")["type_"]) == stable_path
@@ -1864,7 +1865,7 @@ def test_importable_generated_model_duplicate_names_raise_conflict(monkeypatch):
     module.FromContext = FromContext
     monkeypatch.setitem(sys.modules, module.__name__, module)
 
-    exec(
+    exec(  # noqa: S102
         """
 def stage(value: FromContext[int]) -> int:
     return value + 1
@@ -1875,7 +1876,7 @@ def stage(value: FromContext[int]) -> int:
     module.first = first_factory
     first = first_factory()
 
-    exec(
+    exec(  # noqa: S102
         """
 def stage(value: FromContext[int]) -> int:
     return value + 2
@@ -1885,7 +1886,7 @@ def stage(value: FromContext[int]) -> int:
     with pytest.raises(ValueError, match="already occupied"):
         Flow.model(module.stage)
 
-    assert getattr(module, "_stage_Model") is type(first)
+    assert module._stage_Model is type(first)
     assert not hasattr(module, "_stage_Model_2")
     assert str(PyObjectPath.validate(type(first))) == f"{module.__name__}._stage_Model"
     assert first.flow.compute(value=10).value == 11
@@ -1897,7 +1898,7 @@ def test_generated_model_pickle_path_ignores_stale_pyobjectpath_cache(monkeypatc
     module.FromContext = FromContext
     monkeypatch.setitem(sys.modules, module.__name__, module)
 
-    exec(
+    exec(  # noqa: S102
         """
 def foo(a: int, x: FromContext[int]) -> int:
     return a + x + 1
@@ -1915,7 +1916,7 @@ def foo(a: int, x: FromContext[int]) -> int:
     # process resolves to different behavior.
     assert PyObjectPath(path).object is first_factory
 
-    exec(
+    exec(  # noqa: S102
         """
 def foo(a: int, x: FromContext[int]) -> int:
     return a + x + 100
@@ -1936,18 +1937,7 @@ def test_reloaded_importable_generated_model_keeps_clean_process_path(tmp_path, 
     module_dir = tmp_path / "reload_case"
     module_dir.mkdir()
     module_path = module_dir / "repro_mod.py"
-    module_path.write_text(
-        "\n".join(
-            [
-                "from ccflow import Flow, FromContext",
-                "",
-                "@Flow.model",
-                "def foo(x: FromContext[int]) -> int:",
-                "    return x + 1",
-                "",
-            ]
-        )
-    )
+    module_path.write_text("from ccflow import Flow, FromContext\n\n@Flow.model\ndef foo(x: FromContext[int]) -> int:\n    return x + 1\n")
     monkeypatch.syspath_prepend(str(module_dir))
 
     import repro_mod
@@ -1963,7 +1953,7 @@ def test_reloaded_importable_generated_model_keeps_clean_process_path(tmp_path, 
         f"model = BaseModel.model_validate_json({payload!r})\n"
         "assert model.flow.compute(x=2).value == 3\n"
     )
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=30)
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, check=False, text=True, timeout=30)
 
     assert str(model.type_) == "repro_mod._foo_Model"
     assert result.returncode == 0, f"Clean-process reload JSON roundtrip failed:\n{result.stderr}"
@@ -1974,17 +1964,7 @@ def test_reloaded_importable_generated_model_allows_stale_factory_aliases(tmp_pa
     module_dir.mkdir()
     module_path = module_dir / "alias_mod.py"
     module_path.write_text(
-        "\n".join(
-            [
-                "from ccflow import Flow, FromContext",
-                "",
-                "def foo(x: FromContext[int]) -> int:",
-                "    return x + 1",
-                "",
-                "bar = Flow.model(foo)",
-                "",
-            ]
-        )
+        "from ccflow import Flow, FromContext\n\ndef foo(x: FromContext[int]) -> int:\n    return x + 1\n\nbar = Flow.model(foo)\n"
     )
     monkeypatch.syspath_prepend(str(module_dir))
 
@@ -2002,18 +1982,7 @@ def test_reloaded_importable_generated_model_allows_stale_decorator_aliases(tmp_
     module_dir.mkdir()
     module_path = module_dir / "decor_alias_mod.py"
     module_path.write_text(
-        "\n".join(
-            [
-                "from ccflow import Flow, FromContext",
-                "",
-                "@Flow.model",
-                "def foo(x: FromContext[int]) -> int:",
-                "    return x + 1",
-                "",
-                "foo_alias = foo",
-                "",
-            ]
-        )
+        "from ccflow import Flow, FromContext\n\n@Flow.model\ndef foo(x: FromContext[int]) -> int:\n    return x + 1\n\nfoo_alias = foo\n"
     )
     monkeypatch.syspath_prepend(str(module_dir))
 
@@ -2037,7 +2006,7 @@ def test_importable_bound_model_context_transform_json_roundtrip_cross_process()
         "result = model.flow.compute(b=1)\n"
         "assert result.value == 12, f'Expected 12, got {result.value}'\n"
     )
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=30)
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, check=False, text=True, timeout=30)
     assert result.returncode == 0, f"Cross-process bound-model JSON roundtrip failed:\n{result.stderr}"
 
 
@@ -3035,7 +3004,7 @@ def test_plain_callable_flow_compute_uses_default_context_when_available():
 
     class PlainModel(CallableModel):
         @Flow.call
-        def __call__(self, context: DefaultContext = DefaultContext(value=7)) -> GenericResult[tuple[int, str]]:
+        def __call__(self, context: DefaultContext = DefaultContext(value=7)) -> GenericResult[tuple[int, str]]:  # noqa: B008
             return GenericResult(value=(context.value, context.tag))
 
     model = PlainModel()
@@ -3083,7 +3052,7 @@ def test_bound_plain_callable_flow_compute_uses_default_context_for_dynamic_tran
 
     class PlainModel(CallableModel):
         @Flow.call
-        def __call__(self, context: DefaultContext = DefaultContext(value=7, seed=8)) -> GenericResult[tuple[int, int]]:
+        def __call__(self, context: DefaultContext = DefaultContext(value=7, seed=8)) -> GenericResult[tuple[int, int]]:  # noqa: B008
             return GenericResult(value=(context.value, context.seed))
 
     @Flow.context_transform
@@ -3158,7 +3127,7 @@ def test_flow_model_internal_contract_helpers_cover_portable_edge_shapes():
 
     assert get_args(restored)[1:] == ("contract",)
     assert binding_module._restore_annotation(binding_module._serialize_annotation(Literal["a", "b"])) == Literal["a", "b"]
-    assert binding_module._restore_annotation(binding_module._serialize_annotation(int | None)) == Optional[int]
+    assert binding_module._restore_annotation(binding_module._serialize_annotation(int | None)) == int | None
     assert binding_module._clone_function_without_annotations(5) == 5
     assert repr(get_args(Lazy[int])[1]) == "Lazy"
     assert repr(get_args(FromContext[int])[1]) == "FromContext"
@@ -3190,7 +3159,7 @@ def test_flow_model_internal_contract_helpers_cover_portable_edge_shapes():
     unhashable_annotation = Annotated[int, []]
     assert flow_model_module._type_adapter(unhashable_annotation).validate_python("1") == 1
     assert flow_model_module._type_adapter(unhashable_annotation).validate_python("2") == 2
-    assert flow_model_module._concrete_context_type(Optional[SimpleContext]) is SimpleContext
+    assert flow_model_module._concrete_context_type(SimpleContext | None) is SimpleContext
     assert flow_model_module._concrete_context_type(int) is None
     assert flow_model_module._bound_field_names(object()) == set()
     assert flow_model_module._expected_type_repr(int | str) == "int | str"
@@ -3288,7 +3257,7 @@ def test_additional_validation_and_hint_fallback_paths(monkeypatch):
     with pytest.raises(TypeError, match="cannot default to a CallableModel"):
 
         @Flow.model
-        def bad_default(value: FromContext[int] = source()) -> int:
+        def bad_default(value: FromContext[int] = source()) -> int:  # noqa: B008
             return value
 
     with pytest.raises(TypeError, match="return type annotation"):
@@ -3343,7 +3312,7 @@ def test_unresolved_forward_refs_do_not_silently_strip_from_context():
     namespace: dict[str, object] = {}
 
     with pytest.raises(NameError, match="MissingType"):
-        exec(
+        exec(  # noqa: S102
             """
 from __future__ import annotations
 from ccflow import Flow, FromContext
@@ -3356,7 +3325,7 @@ def transform(a: MissingType, b: FromContext[int]) -> int:
         )
 
     with pytest.raises(NameError, match="MissingType"):
-        exec(
+        exec(  # noqa: S102
             """
 from __future__ import annotations
 from ccflow import Flow, FromContext
@@ -3532,7 +3501,7 @@ def test_bound_plain_callable_empty_with_context_preserves_optional_none_context
 
     class PlainSource(CallableModel):
         @Flow.call
-        def __call__(self, context: Optional[OptionalContext] = None) -> GenericResult[int]:
+        def __call__(self, context: OptionalContext | None = None) -> GenericResult[int]:
             calls["count"] += 1
             return GenericResult(value=0 if context is None else context.value)
 
@@ -4323,7 +4292,7 @@ def test_generated_models_cross_process_pickle():
         "result = model.flow.compute(value=4)\n"
         "assert result.value == 12, f'Expected 12, got {result.value}'\n"
     )
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=30)
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, check=False, text=True, timeout=30)
     assert result.returncode == 0, f"Cross-process unpickle failed:\n{result.stderr}"
 
 
@@ -4346,14 +4315,14 @@ def test_local_generated_models_cross_process_cloudpickle():
         "result = model.flow.compute(b=2)\n"
         "assert result.value == 3, f'Expected 3, got {result.value}'\n"
     )
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=30)
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, check=False, text=True, timeout=30)
     assert result.returncode == 0, f"Cross-process local cloudpickle failed:\n{result.stderr}"
 
 
 def test_local_generated_model_postponed_annotations_cross_process_cloudpickle():
     """Local generated models should restore from analyzed config, not worker-side type-hint resolution."""
     namespace: dict[str, Any] = {}
-    exec(
+    exec(  # noqa: S102
         """
 from __future__ import annotations
 from ccflow import Flow, FromContext
@@ -4376,7 +4345,7 @@ def make_model():
         "result = model.flow.compute(b=2)\n"
         "assert result.value == 3, f'Expected 3, got {result.value}'\n"
     )
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=30)
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, check=False, text=True, timeout=30)
     assert result.returncode == 0, f"Cross-process postponed-annotation cloudpickle failed:\n{result.stderr}"
 
 
@@ -4449,7 +4418,7 @@ def test_generated_model_fields_preserve_construction_schema():
     def consumer(x: int, lazy_value: Lazy[int], y: FromContext[int]) -> int:
         return x + lazy_value() + y
 
-    generated_cls = getattr(consumer, "_generated_model")
+    generated_cls = consumer._generated_model
     fields = generated_cls.model_fields
     properties = generated_cls.model_json_schema()["properties"]
 

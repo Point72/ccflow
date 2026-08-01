@@ -1,4 +1,4 @@
-from typing import Dict, Optional
+from typing import Optional
 
 from pydantic import Field
 
@@ -15,7 +15,7 @@ class GlobalState(BaseModel):
     """
 
     root_registry: ModelRegistry = Field(default_factory=lambda: ModelRegistry.root().clone(name="_"))
-    open_overrides: Dict[int, FlowOptionsOverride] = Field(default_factory=lambda: FlowOptionsOverride._OPEN_OVERRIDES.copy())
+    open_overrides: dict[int, FlowOptionsOverride] = Field(default_factory=lambda: FlowOptionsOverride._OPEN_OVERRIDES.copy())
     _old_state: Optional["GlobalState"] = None
 
     @classmethod

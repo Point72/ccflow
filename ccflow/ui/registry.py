@@ -7,7 +7,7 @@ from .model import ModelViewer
 
 pn.extension()
 
-__all__ = ("RegistryBrowser", "ModelRegistryViewer")
+__all__ = ("ModelRegistryViewer", "RegistryBrowser")
 
 
 class RegistryBrowser(param.Parameterized):

@@ -117,10 +117,12 @@ class TestCalculatorOutput:
 class TestCalculatorCli:
     @pytest.mark.skipif(sys.version_info >= (3, 14), reason="Hydra shell completion help string incompatible with Python 3.14 argparse")
     def test_cli(self):
-        with patch("ccflow.examples.calculator.__main__.cfg_run") as mock_cfg_run:
-            with patch("sys.argv", ["calculator", "function=power", "+context.values=[1,2,3]"]):
-                main()
-                mock_cfg_run.assert_called_once()
+        with (
+            patch("ccflow.examples.calculator.__main__.cfg_run") as mock_cfg_run,
+            patch("sys.argv", ["calculator", "function=power", "+context.values=[1,2,3]"]),
+        ):
+            main()
+            mock_cfg_run.assert_called_once()
 
     def test_explain(self):
         with patch("ccflow.examples.calculator.explain.cfg_explain_cli") as mock_cfg_explain:

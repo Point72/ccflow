@@ -1,7 +1,6 @@
 import sqlite3
 from csv import DictReader, DictWriter
 from io import StringIO
-from typing import Optional
 
 from bs4 import BeautifulSoup
 from httpx import Client
@@ -9,7 +8,7 @@ from pydantic import Field
 
 from ccflow import CallableModel, ContextBase, Flow, GenericResult, NullContext
 
-__all__ = ("RestModel", "LinksModel", "DBModel", "SiteContext")
+__all__ = ("DBModel", "LinksModel", "RestModel", "SiteContext")
 
 
 class SiteContext(ContextBase):
@@ -22,7 +21,7 @@ class RestModel(CallableModel):
     """Example callable model that fetches a URL and returns the HTML content."""
 
     @Flow.call
-    def __call__(self, context: Optional[SiteContext] = None) -> GenericResult[str]:
+    def __call__(self, context: SiteContext | None = None) -> GenericResult[str]:
         context = context or SiteContext()
         resp = Client().get(context.site, headers={"User-Agent": "Safari/537.36"}, follow_redirects=True)
         resp.raise_for_status()
@@ -36,10 +35,10 @@ class LinksModel(CallableModel):
     file: str
 
     @Flow.call
-    def __call__(self, context: Optional[NullContext] = None) -> GenericResult[str]:
+    def __call__(self, context: NullContext | None = None) -> GenericResult[str]:
         context = context or NullContext()
 
-        with open(self.file, "r") as f:
+        with open(self.file) as f:
             html = f.read()
 
         # Use beautifulsoup to convert links into csv of name, url
@@ -62,13 +61,13 @@ class DBModel(CallableModel):
     table: str = Field(default="links")
 
     @Flow.call
-    def __call__(self, context: Optional[NullContext] = None) -> GenericResult[str]:
+    def __call__(self, context: NullContext | None = None) -> GenericResult[str]:
         context = context or NullContext()
 
         conn = sqlite3.connect(self.db_file)
         cursor = conn.cursor()
         cursor.execute(f"CREATE TABLE IF NOT EXISTS {self.table} (name TEXT, url TEXT)")
-        with open(self.file, "r") as f:
+        with open(self.file) as f:
             reader = DictReader(f)
             for row in reader:
                 cursor.execute(f"INSERT INTO {self.table} (name, url) VALUES (?, ?)", (row["name"], row["url"]))

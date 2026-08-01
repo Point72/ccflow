@@ -28,13 +28,13 @@ from ..utils.reporting import (
 )
 
 __all__ = [
+    "AlertsReportingEvaluator",
+    "MetricsReportingEvaluator",
+    "OpenTelemetryEvaluator",
+    "OpenTelemetryMetricsReportingEvaluator",
+    "OpenTelemetryTracingReportingEvaluator",
     "ReportingEvaluator",
     "TracingReportingEvaluator",
-    "MetricsReportingEvaluator",
-    "AlertsReportingEvaluator",
-    "OpenTelemetryTracingReportingEvaluator",
-    "OpenTelemetryMetricsReportingEvaluator",
-    "OpenTelemetryEvaluator",
 ]
 
 
@@ -47,7 +47,7 @@ def _model_type(model) -> str:
     """
     try:
         return str(PyObjectPath.validate(type(model)))
-    except Exception:
+    except Exception:  # noqa: BLE001
         cls = type(model)
         return f"{cls.__module__}.{cls.__qualname__}"
 

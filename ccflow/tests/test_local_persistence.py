@@ -17,9 +17,9 @@ import sys
 
 import pytest
 import ray
+from pydantic import ValidationError
 
-import ccflow.local_persistence as local_persistence
-from ccflow import BaseModel, CallableModel, ContextBase, Flow, GenericResult, NullContext
+from ccflow import BaseModel, CallableModel, ContextBase, Flow, GenericResult, NullContext, local_persistence
 from ccflow.local_persistence import create_ccflow_model
 
 
@@ -533,6 +533,7 @@ print("SUCCESS")
         create_result = subprocess.run(
             [sys.executable, "-c", create_code.format(pkl_path=pkl_path)],
             capture_output=True,
+            check=False,
             text=True,
         )
         assert create_result.returncode == 0, f"Create failed: {create_result.stderr}"
@@ -541,6 +542,7 @@ print("SUCCESS")
         load_result = subprocess.run(
             [sys.executable, "-c", load_code.format(pkl_path=pkl_path)],
             capture_output=True,
+            check=False,
             text=True,
         )
         assert load_result.returncode == 0, f"Load failed: {load_result.stderr}"
@@ -1061,16 +1063,14 @@ class TestCreateCcflowModelWrapper:
 
     def test_create_ccflow_model_with_complex_fields(self):
         """Test create_ccflow_model with various field types."""
-        from typing import List, Optional
-
         from pydantic import Field
 
         DynamicModel = create_ccflow_model(
             "ComplexModel",
             __base__=BaseModel,
             name=(str, ...),
-            tags=(List[str], Field(default_factory=list)),
-            description=(Optional[str], None),
+            tags=(list[str], Field(default_factory=list)),
+            description=(str | None, None),
             count=(int, 0),
         )
 
@@ -1112,7 +1112,7 @@ class TestCreateCcflowModelWrapper:
         ctx = DynamicContext(value=42)
 
         # ContextBase subclasses should be frozen
-        with pytest.raises(Exception):  # ValidationError for frozen model
+        with pytest.raises(ValidationError):
             ctx.value = 100
 
 
@@ -1264,6 +1264,7 @@ print("SUCCESS")
         create_result = subprocess.run(
             [sys.executable, "-c", create_code.format(pkl_path=pkl_path)],
             capture_output=True,
+            check=False,
             text=True,
         )
         assert create_result.returncode == 0, f"Create failed: {create_result.stderr}"
@@ -1272,6 +1273,7 @@ print("SUCCESS")
         load_result = subprocess.run(
             [sys.executable, "-c", load_code.format(pkl_path=pkl_path)],
             capture_output=True,
+            check=False,
             text=True,
         )
         assert load_result.returncode == 0, f"Load failed: {load_result.stderr}"

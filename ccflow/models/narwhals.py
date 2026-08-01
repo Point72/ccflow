@@ -21,7 +21,7 @@ Together these are sufficient for a wide range of multi-source enrichment pipeli
 keeping the linear ``.pipe()`` contract that makes the rest of the design composable.
 """
 
-from typing import Callable, List, Type, Union
+from collections.abc import Callable
 
 import narwhals.stable.v1 as nw
 from pydantic import Field, model_validator
@@ -32,12 +32,14 @@ from ..context import ContextBase, NullContext
 from ..result.narwhals import NarwhalsFrameResult
 
 __all__ = (
-    "NarwhalsFrameTransform",
-    "SequenceTransform",
-    "NarwhalsPipelineModel",
-    "JoinTransform",
     "JoinBackTransform",
+    "JoinTransform",
+    "NarwhalsFrameTransform",
+    "NarwhalsPipelineModel",
+    "SequenceTransform",
 )
+
+_NULL_CONTEXT = NullContext()
 
 
 class NarwhalsFrameTransform(BaseModel):
@@ -77,7 +79,7 @@ class NarwhalsFrameTransform(BaseModel):
 #
 # NFT is listed first so pydantic prefers the model branch over the duck-typed Callable
 # branch when an NFT instance is supplied (NFT instances are themselves callable).
-NarwhalsFrameTransformOrCallable = Union[NarwhalsFrameTransform, Callable[[nw.LazyFrame], nw.LazyFrame]]
+NarwhalsFrameTransformOrCallable = NarwhalsFrameTransform | Callable[[nw.LazyFrame], nw.LazyFrame]
 
 
 class SequenceTransform(NarwhalsFrameTransform):
@@ -92,7 +94,7 @@ class SequenceTransform(NarwhalsFrameTransform):
     callables. See :data:`NarwhalsFrameTransformOrCallable` for the serialization tradeoffs.
     """
 
-    transforms: List[NarwhalsFrameTransformOrCallable] = Field(
+    transforms: list[NarwhalsFrameTransformOrCallable] = Field(
         default_factory=list,
         description="Transforms (or plain callables) applied in order via `.pipe()`.",
     )
@@ -144,7 +146,7 @@ class NarwhalsPipelineModel(CallableModel):
         ...,
         description="Upstream callable model that produces a NarwhalsFrameResult.",
     )
-    transforms: List[NarwhalsFrameTransformOrCallable] = Field(
+    transforms: list[NarwhalsFrameTransformOrCallable] = Field(
         default_factory=list,
         description="Transforms (or plain callables) applied in order via `.pipe()`.",
     )
@@ -153,27 +155,29 @@ class NarwhalsPipelineModel(CallableModel):
     def _validate_source_result_type(self) -> "NarwhalsPipelineModel":
         rt = self.source.result_type
         if not (isinstance(rt, type) and issubclass(rt, NarwhalsFrameResult)):
-            raise ValueError(f"NarwhalsPipelineModel source must return NarwhalsFrameResult (or subclass); got source with result_type={rt!r}.")
+            raise ValueError(  # noqa: TRY004
+                f"NarwhalsPipelineModel source must return NarwhalsFrameResult (or subclass); got source with result_type={rt!r}."
+            )
         return self
 
     @property
-    def context_type(self) -> Type[ContextBase]:
+    def context_type(self) -> type[ContextBase]:
         """Delegate context type to the source so the pipeline adopts its context."""
         return self.source.context_type
 
     @property
-    def result_type(self) -> Type[NarwhalsFrameResult]:
+    def result_type(self) -> type[NarwhalsFrameResult]:
         return NarwhalsFrameResult
 
     @Flow.call
-    def __call__(self, context: ContextBase = NullContext()) -> NarwhalsFrameResult:
+    def __call__(self, context: ContextBase = _NULL_CONTEXT) -> NarwhalsFrameResult:
         df = _coerce_lazy(self.source(context).df)
         for t in self.transforms:
             df = _coerce_lazy(df.pipe(t))
         return NarwhalsFrameResult(df=df)
 
     @Flow.deps
-    def __deps__(self, context: ContextBase = NullContext()) -> GraphDepList:
+    def __deps__(self, context: ContextBase = _NULL_CONTEXT) -> GraphDepList:
         # Surface the source so that GraphEvaluator can see this edge. Transforms that themselves
         # invoke other CallableModels (e.g. JoinTransform) are NOT surfaced here -- multi-source
         # graph awareness is intentionally out of scope for v1; see module docstring.
@@ -201,15 +205,15 @@ class JoinTransform(NarwhalsFrameTransform):
         default_factory=NullContext,
         description="Context passed to other(). Defaults to NullContext().",
     )
-    on: Union[str, List[str], None] = Field(
+    on: str | list[str] | None = Field(
         None,
         description="Column name(s) used as the join key. Mutually exclusive with left_on/right_on.",
     )
-    left_on: Union[str, List[str], None] = Field(
+    left_on: str | list[str] | None = Field(
         None,
         description="Column name(s) on the left frame. Use with right_on when join keys differ.",
     )
-    right_on: Union[str, List[str], None] = Field(
+    right_on: str | list[str] | None = Field(
         None,
         description="Column name(s) on the right frame. Use with left_on when join keys differ.",
     )
@@ -236,10 +240,14 @@ class JoinTransform(NarwhalsFrameTransform):
     def _validate_other_result_type(self) -> "JoinTransform":
         rt = self.other.result_type
         if not (isinstance(rt, type) and issubclass(rt, NarwhalsFrameResult)):
-            raise ValueError(f"JoinTransform.other must return NarwhalsFrameResult (or subclass); got other with result_type={rt!r}.")
+            raise ValueError(  # noqa: TRY004
+                f"JoinTransform.other must return NarwhalsFrameResult (or subclass); got other with result_type={rt!r}."
+            )
         ct = self.other.context_type
         if not isinstance(self.other_context, ct):
-            raise ValueError(f"JoinTransform.other_context must be an instance of {ct!r}; got {type(self.other_context)!r}.")
+            raise ValueError(  # noqa: TRY004
+                f"JoinTransform.other_context must be an instance of {ct!r}; got {type(self.other_context)!r}."
+            )
         return self
 
     def __call__(self, df: nw.LazyFrame) -> nw.LazyFrame:
@@ -267,7 +275,7 @@ class JoinBackTransform(NarwhalsFrameTransform):
         ...,
         description="Transform applied to the input to produce the right-hand side of the join.",
     )
-    on: Union[str, List[str]] = Field(..., description="Column name(s) used as the join key.")
+    on: str | list[str] = Field(..., description="Column name(s) used as the join key.")
     how: str = Field("left", description="Join strategy.")
     suffix: str = Field("_right", description="Suffix appended to overlapping column names from the right frame.")
 

@@ -1,12 +1,13 @@
 import argparse
 import inspect
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from logging import getLogger
 from pathlib import Path
 from pprint import pprint
 from textwrap import dedent
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 from hydra._internal.defaults_list import DefaultsList
 from omegaconf import DictConfig, ListConfig, OmegaConf
@@ -18,15 +19,15 @@ _log = getLogger(__name__)
 
 __all__ = (
     "ConfigLoadResult",
-    "load_config",
     "add_hydra_config_args",
     "add_panel_server_args",
-    "resolve_config_paths",
-    "get_args_parser_default",
-    "get_args_parser_default_ui",
-    "ui_launcher_default",
     "cfg_explain_cli",
     "cfg_run",
+    "get_args_parser_default",
+    "get_args_parser_default_ui",
+    "load_config",
+    "resolve_config_paths",
+    "ui_launcher_default",
 )
 
 
@@ -35,17 +36,17 @@ class ConfigLoadResult:
     root_config_dir: str
     root_config_name: str
     cfg: DictConfig
-    cfg_sources: Optional[DictConfig] = None
-    defaults_list: Optional[DefaultsList] = None
-    group_options: Optional[Dict[str, List[str]]] = None
+    cfg_sources: DictConfig | None = None
+    defaults_list: DefaultsList | None = None
+    group_options: dict[str, list[str]] | None = None
 
-    def merge(self) -> Dict:
+    def merge(self) -> dict:
         """Returns a single nested dict of information by config key"""
         cfg_resolved = OmegaConf.to_container(self.cfg, resolve=True)
         cfg_dict = OmegaConf.to_container(self.cfg_sources, resolve=False)
 
         # Process cfg_resolved to embed values in the `value` key
-        cfg_resolved = _transform_leaves(cfg_resolved, lambda x: dict(value_interp=x))
+        cfg_resolved = _transform_leaves(cfg_resolved, lambda x: {"value_interp": x})
         # process the group options
         group_options = {group: {"__options__": options} for group, options in self.group_options.items()}
         group_options = _to_nested_dict(group_options, "/")
@@ -100,7 +101,7 @@ def _dict_add_source(d, source):
             if isinstance(v, dict):
                 d[k] = _dict_add_source(v, source)
             else:
-                d[k] = dict(value_raw=v, source_file=source)
+                d[k] = {"value_raw": v, "source_file": source}
     return d
 
 
@@ -151,9 +152,9 @@ def load_config(
     root_config_name: str,
     config_dir: str = "config",
     config_name: str = "",
-    overrides: Optional[List[str]] = None,
+    overrides: list[str] | None = None,
     *,
-    version_base: Optional[str] = None,
+    version_base: str | None = None,
     return_hydra_config: bool = False,
     basepath: str = "",
     debug: bool = False,
@@ -342,7 +343,7 @@ def resolve_config_paths(
     args: argparse.Namespace,
     config_path: str = "",
     config_name: str = "",
-    hydra_main: Optional[Callable] = None,
+    hydra_main: Callable | None = None,
 ) -> tuple:
     """Resolve root_config_dir and root_config_name from CLI args or defaults.
 
@@ -421,9 +422,9 @@ def ui_launcher_default(cfg, **kwargs):
 def cfg_explain_cli(
     config_path: str = "",
     config_name: str = "",
-    hydra_main: Optional[Callable] = None,
-    args_parser: argparse.ArgumentParser = None,
-    ui_launcher: Callable[[Dict[str, Any], ...], None] = None,
+    hydra_main: Callable | None = None,
+    args_parser: argparse.ArgumentParser | None = None,
+    ui_launcher: Callable[[dict[str, Any], ...], None] | None = None,
 ):
     """CLI entry point for hydra config explain
 
@@ -489,7 +490,7 @@ def _run_model(cfg: DictConfig, log_results: bool = True):
     callable = cfg["callable"]
     if not isinstance(callable, str):
         # TODO allow instantiation
-        raise ValueError("Only string callables are supported at the moment.")
+        raise TypeError("Only string callables are supported at the moment.")
 
     if callable not in registry:
         raise ValueError(f"Callable '{callable}' not found in the model registry. Available callables: {list(registry.keys())}")
@@ -511,9 +512,8 @@ def _run_model(cfg: DictConfig, log_results: bool = True):
     # Run the model within the flow options override context
     global_options = registry.get("/cli/global", FlowOptions())
     model_options = registry.get("/cli/model", FlowOptions())
-    with FlowOptionsOverride(options=global_options):
-        with FlowOptionsOverride(options=model_options):
-            out = model(context)
+    with FlowOptionsOverride(options=global_options), FlowOptionsOverride(options=model_options):
+        out = model(context)
 
     # Log the results
     if log_results:

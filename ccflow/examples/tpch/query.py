@@ -7,7 +7,6 @@ on each instance (via ``inputs``).
 """
 
 from importlib import import_module
-from typing import Tuple
 
 from pydantic import conint
 
@@ -15,6 +14,8 @@ from ccflow import CallableModel, CallableModelGenericType, Flow, NullContext
 from ccflow.result.narwhals import NarwhalsFrameResult
 
 __all__ = ("TPCHQuery",)
+
+_NULL_CONTEXT = NullContext()
 
 
 class TPCHQuery(CallableModel):
@@ -41,10 +42,10 @@ class TPCHQuery(CallableModel):
     """
 
     query_id: conint(ge=1, le=22)
-    inputs: Tuple[CallableModelGenericType[NullContext, NarwhalsFrameResult], ...]
+    inputs: tuple[CallableModelGenericType[NullContext, NarwhalsFrameResult], ...]
 
     @Flow.call
-    def __call__(self, context: NullContext = NullContext()) -> NarwhalsFrameResult:
+    def __call__(self, context: NullContext = _NULL_CONTEXT) -> NarwhalsFrameResult:
         query_module = import_module(f"ccflow.examples.tpch.queries.q{self.query_id}")
         # Materialise the frames eagerly into a tuple before unpacking, so the
         # query body can iterate its inputs more than once if it wants to.

@@ -12,7 +12,7 @@ import cloudpickle
 def _spawn_entrypoint(result_queue, worker, args):
     try:
         result_queue.put(("ok", worker(*args)))
-    except BaseException:
+    except Exception:  # noqa: BLE001
         result_queue.put(("error", traceback.format_exc()))
 
 
@@ -65,7 +65,8 @@ def _load_payload_without_return(spec: dict[str, str]) -> None:
 
 
 def _create_ccflow_generic_payloads() -> dict[str, dict[str, str]]:
-    from typing import Callable, ClassVar, Final, List, Optional
+    from collections.abc import Callable
+    from typing import ClassVar, Final
 
     import numpy as np
 
@@ -94,7 +95,7 @@ def _create_ccflow_generic_payloads() -> dict[str, dict[str, str]]:
             ),
             "typing_list_alias_result": (
                 "cloudpickle",
-                GenericResult[List[ListResult[int]]](value=[ListResult[int](value=[2])]),
+                GenericResult[list[ListResult[int]]](value=[ListResult[int](value=[2])]),
             ),
             "callable_alias_result": (
                 "cloudpickle",
@@ -102,7 +103,7 @@ def _create_ccflow_generic_payloads() -> dict[str, dict[str, str]]:
             ),
             "optional_alias_result": (
                 "cloudpickle",
-                GenericResult[Optional[ListResult[int]]](value=ListResult[int](value=[4])),
+                GenericResult[ListResult[int] | None](value=ListResult[int](value=[4])),
             ),
             "classvar_alias_result": (
                 "cloudpickle",
@@ -126,7 +127,7 @@ def _create_ccflow_generic_payloads() -> dict[str, dict[str, str]]:
 
 def _assert_ccflow_generic_payloads(encoded_payloads: dict[str, dict[str, str]]) -> None:
     from collections.abc import Callable as AbcCallable
-    from typing import ClassVar, Final, List, Optional
+    from typing import ClassVar, Final
 
     import numpy as np
 
@@ -155,14 +156,14 @@ def _assert_ccflow_generic_payloads(encoded_payloads: dict[str, dict[str, str]])
     assert type(values["list_alias_result"]).__pydantic_generic_metadata__["args"] == (list[ListResult[int]],)
     assert type(values["list_alias_result"].value[0]).__pydantic_generic_metadata__["args"] == (int,)
 
-    assert values["typing_list_alias_result"] == GenericResult[List[ListResult[int]]](value=[ListResult[int](value=[2])])
+    assert values["typing_list_alias_result"] == GenericResult[list[ListResult[int]]](value=[ListResult[int](value=[2])])
     assert type(values["typing_list_alias_result"]).__pydantic_generic_metadata__["args"] == (list[ListResult[int]],)
 
     assert values["callable_alias_result"].value(ListResult[int](value=[1, 2, 3])) == 3
     assert type(values["callable_alias_result"]).__pydantic_generic_metadata__["args"] == (AbcCallable[[ListResult[int]], int],)
 
-    assert values["optional_alias_result"] == GenericResult[Optional[ListResult[int]]](value=ListResult[int](value=[4]))
-    assert type(values["optional_alias_result"]).__pydantic_generic_metadata__["args"] == (Optional[ListResult[int]],)
+    assert values["optional_alias_result"] == GenericResult[ListResult[int] | None](value=ListResult[int](value=[4]))
+    assert type(values["optional_alias_result"]).__pydantic_generic_metadata__["args"] == (ListResult[int] | None,)
 
     assert values["classvar_alias_result"] == GenericResult[ClassVar[ListResult[int]]](value=ListResult[int](value=[5]))
     assert type(values["classvar_alias_result"]).__pydantic_generic_metadata__["args"] == (ClassVar[ListResult[int]],)

@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Generic, List, Optional
+from typing import Generic
 
 from pydantic import Field, ValidationError, field_validator
 from typing_extensions import override
@@ -26,13 +26,13 @@ class CompositePublisher(BasePublisher, Generic[PydanticModelType]):
     sep: str = Field(
         "/", description="The separator between the name of the publisher and the field names when forming the full path for each output"
     )
-    field_publishers: Dict[str, BasePublisher] = Field({}, description="Map of field names to a publisher to use")
-    default_publishers: List[BasePublisher] = Field(
+    field_publishers: dict[str, BasePublisher] = Field({}, description="Map of field names to a publisher to use")
+    default_publishers: list[BasePublisher] = Field(
         [],
         description="List of publishers that will be tried in order based on validation against `data` type. "
         "Can be used instead of or in addition to field_publishers",
     )
-    root_publisher: Optional[BasePublisher] = Field(
+    root_publisher: BasePublisher | None = Field(
         None, description="Publisher for any remaining fields not covered by `field_publishers` or `default_publishers`."
     )
 
@@ -107,7 +107,7 @@ class CompositePublisher(BasePublisher, Generic[PydanticModelType]):
         for field, publisher in publishers.items():
             try:
                 outputs[field] = publisher()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 exceptions[field] = e
                 continue
 
@@ -117,11 +117,11 @@ class CompositePublisher(BasePublisher, Generic[PydanticModelType]):
             if root_publisher:
                 try:
                     outputs[ROOT_KEY] = root_publisher()
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     exceptions[ROOT_KEY] = e
 
         # Re-raise any exceptions that occurred
         if exceptions:
-            raise Exception(exceptions)
+            raise RuntimeError(exceptions)
 
         return outputs

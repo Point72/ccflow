@@ -23,45 +23,46 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
+from typing import get_args
+
 import numpy as np
 from pydantic import ValidationError
-from typing_extensions import get_args
 
 from .ndarray import NDArray
 
 __all__ = (
-    "bool_",
-    "float128",
-    "float64",
-    "float32",
-    "float16",
-    "int64",
-    "int32",
-    "int16",
-    "int8",
-    "uint64",
-    "uint32",
-    "uint16",
-    "uint8",
-    "complex256",
-    "complex128",
-    "complex64",
-    "NDArrayFp128",
-    "NDArrayFp64",
-    "NDArrayFp32",
-    "NDArrayFp16",
-    "NDArrayInt64",
-    "NDArrayInt32",
-    "NDArrayInt16",
-    "NDArrayInt8",
-    "NDArrayUint64",
-    "NDArrayUint32",
-    "NDArrayUint16",
-    "NDArrayUint8",
-    "NDArrayComplex256",
-    "NDArrayComplex128",
-    "NDArrayComplex64",
     "NDArrayBool",
+    "NDArrayComplex64",
+    "NDArrayComplex128",
+    "NDArrayComplex256",
+    "NDArrayFp16",
+    "NDArrayFp32",
+    "NDArrayFp64",
+    "NDArrayFp128",
+    "NDArrayInt8",
+    "NDArrayInt16",
+    "NDArrayInt32",
+    "NDArrayInt64",
+    "NDArrayUint8",
+    "NDArrayUint16",
+    "NDArrayUint32",
+    "NDArrayUint64",
+    "bool_",
+    "complex64",
+    "complex128",
+    "complex256",
+    "float16",
+    "float32",
+    "float64",
+    "float128",
+    "int8",
+    "int16",
+    "int32",
+    "int64",
+    "uint8",
+    "uint16",
+    "uint32",
+    "uint64",
 )
 
 

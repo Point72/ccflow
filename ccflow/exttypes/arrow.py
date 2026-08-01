@@ -1,10 +1,10 @@
-from typing import Generic, Type, TypeVar, Union
+from typing import Generic, Literal, TypeVar, get_args
 
 import narwhals.stable.v1 as nw
 import pyarrow as pa
 from pydantic import TypeAdapter
 from pydantic_core import core_schema
-from typing_extensions import Any, Literal, Self, get_args
+from typing_extensions import Any, Self
 
 __all__ = ("ArrowSchema", "ArrowTable", "PyArrowDatatype")
 
@@ -16,7 +16,7 @@ class ArrowSchema(type):
     def make(
         cls,
         schema: pa.Schema,
-        strict: Union[bool, Literal["filter"]] = "filter",
+        strict: bool | Literal["filter"] = "filter",
         clsname: str = "_ArrowSchema",
     ) -> Self:
         """Take the schema and a strict flag to define the type.
@@ -28,7 +28,7 @@ class ArrowSchema(type):
         return cls(clsname, (cls,), {"schema": schema, "strict": strict})
 
     def __new__(mcs, clsname, bases, dct):
-        newclass = super(ArrowSchema, mcs).__new__(mcs, clsname, bases, dct)
+        newclass = super().__new__(mcs, clsname, bases, dct)
 
         err_msg = "Cannot instantiate an instance of ArrowSchema directly."
 
@@ -89,7 +89,7 @@ class ArrowTable(pa.Table, Generic[S]):
             except TypeError:
                 pass
         if not isinstance(v, pa.Table):
-            raise ValueError(f"Value of type {type(v)} cannot be converted to pyarrow.Table")
+            raise ValueError(f"Value of type {type(v)} cannot be converted to pyarrow.Table")  # noqa: TRY004
 
         if schema:
             if strict is True:
@@ -110,15 +110,15 @@ class PyArrowDatatype(str):
     """Custom datatype represents a string validated as a PyarrowDatatype."""
 
     @property
-    def datatype(self) -> Type:
+    def datatype(self) -> type:
         """Return the underlying PyarrowDatatype"""
         try:
             value = eval(self)
             if not isinstance(value, pa.lib.DataType):
-                raise ValueError(f"ensure this value contains a valid PyarrowDatatype string: {value}")
+                raise ValueError(f"ensure this value contains a valid PyarrowDatatype string: {value}")  # noqa: TRY004
             return value
         except Exception as e:
-            raise ValueError(f"ensure this value contains a valid PyarrowDatatype string: {e}")
+            raise ValueError(f"ensure this value contains a valid PyarrowDatatype string: {e}") from e
 
     @classmethod
     def __get_pydantic_core_schema__(cls, source_type, handler):
@@ -131,7 +131,7 @@ class PyArrowDatatype(str):
 
         if isinstance(value, str):
             value = cls(value)
-            value.datatype
+            _ = value.datatype
             return value
 
         raise ValueError(f"ensure this value contains a valid PyarrowDatatype string: {value}")

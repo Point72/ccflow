@@ -19,12 +19,13 @@ import enum
 import hashlib
 import inspect
 from collections import OrderedDict
+from collections.abc import Callable, Iterable
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from functools import partial, singledispatch
 from pathlib import PurePath
 from types import CodeType, MappingProxyType, MethodType, MethodWrapperType, ModuleType
-from typing import Any, Callable, Iterable, List, Optional, Tuple
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel as _PydanticBaseModel
@@ -49,10 +50,10 @@ def _sha256_hexdigest(*parts: bytes | str) -> str:
 
 
 # ContextVar (rather than threading.local) so the visited set auto-isolates across asyncio tasks.
-_visited: contextvars.ContextVar[Optional[set]] = contextvars.ContextVar("_ccflow_normalize_visited", default=None)
+_visited: contextvars.ContextVar[set | None] = contextvars.ContextVar("_ccflow_normalize_visited", default=None)
 
 # Tracks functions currently being hashed to detect circular closure references.
-_hashing_functions: contextvars.ContextVar[Optional[set]] = contextvars.ContextVar("_ccflow_hashing_functions", default=None)
+_hashing_functions: contextvars.ContextVar[set | None] = contextvars.ContextVar("_ccflow_hashing_functions", default=None)
 
 
 def _with_cycle_check(obj: Any, build: Callable[[], Any]) -> Any:
@@ -413,16 +414,14 @@ _SKIPPED_METHODS = frozenset(
 # ---------------------------------------------------------------------------
 
 
-def _unwrap_function(func: object) -> Optional[Callable]:
+def _unwrap_function(func: object) -> Callable | None:
     """Unwrap descriptors and decorator chains to get the underlying function.
 
     Handles ``classmethod``, ``staticmethod``, ``property`` (fget), and
     ``functools.wraps``-style ``__wrapped__`` chains (e.g. ``@Flow.call``).
     Returns ``None`` if the underlying object has no ``__code__``.
     """
-    if isinstance(func, classmethod):
-        func = func.__func__
-    elif isinstance(func, staticmethod):
+    if isinstance(func, (classmethod, staticmethod)):
         func = func.__func__
     elif isinstance(func, property):
         func = func.fget
@@ -440,7 +439,7 @@ def _unwrap_function(func: object) -> Optional[Callable]:
     return func
 
 
-def _function_state(func: Callable) -> Tuple[Any, Any, Tuple[Tuple[str, bool, Any], ...] | None]:
+def _function_state(func: Callable) -> tuple[Any, Any, tuple[tuple[str, bool, Any], ...] | None]:
     """Return defaults/kwdefaults/closure state that affects runtime behavior."""
 
     kwdefaults = getattr(func, "__kwdefaults__", None)
@@ -461,7 +460,7 @@ def _function_state(func: Callable) -> Tuple[Any, Any, Tuple[Tuple[str, bool, An
     return getattr(func, "__defaults__", None), kwdefaults, closure_state
 
 
-def _hash_function_bytecode(func: Callable) -> Optional[str]:
+def _hash_function_bytecode(func: Callable) -> str | None:
     """Return a SHA-256 hex digest of a function's behavior-relevant state.
 
     Unwraps decorator chains (``inspect.unwrap``) so that wrappers like
@@ -481,9 +480,7 @@ def _hash_function_bytecode(func: Callable) -> Optional[str]:
     # co_consts[0] when there is no docstring; in Python >= 3.14 that slot is absent.
     # Only strip when the first constant actually matches the function's __doc__.
     doc = getattr(unwrapped, "__doc__", None)
-    if doc is not None and consts and consts[0] == doc:
-        consts = consts[1:]
-    elif consts and consts[0] is None:
+    if doc is not None and consts and consts[0] == doc or consts and consts[0] is None:
         consts = consts[1:]
     code_canonical = (
         "code",
@@ -501,7 +498,7 @@ def _hash_function_bytecode(func: Callable) -> Optional[str]:
     return _sha256_hexdigest(repr(code_canonical), compute_data_token(_function_state(unwrapped)))
 
 
-def _dependency_info(dep: object, *, _visited: Tuple[type, ...]) -> Optional[Tuple[Tuple[str, str, str, str], str, str]]:
+def _dependency_info(dep: object, *, _visited: tuple[type, ...]) -> tuple[tuple[str, str, str, str], str, str] | None:
     """Return deterministic identity, name, and token for a dependency entry."""
 
     if isinstance(dep, type):
@@ -523,7 +520,7 @@ def _dependency_info(dep: object, *, _visited: Tuple[type, ...]) -> Optional[Tup
     return ("callable", module, qualname, behavior), f"__dep__:{qualname}", behavior
 
 
-def _collect_methods(cls: type) -> List[Tuple[str, Callable]]:
+def _collect_methods(cls: type) -> list[tuple[str, Callable]]:
     """Collect callable methods from *cls* (walking MRO).
 
     Methods are collected with MRO override semantics: for each method name,
@@ -558,7 +555,7 @@ def _collect_methods(cls: type) -> List[Tuple[str, Callable]]:
     return methods
 
 
-def _collect_dependency_hashes(cls: type, *, _visited: Tuple[type, ...]) -> List[Tuple[str, str]]:
+def _collect_dependency_hashes(cls: type, *, _visited: tuple[type, ...]) -> list[tuple[str, str]]:
     """Collect hashed ``__ccflow_tokenizer_deps__`` entries from the full MRO.
 
     Dependencies are merged across the MRO, deduplicated, and sorted
@@ -588,7 +585,7 @@ def _collect_dependency_hashes(cls: type, *, _visited: Tuple[type, ...]) -> List
     return [(dep_name, dep_token) for _, dep_name, dep_token in deps]
 
 
-def compute_behavior_token(cls: type, *, _visited: Tuple[type, ...] = ()) -> Optional[str]:
+def compute_behavior_token(cls: type, *, _visited: tuple[type, ...] = ()) -> str | None:
     """Compute a SHA-256 behavior token for *cls* based on its method bytecode.
 
     The token captures behavior-relevant state for every method in *cls*'s MRO

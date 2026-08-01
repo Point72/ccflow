@@ -13,20 +13,17 @@ which all need to be defined together so that pydantic (especially V1) can resol
 
 import abc
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache, wraps
 from inspect import Signature, isclass, signature
+from types import UnionType
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
     ClassVar,
-    Dict,
     Generic,
-    List,
     Optional,
-    Tuple,
-    Type,
     TypeVar,
     Union,
     get_args,
@@ -40,7 +37,7 @@ from ._flow_model_binding import _normalize_auto_context_parent, _wrap_auto_cont
 from .base import (
     BaseModel,
     ContextBase,
-    ContextType,  # noqa: F401
+    ContextType,
     ResultBase,
     ResultType,
 )
@@ -50,24 +47,25 @@ if TYPE_CHECKING:
     from .flow_model import FlowAPI
 
 __all__ = (
-    "GraphDepType",
-    "GraphDepList",
-    "MetaData",
     "CallableModel",
-    "CallableModelType",
     "CallableModelGenericType",
+    "CallableModelType",
+    "Evaluator",
+    "EvaluatorBase",
     "Flow",
     "FlowOptions",
     "FlowOptionsDeps",
     "FlowOptionsOverride",
+    "GraphDepList",
+    "GraphDepType",
+    "MetaData",
     "ModelEvaluationContext",
     "TransparentModelEvaluationContext",
-    "EvaluatorBase",
-    "Evaluator",
     "WrapperModel",
 )
 
 log = logging.getLogger(__name__)
+_UNION_ORIGINS = (Union, UnionType)
 
 
 @dataclass(frozen=True)
@@ -94,7 +92,7 @@ class MetaData(BaseModel):
 
     name: str = ""
     description: str = Field("", repr=False)
-    options: Optional["FlowOptions"] = Field(None, exclude=True, repr=False)  # noqa F405
+    options: Optional["FlowOptions"] = Field(None, exclude=True, repr=False)
 
 
 class _FlowAccessor:
@@ -132,8 +130,8 @@ class _CallableModel(BaseModel, abc.ABC):
         type_call_arg = _cached_signature(cls.__call__).parameters["context"].annotation
 
         # If optional type, extract inner type
-        if get_origin(type_call_arg) is Optional or (get_origin(type_call_arg) is Union and type(None) in get_args(type_call_arg)):
-            type_call_arg = [t for t in get_args(type_call_arg) if t is not type(None)][0]
+        if get_origin(type_call_arg) in _UNION_ORIGINS and type(None) in get_args(type_call_arg):
+            type_call_arg = next(t for t in get_args(type_call_arg) if t is not type(None))
 
         if (
             not isinstance(type_call_arg, TypeVar)
@@ -149,7 +147,7 @@ class _CallableModel(BaseModel, abc.ABC):
         type_call_return = _cached_signature(cls.__call__).return_annotation
 
         # If union, check all types
-        if get_origin(type_call_return) is Union and get_args(type_call_return):
+        if get_origin(type_call_return) in _UNION_ORIGINS and get_args(type_call_return):
             types_call_return = [t for t in get_args(type_call_return) if t is not type(None)]
         else:
             types_call_return = [type_call_return]
@@ -184,7 +182,7 @@ class _CallableModel(BaseModel, abc.ABC):
         if self.__class__.__deps__ is not CallableModel.__deps__:
             type_call_arg = _cached_signature(self.__class__.__call__).parameters["context"].annotation
             type_deps_arg = _cached_signature(self.__class__.__deps__).parameters["context"].annotation
-            if type_call_arg is not type_deps_arg:
+            if type_call_arg != type_deps_arg:
                 err_msg_type_mismatch = (
                     f"The type of the context accepted by __deps__ {type_deps_arg} must match that accepted by __call__ {type_call_arg}"
                 )
@@ -225,7 +223,7 @@ class _CallableModel(BaseModel, abc.ABC):
     def _evaluation_identity_payload(
         self,
         context: Any,
-    ) -> Optional[Any]:
+    ) -> Any | None:
         """Return an effective evaluation identity payload when available.
 
         Returning ``None`` keeps the model on the existing structural key path.
@@ -238,8 +236,8 @@ class _CallableModel(BaseModel, abc.ABC):
 CallableModelType = TypeVar("CallableModelType", bound=_CallableModel)
 
 # Since we only want to check the types, not revalidate the models, we use InstanceOf here
-GraphDepType = Tuple[InstanceOf[_CallableModel], List[InstanceOf[ContextBase]]]  # noqa: F405
-GraphDepList = List[GraphDepType]
+GraphDepType = tuple[InstanceOf[_CallableModel], list[InstanceOf[ContextBase]]]
+GraphDepList = list[GraphDepType]
 
 # *****************************************************************************
 # Define the "Flow" framework, including the decorator and its options
@@ -261,7 +259,7 @@ class FlowOptions(BaseModel):
     (i.e. by an evaluator) if the user has not explicitly specified a field.
     """
 
-    model_config: ConfigDict = {"frozen": True}
+    model_config: ClassVar[ConfigDict] = {"frozen": True}
 
     log_level: int = Field(
         logging.DEBUG,
@@ -282,7 +280,7 @@ class FlowOptions(BaseModel):
     cacheable: bool = Field(
         False, description="Whether the model results should be cached if possible. This is False by default so that caching is opt-in"
     )
-    evaluator: Optional[InstanceOf["EvaluatorBase"]] = Field(None, description="A hook to set a custom evaluator")
+    evaluator: InstanceOf["EvaluatorBase"] | None = Field(None, description="A hook to set a custom evaluator")
     _deps: bool = PrivateAttr(False)
     _parse_log_level = field_validator("log_level", mode="before")(str_to_log_level)
 
@@ -305,7 +303,7 @@ class FlowOptions(BaseModel):
 
     def __call__(self, fn):
         # Used for building a graph of model evaluation contexts without evaluating
-        def get_evaluation_context(model: CallableModelType, context: ContextType, as_dict: bool = False, *, _options: Optional[FlowOptions] = None):
+        def get_evaluation_context(model: CallableModelType, context: ContextType, as_dict: bool = False, *, _options: FlowOptions | None = None):
             # Create the evaluation context.
             # Record the options that are used, in case the evaluators want to use it,
             # but exclude the evaluator itself to avoid potential circular dependencies
@@ -320,20 +318,20 @@ class FlowOptions(BaseModel):
             options_dict = options.model_dump(mode="python", exclude={"evaluator"}, exclude_unset=True)
             evaluation_context = ModelEvaluationContext(model=model, context=context, fn=fn.__name__, options=options_dict)
             if as_dict:
-                return dict(model=evaluator, context=evaluation_context)
+                return {"model": evaluator, "context": evaluation_context}
             else:
                 return evaluator.make_evaluation_context(evaluation_context)
 
         # The decorator implementation
-        def wrapper(model, context=Signature.empty, *, _options: Optional[FlowOptions] = None, **kwargs):
+        def wrapper(model, context=Signature.empty, *, _options: FlowOptions | None = None, **kwargs):
             if not isinstance(model, CallableModel):
                 raise TypeError(f"Can only decorate methods on CallableModels (not {type(model)}) with the flow decorator.")
             if (not isclass(model.context_type) or not issubclass(model.context_type, ContextBase)) and not (
-                get_origin(model.context_type) is Union and type(None) in get_args(model.context_type)
+                get_origin(model.context_type) in _UNION_ORIGINS and type(None) in get_args(model.context_type)
             ):
                 raise TypeError(f"Context type {model.context_type} must be a subclass of ContextBase")
             if (not isclass(model.result_type) or not issubclass(model.result_type, ResultBase)) and not (
-                get_origin(model.result_type) is Union and all(isclass(t) and issubclass(t, ResultBase) for t in get_args(model.result_type))
+                get_origin(model.result_type) in _UNION_ORIGINS and all(isclass(t) and issubclass(t, ResultBase) for t in get_args(model.result_type))
             ):
                 raise TypeError(f"Result type {model.result_type} must be a subclass of ResultBase")
             if self._deps and fn.__name__ != "__deps__":
@@ -352,8 +350,8 @@ class FlowOptions(BaseModel):
 
             # Type coercion on input. We do this here (rather than relying on ModelEvaluationContext) as it produces a nicer traceback/error message
             if not isinstance(context, model.context_type):
-                if get_origin(model.context_type) is Union and type(None) in get_args(model.context_type):
-                    model_context_type = [t for t in get_args(model.context_type) if t is not type(None)][0]
+                if get_origin(model.context_type) in _UNION_ORIGINS and type(None) in get_args(model.context_type):
+                    model_context_type = next(t for t in get_args(model.context_type) if t is not type(None))
                 else:
                     model_context_type = model.context_type
                 context = model_context_type.model_validate(context)
@@ -390,17 +388,17 @@ class FlowOptionsOverride(BaseModel):
 
     model_config = ConfigDict(protected_namespaces=())  # Because of model_types field
 
-    _OPEN_OVERRIDES: ClassVar[Dict] = {}
+    _OPEN_OVERRIDES: ClassVar[dict] = {}
     options: FlowOptions = Field(description="The options that represent the overrides to apply in this context")
-    models: Tuple[CallableModelType, ...] = Field((), description="Which specific model instances to apply the overrides to")
-    model_types: Tuple[Type[CallableModelType], ...] = Field((), description="Which specific model types to apply the overrides to")
+    models: tuple[CallableModelType, ...] = Field((), description="Which specific model instances to apply the overrides to")
+    model_types: tuple[type[CallableModelType], ...] = Field((), description="Which specific model types to apply the overrides to")
 
     @classmethod
     def _apply_options(cls, old: FlowOptions, new: FlowOptions) -> FlowOptions:
         return old.model_copy(update={f: getattr(new, f) for f in new.model_fields_set})
 
     @classmethod
-    def get_options(cls, model: CallableModelType, model_options: Optional[FlowOptions] = None) -> FlowOptions:
+    def get_options(cls, model: CallableModelType, model_options: FlowOptions | None = None) -> FlowOptions:
         """Return a set of options with overrides applied.
 
         Options are applied in the following order:
@@ -599,9 +597,9 @@ class ModelEvaluationContext(
     """
 
     fn: str = Field("__call__", strict=True)
-    options: Dict[str, Any] = Field(default_factory=dict)
+    options: dict[str, Any] = Field(default_factory=dict)
     model: InstanceOf[_CallableModel]
-    context: Union[InstanceOf[ContextBase], None]
+    context: InstanceOf[ContextBase] | None
 
     # Using InstanceOf instead of the actual type will limit Pydantic's validation of the field to instance checking
     # Otherwise, the validation will re-run fully despite the models already being validated on construction
@@ -664,7 +662,7 @@ class EvaluatorBase(_CallableModel, abc.ABC):
         deps_context = ModelEvaluationContext(model=context.model, context=context.context, fn="__deps__", options=context.options)
         return self(deps_context)
 
-    def __exit__(self):
+    def __exit__(self, exc_type=None, exc_value=None, traceback=None):
         pass
 
     def is_transparent(self, context: ModelEvaluationContext) -> bool:
@@ -740,7 +738,7 @@ class CallableModel(_CallableModel):
         return self
 
     @property
-    def context_type(self) -> Type[ContextType]:
+    def context_type(self) -> type[ContextType]:
         """Return the context type for the model.
 
         By default, it reads the value from the function signature (if a concrete value is provided),
@@ -752,16 +750,16 @@ class CallableModel(_CallableModel):
                 typ = self._context_generic_type
             else:
                 raise TypeError("Must either define a type annotation for context on __call__ or implement 'context_type'")
-        elif (
-            isinstance(self, CallableModelGenericType) and hasattr(self, "_context_generic_type") and not issubclass(typ, self._context_generic_type)
-        ):
-            raise TypeError(
-                f"Context type annotation {typ} on __call__ does not match context_type {self._context_generic_type} defined by CallableModelGenericType"
-            )
+        elif isinstance(self, CallableModelGenericType) and hasattr(self, "_context_generic_type"):
+            type_to_compare = next((t for t in get_args(typ) if t is not type(None)), typ)
+            if not issubclass(type_to_compare, self._context_generic_type):
+                raise TypeError(
+                    f"Context type annotation {typ} on __call__ does not match context_type {self._context_generic_type} defined by CallableModelGenericType"
+                )
 
         # If optional type, extract inner type
-        if get_origin(typ) is Optional or (get_origin(typ) is Union and type(None) in get_args(typ)):
-            type_to_check = [t for t in get_args(typ) if t is not type(None)][0]
+        if get_origin(typ) in _UNION_ORIGINS and type(None) in get_args(typ):
+            type_to_check = next(t for t in get_args(typ) if t is not type(None))
         else:
             type_to_check = typ
 
@@ -772,7 +770,7 @@ class CallableModel(_CallableModel):
         return typ
 
     @property
-    def result_type(self) -> Type[ResultType]:
+    def result_type(self) -> type[ResultType]:
         """Return the result type for the model.
 
         By default, it reads the value from the function signature (if a concrete value is provided),
@@ -785,16 +783,16 @@ class CallableModel(_CallableModel):
             else:
                 raise TypeError("Must either define a return type annotation on __call__ or implement 'result_type'")
         elif isinstance(self, CallableModelGenericType) and hasattr(self, "_result_generic_type"):
-            if get_origin(typ) is Union and get_origin(self._result_generic_type) is Union:
+            if get_origin(typ) in _UNION_ORIGINS and get_origin(self._result_generic_type) in _UNION_ORIGINS:
                 if set(get_args(typ)) != set(get_args(self._result_generic_type)):
                     raise TypeError(
                         f"Return type annotation {typ} on __call__ does not match result_type {self._result_generic_type} defined by CallableModelGenericType"
                     )
-            elif get_origin(typ) is Union:
+            elif get_origin(typ) in _UNION_ORIGINS:
                 raise NotImplementedError(
                     "Return type annotation on __call__ is a Union, but result_type defined by CallableModelGenericType is not a Union. This case is not yet supported."
                 )
-            elif get_origin(self._result_generic_type) is Union:
+            elif get_origin(self._result_generic_type) in _UNION_ORIGINS:
                 raise NotImplementedError(
                     "Return type annotation on __call__ is not a Union, but result_type defined by CallableModelGenericType is a Union. This case is not yet supported."
                 )
@@ -804,7 +802,7 @@ class CallableModel(_CallableModel):
                 )
 
         # If union type, extract inner type
-        if get_origin(typ) is Union:
+        if get_origin(typ) in _UNION_ORIGINS:
             raise TypeError(
                 "Model __call__ signature result type cannot be a Union type without a concrete property. Please define a property 'result_type' on the model."
             )
@@ -832,7 +830,7 @@ class CallableModel(_CallableModel):
     """Access flow helpers for execution, context transforms, and introspection."""
 
 
-class WrapperModel(CallableModel, Generic[CallableModelType], abc.ABC):
+class WrapperModel(CallableModel, abc.ABC, Generic[CallableModelType]):
     """Abstract class that represents a wrapper around an underlying model, with the same context and return types.
 
     It reduces the amount of boilerplate required. Multi-model composites require their own implementation.
@@ -841,12 +839,12 @@ class WrapperModel(CallableModel, Generic[CallableModelType], abc.ABC):
     model: CallableModelType
 
     @property
-    def context_type(self) -> Type[ContextType]:
+    def context_type(self) -> type[ContextType]:
         """Return the context type of the underlying model."""
         return self.model.context_type
 
     @property
-    def result_type(self) -> Type[ResultType]:
+    def result_type(self) -> type[ResultType]:
         """Return the result type of the underlying model."""
         return self.model.result_type
 
@@ -856,8 +854,8 @@ class CallableModelGeneric(CallableModel, Generic[ContextType, ResultType]):
     a generic type instead of annotations on __call__.
     """
 
-    _context_generic_type: ClassVar[Type[ContextType]]
-    _result_generic_type: ClassVar[Type[ResultType]]
+    _context_generic_type: ClassVar[type[ContextType]]
+    _result_generic_type: ClassVar[type[ResultType]]
 
     def __setstate__(self, state):
         self._determine_context_result()
@@ -887,7 +885,7 @@ class CallableModelGeneric(CallableModel, Generic[ContextType, ResultType]):
                         and (
                             issubclass(base._result_generic_type, ResultBase)
                             or (
-                                get_origin(base._result_generic_type) is Union
+                                get_origin(base._result_generic_type) in _UNION_ORIGINS
                                 and all(isclass(t) and issubclass(t, ResultBase) for t in get_args(base._result_generic_type))
                             )
                         )
@@ -901,7 +899,7 @@ class CallableModelGeneric(CallableModel, Generic[ContextType, ResultType]):
                                 new_context_type = arg0
                             if new_result_type is None and (
                                 (isinstance(arg1, type) and issubclass(arg1, ResultBase))
-                                or (get_origin(arg1) is Union and all(isclass(t) and issubclass(t, ResultBase) for t in get_args(arg1)))
+                                or (get_origin(arg1) in _UNION_ORIGINS and all(isclass(t) and issubclass(t, ResultBase) for t in get_args(arg1)))
                             ):
                                 # NOTE: ContextBase inherits from ResultBase, so order matters here!
                                 new_result_type = arg1
@@ -911,7 +909,7 @@ class CallableModelGeneric(CallableModel, Generic[ContextType, ResultType]):
                                     new_context_type = arg
                                 elif new_result_type is None and (
                                     (isinstance(arg, type) and issubclass(arg, ResultBase))
-                                    or (get_origin(arg) is Union and all(isclass(t) and issubclass(t, ResultBase) for t in get_args(arg)))
+                                    or (get_origin(arg) in _UNION_ORIGINS and all(isclass(t) and issubclass(t, ResultBase) for t in get_args(arg)))
                                 ):
                                     # NOTE: ContextBase inherits from ResultBase, so order matters here!
                                     new_result_type = arg
@@ -933,19 +931,17 @@ class CallableModelGeneric(CallableModel, Generic[ContextType, ResultType]):
         if isinstance(m, str):
             m = resolve_str(m)
 
-        if isinstance(m, dict):
-            m = handler(m)
-        elif isinstance(m, cls):
+        if isinstance(m, (dict, cls)):
             m = handler(m)
 
         # Raise ValueError (not TypeError) as per https://docs.pydantic.dev/latest/errors/errors/
         if not isinstance(m, CallableModel):
-            raise ValueError(f"{m} is not a CallableModel: {type(m)}")
+            raise ValueError(f"{m} is not a CallableModel: {type(m)}")  # noqa: TRY004
 
         subtypes = cls.__pydantic_generic_metadata__["args"]
         if subtypes:
-            TypeAdapter(Type[subtypes[0]]).validate_python(m.context_type)
-            TypeAdapter(Type[subtypes[1]]).validate_python(m.result_type)
+            TypeAdapter(type[subtypes[0]]).validate_python(m.context_type)
+            TypeAdapter(type[subtypes[1]]).validate_python(m.result_type)
 
         return m
 

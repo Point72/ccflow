@@ -1,11 +1,11 @@
-from typing import Any, Dict, Optional, Type, Union
+from typing import Any
 
 from .base import BaseModel
 from .exttypes.pyobjectpath import _TYPE_ADAPTER as PyObjectPathTA
 
 __all__ = (
-    "model_alias",
     "from_python",
+    "model_alias",
     "update_from_template",
 )
 
@@ -25,7 +25,7 @@ def model_alias(model_name: str) -> BaseModel:
     return BaseModel.model_validate(model_name)
 
 
-def from_python(py_object_path: str, indexer: Optional[list] = None) -> Any:
+def from_python(py_object_path: str, indexer: list | None = None) -> Any:
     """Hydra-friendly: resolve and return any Python object by import path.
 
     Optionally accepts ``indexer``, a list of keys that will be applied in
@@ -61,10 +61,10 @@ def from_python(py_object_path: str, indexer: Optional[list] = None) -> Any:
 
 
 def update_from_template(
-    base: Optional[Union[str, Dict[str, Any], BaseModel]] = None,
+    base: str | dict[str, Any] | BaseModel | None = None,
     *,
-    target_class: Optional[Union[str, Type]] = None,
-    update: Optional[Dict[str, Any]] = None,
+    target_class: str | type | None = None,
+    update: dict[str, Any] | None = None,
 ) -> Any:
     """Generic update helper that constructs an instance from a base and updates.
 

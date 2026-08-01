@@ -41,12 +41,12 @@ class TestFilePublishers(TestCase):
             p.data = "foo"
             path = p()
             self.assertEqual(path, Path("directory/test_generic.txt"))
-            with open(path, "r") as f:
+            with open(path) as f:
                 self.assertEqual(f.read(), "foo")
 
             # Test that we can call it again
             path = p()
-            with open(path, "r") as f:
+            with open(path) as f:
                 self.assertEqual(f.read(), "foo")
 
     def test_generic_param(self):
@@ -60,12 +60,12 @@ class TestFilePublishers(TestCase):
             p.data = "foo"
             path = p()
             self.assertEqual(path, Path("directory/test_generic.txt"))
-            with open(path, "r") as f:
+            with open(path) as f:
                 self.assertEqual(f.read(), "foo")
 
             # Test that we can call it again
             path = p()
-            with open(path, "r") as f:
+            with open(path) as f:
                 self.assertEqual(f.read(), "foo")
 
     def test_json(self):
@@ -74,12 +74,12 @@ class TestFilePublishers(TestCase):
             p = JSONPublisher(
                 name="test_{{param}}",
                 name_params={"param": "JSON"},
-                kwargs=dict(default=str),
+                kwargs={"default": str},
             )
             p.data = {"foo": 5, "bar": date(2020, 1, 1)}
             path = p()
             self.assertEqual(path, Path("test_JSON.json"))
-            with open(path, "r") as f:
+            with open(path) as f:
                 self.assertEqual(f.read(), r'{"foo":5,"bar":"2020-01-01"}')
 
     def test_yaml(self):
@@ -88,7 +88,7 @@ class TestFilePublishers(TestCase):
             p = YAMLPublisher(name="test_{{param}}", name_params={"param": "yaml"})
             p.data = {"foo": 5, "bar": date(2020, 1, 1)}
             path = p()
-            with open(path, "r") as f:
+            with open(path) as f:
                 self.assertEqual(f.read(), "bar: 2020-01-01\nfoo: 5\n")
 
     def test_pickle(self):
@@ -114,7 +114,7 @@ class TestFilePublishers(TestCase):
             )
             p.data = {"foo": 5, "bar": date(2020, 1, 1)}
             path = p()
-            with open(path, "r") as f:
+            with open(path) as f:
                 self.assertEqual(f.read(), "The value of foo is 5 and the value of bar is 2020-01-01")
 
     def test_pandas_html(self):
@@ -128,7 +128,7 @@ class TestFilePublishers(TestCase):
             p.data = pd.DataFrame({"a": [1, 2, 3], "b": ["foo", "bar", "baz"]})
             path = p()
             self.assertEqual(path, Path("test_pandas.html"))
-            with open(path, "r") as f:
+            with open(path) as f:
                 out = f.read()
                 self.assertTrue(out.startswith("<table"))
                 self.assertTrue(out.endswith("</table>"))
@@ -145,7 +145,7 @@ class TestFilePublishers(TestCase):
             p.data = pd.DataFrame({"a": [1, 2, 3], "b": ["foo", "bar", "baz"]})
             path = p()
             self.assertEqual(path, Path("test_pandas.txt"))
-            with open(path, "r") as f:
+            with open(path) as f:
                 out = f.read()
                 self.assertEqual(out, "   a    b\n0  1  foo\n1  2  bar\n2  3  baz")
 

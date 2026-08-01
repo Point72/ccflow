@@ -25,7 +25,7 @@ class DummyEvaluator(EvaluatorBase):
 def test_global_state(root_registry):
     root_registry.add("foo", DummyModel(name="foo"))
     evaluator = DummyEvaluator()
-    with FlowOptionsOverride(options=dict(evaluator=evaluator)) as override:
+    with FlowOptionsOverride(options={"evaluator": evaluator}) as override:
         state = GlobalState()
 
     # Now clear the registry, and add a different model
@@ -51,7 +51,7 @@ def test_global_state(root_registry):
 def test_global_state_pickle(root_registry):
     root_registry.add("foo", DummyModel(name="foo"))
     evaluator = DummyEvaluator()
-    with FlowOptionsOverride(options=dict(evaluator=evaluator)) as override:
+    with FlowOptionsOverride(options={"evaluator": evaluator}) as override:
         state = GlobalState()
 
     # Now pickle and unpickle the state

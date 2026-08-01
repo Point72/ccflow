@@ -2,7 +2,6 @@ import re
 import warnings
 from datetime import timedelta
 from functools import cache, cached_property
-from typing import Type
 
 from packaging.version import Version
 from pydantic import TypeAdapter
@@ -15,7 +14,7 @@ class Frequency(str):
     validate_always = True
 
     @cached_property
-    def offset(self) -> Type:
+    def offset(self) -> type:
         """Return the underlying pandas DateOffset object."""
         from pandas.tseries.frequencies import to_offset
 
@@ -36,13 +35,12 @@ class Frequency(str):
         if isinstance(value, cls):
             return cls._validate(str(value))
 
-        if isinstance(value, timedelta):
+        if isinstance(value, timedelta) and value.total_seconds() % 86400 == 0:
             # Keep ccflow's day-sized spellings stable when pandas round-trips
             # timedeltas through its newer canonical offset machinery.
             # Context for the offset alias changes:
             # https://pandas.pydata.org/docs/dev/whatsnew/v3.0.0.html#enforced-deprecation-of-aliases-m-q-y-etc-in-favour-of-me-qe-ye-etc-for-offsets
-            if value.total_seconds() % 86400 == 0:
-                return cls(f"{int(value.total_seconds() // 86400)}D")
+            return cls(f"{int(value.total_seconds() // 86400)}D")
 
         if isinstance(value, str):
             # Pandas deprecated legacy aliases like M/Q/Y in 2.2 and enforced the

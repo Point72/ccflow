@@ -1,6 +1,6 @@
 import logging
 import pickle
-from typing import Callable
+from collections.abc import Callable
 from unittest import TestCase
 from unittest.mock import patch
 
@@ -60,9 +60,8 @@ class TestRetryPolicy(TestCase):
         # running out of attempts), the failure message distinguishes the two cases.
         policy = RetryPolicy(max_attempts=10, wait_initial=5.0, wait_multiplier=1.0, max_delay=1.0, reraise=False)
         attempt = _flaky(5, ValueError("boom"))
-        with patch("ccflow.utils.retry.time.sleep"):
-            with self.assertRaises(RetryError) as ctx:
-                self._run(policy, attempt)
+        with patch("ccflow.utils.retry.time.sleep"), self.assertRaises(RetryError) as ctx:
+            self._run(policy, attempt)
         self.assertIn("max_delay budget exceeded", str(ctx.exception))
         self.assertEqual(ctx.exception.attempts, 1)
 
@@ -120,9 +119,8 @@ class TestRetryPolicy(TestCase):
     def test_max_delay_stops_retries(self):
         policy = RetryPolicy(max_attempts=10, wait_initial=5.0, wait_multiplier=1.0, max_delay=1.0)
         attempt = _flaky(5, ValueError("boom"))
-        with patch("ccflow.utils.retry.time.sleep") as sleep_mock:
-            with self.assertRaises(ValueError):
-                self._run(policy, attempt)
+        with patch("ccflow.utils.retry.time.sleep") as sleep_mock, self.assertRaises(ValueError):
+            self._run(policy, attempt)
         # The first computed delay (5.0) already exceeds max_delay (1.0), so no sleep occurs.
         sleep_mock.assert_not_called()
         self.assertEqual(attempt.state["calls"], 1)
@@ -132,9 +130,8 @@ class TestRetryPolicy(TestCase):
         # (2.0 + 1.0 = 3.0) would exceed the budget, so retries stop after the third attempt.
         policy = RetryPolicy(max_attempts=10, wait_initial=1.0, wait_multiplier=1.0, max_delay=2.5)
         attempt = _flaky(5, ValueError("boom"))
-        with patch("ccflow.utils.retry.time.sleep") as sleep_mock:
-            with self.assertRaises(ValueError):
-                self._run(policy, attempt)
+        with patch("ccflow.utils.retry.time.sleep") as sleep_mock, self.assertRaises(ValueError):
+            self._run(policy, attempt)
         self.assertEqual([call.args[0] for call in sleep_mock.call_args_list], [1.0, 1.0])
         self.assertEqual(attempt.state["calls"], 3)
 
@@ -261,9 +258,8 @@ class TestRetryReporting(TestCase):
 
         reporter = InMemoryReporter()
         policy = RetryPolicy(max_attempts=10, wait_initial=5.0, wait_multiplier=1.0, max_delay=1.0, reporter=reporter)
-        with patch("ccflow.utils.retry.time.sleep"):
-            with self.assertRaises(ValueError):
-                self._run(policy, _flaky(5, ValueError("boom")))
+        with patch("ccflow.utils.retry.time.sleep"), self.assertRaises(ValueError):
+            self._run(policy, _flaky(5, ValueError("boom")))
         give_up = reporter.events[-1]
         self.assertEqual(give_up.phase, ReportPhase.GIVE_UP)
         self.assertEqual(give_up.extra["reason"], "max_delay budget exceeded")
