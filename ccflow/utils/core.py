@@ -1,14 +1,14 @@
-from typing import Any, Set, TypeVar
+from typing import Any, TypeVar
 
 from pydantic import BaseModel as PydanticBaseModel, ConfigDict, create_model
 
 __all__ = (
-    "PydanticModelType",
     "PydanticDictOptions",
+    "PydanticModelType",
     "dict_to_model",
 )
 
-PydanticModelType = TypeVar("ModelType", bound=PydanticBaseModel)
+PydanticModelType = TypeVar("PydanticModelType", bound=PydanticBaseModel)
 
 
 class PydanticDictOptions(PydanticBaseModel):
@@ -19,8 +19,8 @@ class PydanticDictOptions(PydanticBaseModel):
         validate_assignment=True
     )
 
-    include: Set[str] = None
-    exclude: Set[str] = set()
+    include: set[str] = None
+    exclude: set[str] = set()
     by_alias: bool = False
     exclude_unset: bool = False
     exclude_defaults: bool = False
@@ -34,6 +34,6 @@ def dict_to_model(cls, v) -> PydanticBaseModel:
     if isinstance(v, dict):
         config = ConfigDict(arbitrary_types_allowed=True)
 
-        fields = {f: (Any, None) for f in v}
+        fields = dict.fromkeys(v, (Any, None))
         v = create_model("DynamicDictModel", **fields, __config__=config)(**v)
     return v

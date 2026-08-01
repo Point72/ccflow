@@ -1,7 +1,7 @@
 """CLI for serving ModelRegistryViewer as a Panel application."""
 
 import argparse
-from typing import Callable, Optional
+from collections.abc import Callable
 
 import panel as pn
 
@@ -46,7 +46,7 @@ def _get_ui_args_parser() -> argparse.ArgumentParser:
 def registry_viewer_cli(
     config_path: str = "",
     config_name: str = "",
-    hydra_main: Optional[Callable] = None,
+    hydra_main: Callable | None = None,
 ):
     """CLI entry point for serving ModelRegistryViewer.
 

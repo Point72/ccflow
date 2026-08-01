@@ -5,8 +5,8 @@ from ..base import ResultBase
 from ..exttypes.narwhals import DataFrameT, FrameT
 
 __all__ = (
-    "NarwhalsFrameResult",
     "NarwhalsDataFrameResult",
+    "NarwhalsFrameResult",
 )
 
 

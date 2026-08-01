@@ -1,6 +1,6 @@
 """Various arrow tools"""
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 import orjson
 import pyarrow as pa
@@ -8,14 +8,14 @@ import pyarrow as pa
 from ccflow.serialization import orjson_dumps
 
 __all__ = (
+    "add_field_metadata",
     "convert_decimal_types_to_float",
     "convert_large_types",
-    "add_field_metadata",
     "get_field_metadata",
 )
 
 
-def convert_decimal_types_to_float(table: pa.table, target_type: Optional[pa.DataType] = None) -> pa.Table:
+def convert_decimal_types_to_float(table: pa.table, target_type: pa.DataType | None = None) -> pa.Table:
     """Converts decimal types to float or other user-provided type
 
     Args:
@@ -63,7 +63,7 @@ def convert_large_types(table: pa.Table) -> pa.Table:
     return table.cast(schema)
 
 
-def add_field_metadata(table: pa.Table, metadata: Dict[str, Any]):
+def add_field_metadata(table: pa.Table, metadata: dict[str, Any]):
     """Helper function to add column-level meta data to an arrow table for multiple columns at once."""
     # There does not seem to be a pyarrow function to do this easily
     new_schema = []
@@ -77,7 +77,7 @@ def add_field_metadata(table: pa.Table, metadata: Dict[str, Any]):
     return table.cast(pa.schema(new_schema))
 
 
-def get_field_metadata(table: pa.Table) -> Dict[str, Any]:
+def get_field_metadata(table: pa.Table) -> dict[str, Any]:
     """Helper function to retrieve all the field level metadata in an arrow table."""
     metadata = {}
     for field in table.schema:

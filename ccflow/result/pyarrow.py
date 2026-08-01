@@ -8,8 +8,8 @@ from ..context import DateRangeContext
 from ..exttypes import ArrowTable
 
 __all__ = (
-    "ArrowResult",
     "ArrowDateRangeResult",
+    "ArrowResult",
 )
 
 if TYPE_CHECKING:

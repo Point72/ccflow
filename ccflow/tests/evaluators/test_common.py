@@ -77,16 +77,16 @@ class TestCombineEvaluator(TestCase):
         context = DateContext(date=date(2022, 1, 1))
         model_evaluation_context = ModelEvaluationContext(model=m1, context=context)
         with self.assertLogs(level=logging.INFO) as log:
-            logging.info("just one")
+            logging.getLogger().info("just one")
             out = fallback_evaluator(model_evaluation_context)
             self.assertEqual(len(log.output), 1)
             self.assertEqual(len(log.records), 1)
         self.assertEqual(out, m1(context))
 
         # Corrupt evaluator 1 so it raises when run
-        evaluator1_raise = evaluator1.model_copy(update=dict(log_level="garbage"))
+        evaluator1_raise = evaluator1.model_copy(update={"log_level": "garbage"})
         fallback_evaluator = FallbackEvaluator(evaluators=[evaluator1_raise, evaluator2])
-        self.assertRaises(Exception, evaluator1_raise, model_evaluation_context)
+        self.assertRaises(Exception, evaluator1_raise, model_evaluation_context)  # noqa: B017
         with self.assertLogs(level=logging.INFO) as captured:
             out = fallback_evaluator(model_evaluation_context)
         self.assertEqual(out, m1(context))
@@ -189,7 +189,7 @@ class TestLoggingEvaluator(TestCase):
             log_level=logging.INFO,
             verbose=False,
             log_result=True,
-            format_config=dict(arrow_as_polars=True, polars_config={"tbl_width_chars": 160}, pandas_config={"display.width": 160}),
+            format_config={"arrow_as_polars": True, "polars_config": {"tbl_width_chars": 160}, "pandas_config": {"display.width": 160}},
         )
         with self.assertLogs(level=logging.INFO) as captured:
             evaluator(model_evaluation_context)
@@ -206,10 +206,12 @@ class TestLoggingEvaluator(TestCase):
         m1 = MyDateCallable(offset=1)
         context = DateContext(date=date(2022, 1, 1))
         # Test that the logging options are applied even when the logging evaluator is nested in a Multi evaluator
-        with FlowOptionsOverride(options={"evaluator": MultiEvaluator(evaluators=[LoggingEvaluator()]), "log_level": logging.INFO}):
-            with self.assertLogs(level=logging.INFO) as captured:
-                m1(context)
-                m1(context)
+        with (
+            FlowOptionsOverride(options={"evaluator": MultiEvaluator(evaluators=[LoggingEvaluator()]), "log_level": logging.INFO}),
+            self.assertLogs(level=logging.INFO) as captured,
+        ):
+            m1(context)
+            m1(context)
         self.assertEqual(len(captured.records), 6)
         for i in range(6):
             self.assertEqual(captured.records[i].levelno, logging.INFO)
@@ -359,7 +361,7 @@ class TestMemoryCacheEvaluator(TestCase):
         m1 = MyDateCallable(offset=1)
         evaluator = MemoryCacheEvaluator()
         context = DateContext(date=date(2022, 1, 1))
-        model_evaluation_context = ModelEvaluationContext(model=m1, context=context, options=dict(cacheable=True))
+        model_evaluation_context = ModelEvaluationContext(model=m1, context=context, options={"cacheable": True})
 
         out = evaluator(model_evaluation_context)
         target = {evaluator.key(model_evaluation_context): out}
@@ -368,7 +370,7 @@ class TestMemoryCacheEvaluator(TestCase):
         self.assertEqual(evaluator.ids, ids)
 
         context = DateContext(date=date(2022, 1, 2))
-        model_evaluation_context = ModelEvaluationContext(model=m1, context=context, options=dict(cacheable=True))
+        model_evaluation_context = ModelEvaluationContext(model=m1, context=context, options={"cacheable": True})
         out2 = evaluator(model_evaluation_context)
         target[evaluator.key(model_evaluation_context)] = out2
         self.assertEqual(evaluator.cache, target)
@@ -376,14 +378,14 @@ class TestMemoryCacheEvaluator(TestCase):
         self.assertEqual(evaluator.ids, ids)
 
         context = DateContext(date=date(2022, 1, 3))
-        model_evaluation_context = ModelEvaluationContext(model=m1, context=context, options=dict(cacheable=True, volatile=True))
+        model_evaluation_context = ModelEvaluationContext(model=m1, context=context, options={"cacheable": True, "volatile": True})
         evaluator(model_evaluation_context)
         key = evaluator.key(model_evaluation_context)
         self.assertNotIn(key, evaluator.cache)
         self.assertNotIn(key, evaluator.ids)
 
         context = DateContext(date=date(2022, 1, 4))
-        model_evaluation_context = ModelEvaluationContext(model=m1, context=context, options=dict(cacheable=False))
+        model_evaluation_context = ModelEvaluationContext(model=m1, context=context, options={"cacheable": False})
         evaluator(model_evaluation_context)
         key = evaluator.key(model_evaluation_context)
         self.assertNotIn(key, evaluator.cache)
@@ -394,7 +396,7 @@ class TestMemoryCacheEvaluator(TestCase):
         m1 = MyDateCallable(offset=1)
         evaluator = MemoryCacheEvaluator()
         context = DateContext(date=date(2022, 1, 1))
-        model_evaluation_context = ModelEvaluationContext(model=m1, context=context, options=dict(cacheable=True))
+        model_evaluation_context = ModelEvaluationContext(model=m1, context=context, options={"cacheable": True})
 
         self.assertEqual(evaluator.key(model_evaluation_context), cache_key(model_evaluation_context))
         self.assertEqual(evaluator.key(model_evaluation_context), cache_key(model_evaluation_context, effective=True))
@@ -404,7 +406,7 @@ class TestMemoryCacheEvaluator(TestCase):
         m1 = MyDateCallable(offset=1)
         evaluator = MemoryCacheEvaluator()
         context = DateContext(date=date(2022, 1, 1))
-        model_evaluation_context = ModelEvaluationContext(model=m1, context=context, options=dict(cacheable=True))
+        model_evaluation_context = ModelEvaluationContext(model=m1, context=context, options={"cacheable": True})
 
         with self.assertNoLogs("ccflow.evaluators.common", level="DEBUG"):
             self.assertEqual(evaluator.key(model_evaluation_context), cache_key(model_evaluation_context))
@@ -419,7 +421,7 @@ class TestMemoryCacheEvaluator(TestCase):
         m1 = BadIdentityCallable(offset=1)
         evaluator = MemoryCacheEvaluator()
         context = DateContext(date=date(2022, 1, 1))
-        model_evaluation_context = ModelEvaluationContext(model=m1, context=context, options=dict(cacheable=True))
+        model_evaluation_context = ModelEvaluationContext(model=m1, context=context, options={"cacheable": True})
 
         with self.assertRaisesRegex(ValueError, "identity broke"):
             evaluator.key(model_evaluation_context)
@@ -429,7 +431,7 @@ class TestMemoryCacheEvaluator(TestCase):
         m1 = MyDateCallable(offset=1)
         evaluator = MemoryCacheEvaluator()
         context = DateContext(date=date(2022, 1, 1))
-        model_evaluation_context = ModelEvaluationContext(model=m1, context=context, fn="__deps__", options=dict(cacheable=True))
+        model_evaluation_context = ModelEvaluationContext(model=m1, context=context, fn="__deps__", options={"cacheable": True})
 
         self.assertEqual(evaluator.key(model_evaluation_context), cache_key(model_evaluation_context))
         self.assertEqual(evaluator.key(model_evaluation_context), cache_key(model_evaluation_context, effective=True))
@@ -453,10 +455,9 @@ class TestMemoryCacheEvaluator(TestCase):
         evaluator = MultiEvaluator(evaluators=evaluators)
         context = DateRangeContext(start_date=date(2022, 1, 1), end_date=date(2022, 1, 3))
         # We apply this evaluator to all the call functions via the decorator
-        with FlowOptionsOverride(options={"evaluator": evaluator, "cacheable": True}):
-            with self.assertLogs(level=logging.INFO) as captured:
-                out = m3(context)
-                self.assertEqual(out.x, 18)
+        with FlowOptionsOverride(options={"evaluator": evaluator, "cacheable": True}), self.assertLogs(level=logging.INFO) as captured:
+            out = m3(context)
+            self.assertEqual(out.x, 18)
         # Without caching, there would be 3+3+1=7 calls, but some of these can be re-used,
         # so there should be only 3+1=4 calls
         start_records = [r.getMessage() for r in captured.records if "Start evaluation of __call__" in r.getMessage()]
@@ -477,11 +478,10 @@ class TestMemoryCacheEvaluator(TestCase):
         evaluator = MultiEvaluator(evaluators=evaluators)
         context = DateRangeContext(start_date=date(2022, 1, 1), end_date=date(2022, 1, 3))
         target_deps = m3.__deps__(context)
-        with FlowOptionsOverride(options={"evaluator": evaluator, "cacheable": True}):
-            with self.assertLogs(level=logging.INFO) as captured:
-                out = m3.__deps__(context)
-                self.assertEqual(out, target_deps)
-                out = m3.__deps__(context)
+        with FlowOptionsOverride(options={"evaluator": evaluator, "cacheable": True}), self.assertLogs(level=logging.INFO) as captured:
+            out = m3.__deps__(context)
+            self.assertEqual(out, target_deps)
+            out = m3.__deps__(context)
         # Without caching, there would be 2 calls, but there should only be 1
         start_records = [r.getMessage() for r in captured.records if "Start evaluation of __deps__" in r.getMessage()]
         self.assertEqual(len(start_records), 1)
@@ -489,11 +489,13 @@ class TestMemoryCacheEvaluator(TestCase):
     def test_decorator_volatile(self):
         m1 = MyDateCallable(offset=1)
         # Even though we specify cacheable=True, the volatile=True flag on current_time takes precedence.
-        with FlowOptionsOverride(options={"evaluator": MemoryCacheEvaluator(), "cacheable": True}):
-            with self.assertLogs(level=logging.INFO) as captured:
-                out1 = m1.current_time(DateContext(date=date(2022, 1, 1)))
-                out2 = m1.current_time(DateContext(date=date(2022, 1, 1)))
-                self.assertGreater(out2, out1)
+        with (
+            FlowOptionsOverride(options={"evaluator": MemoryCacheEvaluator(), "cacheable": True}),
+            self.assertLogs(level=logging.INFO) as captured,
+        ):
+            out1 = m1.current_time(DateContext(date=date(2022, 1, 1)))
+            out2 = m1.current_time(DateContext(date=date(2022, 1, 1)))
+            self.assertGreater(out2, out1)
         self.assertEqual(len(captured.records), 2)
 
     def test_cache_key_stable_across_evaluators(self):
@@ -567,28 +569,28 @@ class TestMemoryCacheEvaluator(TestCase):
 
 class TestGraphDeps(TestCase):
     def test_graph_deps_diamond(self):
-        n0 = NodeModel(meta=dict(name="n0"))
-        n1 = NodeModel(meta=dict(name="n1"), deps_model=[n0])
-        n2 = NodeModel(meta=dict(name="n2"), deps_model=[n0])
-        root = NodeModel(meta=dict(name="n3"), deps_model=[n1, n2])
+        n0 = NodeModel(meta={"name": "n0"})
+        n1 = NodeModel(meta={"name": "n1"}, deps_model=[n0])
+        n2 = NodeModel(meta={"name": "n2"}, deps_model=[n0])
+        root = NodeModel(meta={"name": "n3"}, deps_model=[n1, n2])
         context = DateContext(date=date(2022, 1, 1))
         graph = get_dependency_graph(ModelEvaluationContext(model=root, context=context))
         self.assertEqual(graph.ids.keys(), graph.graph.keys())
         self.assertEqual(len(graph.ids), 4)
         for k, v in graph.ids.items():
             if v.model.meta.name == "n3":
-                self.assertEqual(set(graph.ids[dep_key].context.model.meta.name for dep_key in graph.graph[k]), set(["n1", "n2"]))
+                self.assertEqual({graph.ids[dep_key].context.model.meta.name for dep_key in graph.graph[k]}, {"n1", "n2"})
             elif v.model.meta.name in ("n1", "n2"):
-                self.assertEqual(set(graph.ids[dep_key].context.model.meta.name for dep_key in graph.graph[k]), set(["n0"]))
+                self.assertEqual({graph.ids[dep_key].context.model.meta.name for dep_key in graph.graph[k]}, {"n0"})
             elif v.model.meta.name == "n0":
-                self.assertEqual(set(graph.ids[dep_key].context.model.meta.name for dep_key in graph.graph[k]), set())
+                self.assertEqual({graph.ids[dep_key].context.model.meta.name for dep_key in graph.graph[k]}, set())
 
     def test_plain_callable_graph_keys_match_public_cache_key(self):
         """Dependency graphs for ordinary CallableModels keep structural keys."""
-        n0 = NodeModel(meta=dict(name="n0"))
-        n1 = NodeModel(meta=dict(name="n1"), deps_model=[n0])
-        n2 = NodeModel(meta=dict(name="n2"), deps_model=[n0])
-        root = NodeModel(meta=dict(name="n3"), deps_model=[n1, n2])
+        n0 = NodeModel(meta={"name": "n0"})
+        n1 = NodeModel(meta={"name": "n1"}, deps_model=[n0])
+        n2 = NodeModel(meta={"name": "n2"}, deps_model=[n0])
+        root = NodeModel(meta={"name": "n3"}, deps_model=[n1, n2])
         context = DateContext(date=date(2022, 1, 1))
 
         graph = get_dependency_graph(ModelEvaluationContext(model=root, context=context))
@@ -599,9 +601,9 @@ class TestGraphDeps(TestCase):
 
     def test_plain_callable_graph_deduplicates_equal_models_by_key(self):
         """Ordinary graph traversal deduplicates structurally equal nodes by key."""
-        leaf1 = NodeModel(meta=dict(name="leaf"))
-        leaf2 = NodeModel(meta=dict(name="leaf"))
-        root = NodeModel(meta=dict(name="root"), deps_model=[leaf1, leaf2])
+        leaf1 = NodeModel(meta={"name": "leaf"})
+        leaf2 = NodeModel(meta={"name": "leaf"})
+        root = NodeModel(meta={"name": "root"}, deps_model=[leaf1, leaf2])
         context = DateContext(date=date(2022, 1, 1))
 
         NodeModel._deps_calls = []
@@ -616,15 +618,15 @@ class TestGraphDeps(TestCase):
         context = DateContext(date=date(2022, 1, 1))
         graph = get_dependency_graph(root.__call__.get_evaluation_context(root, context))
         self.assertEqual(len(graph.graph), 1)
-        key = list(graph.graph.keys())[0]
-        self.assertEqual(graph.graph[key], set([key]))
+        key = next(iter(graph.graph.keys()))
+        self.assertEqual(graph.graph[key], {key})
 
 
 class TestGraphEvaluator(TestCase):
     def test_graph_evaluator_basic(self):
-        n0 = NodeModel(meta=dict(name="n0"))
-        n1 = NodeModel(meta=dict(name="n1"))
-        n2 = NodeModel(meta=dict(name="n2"), deps_model=[n0, n1])
+        n0 = NodeModel(meta={"name": "n0"})
+        n1 = NodeModel(meta={"name": "n1"})
+        n2 = NodeModel(meta={"name": "n2"}, deps_model=[n0, n1])
         context = DateContext(date=date(2022, 1, 1))
 
         NodeModel._calls = []
@@ -670,10 +672,10 @@ class TestGraphEvaluator(TestCase):
         self.assertGreater(result.value, 10)
 
     def test_graph_evaluator_diamond(self):
-        n0 = NodeModel(meta=dict(name="n0"))
-        n1 = NodeModel(meta=dict(name="n1"), deps_model=[n0])
-        n2 = NodeModel(meta=dict(name="n2"), deps_model=[n0])
-        root = NodeModel(meta=dict(name="n3"), deps_model=[n1, n2])
+        n0 = NodeModel(meta={"name": "n0"})
+        n1 = NodeModel(meta={"name": "n1"}, deps_model=[n0])
+        n2 = NodeModel(meta={"name": "n2"}, deps_model=[n0])
+        root = NodeModel(meta={"name": "n3"}, deps_model=[n1, n2])
         context = DateContext(date=date(2022, 1, 1))
 
         NodeModel._calls = []
@@ -703,10 +705,10 @@ class TestGraphEvaluator(TestCase):
 
     def test_graph_evaluator_cache(self):
         """Test that stacking the graph evaluator with caching/logging works as expected."""
-        n0 = NodeModel(meta=dict(name="n0"), run_deps=True)
-        n1 = NodeModel(meta=dict(name="n1"), deps_model=[n0], run_deps=True)
-        n2 = NodeModel(meta=dict(name="n2"), deps_model=[n0], run_deps=True)
-        root = NodeModel(meta=dict(name="n3"), deps_model=[n1, n2], run_deps=True)
+        n0 = NodeModel(meta={"name": "n0"}, run_deps=True)
+        n1 = NodeModel(meta={"name": "n1"}, deps_model=[n0], run_deps=True)
+        n2 = NodeModel(meta={"name": "n2"}, deps_model=[n0], run_deps=True)
+        root = NodeModel(meta={"name": "n3"}, deps_model=[n1, n2], run_deps=True)
         context = DateContext(date=date(2022, 1, 1))
 
         evaluators = [LoggingEvaluator(log_level=logging.INFO), MemoryCacheEvaluator(), GraphEvaluator()]
@@ -715,9 +717,8 @@ class TestGraphEvaluator(TestCase):
         # We apply this evaluator to the root model only (as we don't need each model to be sorting its dependencies)
         NodeModel._calls = []
         NodeModel._deps_calls = []
-        with FlowOptionsOverride(options={"evaluator": evaluator, "cacheable": True}):
-            with self.assertLogs(level=logging.INFO) as captured:
-                root(context)
+        with FlowOptionsOverride(options={"evaluator": evaluator, "cacheable": True}), self.assertLogs(level=logging.INFO) as captured:
+            root(context)
         graph_calls = NodeModel._calls
         deps_calls = NodeModel._deps_calls
 
@@ -737,4 +738,4 @@ class TestGraphEvaluator(TestCase):
         context = DateContext(date=date(2022, 1, 1))
         evaluator = GraphEvaluator()
         with FlowOptionsOverride(options={"evaluator": evaluator}):
-            self.assertRaises(Exception, root, context)
+            self.assertRaises(Exception, root, context)  # noqa: B017

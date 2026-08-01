@@ -2,7 +2,7 @@
 
 import logging
 from datetime import date, datetime
-from typing import Any, Dict, Optional
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from pydantic import TypeAdapter, ValidationError
@@ -13,12 +13,16 @@ from .exttypes.frequency import _normalize_frequency_alias
 _DatetimeAdapter = TypeAdapter(datetime)
 
 __all__ = (
+    "eval_or_load_object",
+    "load_object",
     "normalize_date",
     "normalize_datetime",
-    "load_object",
-    "eval_or_load_object",
     "str_to_log_level",
 )
+
+
+def _local_today() -> date:
+    return datetime.now().astimezone().date()
 
 
 def normalize_date(v: Any) -> Any:
@@ -27,7 +31,7 @@ def normalize_date(v: Any) -> Any:
         try:
             import pandas as pd
 
-            timestamp = pd.tseries.frequencies.to_offset(_normalize_frequency_alias(v)) + date.today()
+            timestamp = pd.tseries.frequencies.to_offset(_normalize_frequency_alias(v)) + _local_today()
             return timestamp.date()
         except ValueError:
             pass
@@ -48,12 +52,12 @@ def normalize_datetime(v: Any) -> Any:
         try:
             import pandas as pd
 
-            return (pd.tseries.frequencies.to_offset(_normalize_frequency_alias(v)) + date.today()).to_pydatetime()
+            return (pd.tseries.frequencies.to_offset(_normalize_frequency_alias(v)) + _local_today()).to_pydatetime()
         except ValueError:
             pass
     if isinstance(v, dict):
         # e.g. DatetimeContext object, {"dt": datetime(...)}
-        dt = list(v.values())[0]
+        dt = next(iter(v.values()))
         tz = list(v.values())[1] if len(v) > 1 else None
     elif isinstance(v, list):
         dt = v[0]
@@ -82,7 +86,7 @@ def load_object(v: Any) -> Any:
     return v
 
 
-def eval_or_load_object(v: Any, values: Optional[Dict[str, Any]] = None) -> Any:
+def eval_or_load_object(v: Any, values: dict[str, Any] | None = None) -> Any:
     """Validator that evaluates or loads an object from path if a string is provided.
 
     Useful for fields that could be either lambda functions or callables.

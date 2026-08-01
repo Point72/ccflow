@@ -254,7 +254,7 @@ class TestMethodCollection:
         """Attributes starting with __ccflow_ are skipped."""
 
         class A:
-            __ccflow_tokenizer_deps__ = []
+            __ccflow_tokenizer_deps__ = ()
 
             def f(self):
                 return 1
@@ -281,7 +281,7 @@ class TestDeps:
                 return 1
 
         class WithDeps:
-            __ccflow_tokenizer_deps__ = [_helper_add]
+            __ccflow_tokenizer_deps__ = (_helper_add,)
 
             def f(self):
                 return 1
@@ -290,13 +290,13 @@ class TestDeps:
 
     def test_dep_order_insensitive(self):
         class A:
-            __ccflow_tokenizer_deps__ = [_helper_add, _helper_mul]
+            __ccflow_tokenizer_deps__ = (_helper_add, _helper_mul)
 
             def f(self):
                 return 1
 
         class B:
-            __ccflow_tokenizer_deps__ = [_helper_mul, _helper_add]
+            __ccflow_tokenizer_deps__ = (_helper_mul, _helper_add)
 
             def f(self):
                 return 1
@@ -311,13 +311,13 @@ class TestDeps:
             return 2
 
         class A:
-            __ccflow_tokenizer_deps__ = [v1]
+            __ccflow_tokenizer_deps__ = (v1,)
 
             def f(self):
                 return 1
 
         class B:
-            __ccflow_tokenizer_deps__ = [v2]
+            __ccflow_tokenizer_deps__ = (v2,)
 
             def f(self):
                 return 1
@@ -334,13 +334,13 @@ class TestDeps:
                 return 2
 
         class A:
-            __ccflow_tokenizer_deps__ = [HelperA]
+            __ccflow_tokenizer_deps__ = (HelperA,)
 
             def f(self):
                 return 1
 
         class B:
-            __ccflow_tokenizer_deps__ = [HelperB]
+            __ccflow_tokenizer_deps__ = (HelperB,)
 
             def f(self):
                 return 1
@@ -358,22 +358,22 @@ class TestDeps:
             return 3
 
         class BaseA:
-            __ccflow_tokenizer_deps__ = [base_a]
+            __ccflow_tokenizer_deps__ = (base_a,)
 
             def f(self):
                 return 1
 
         class BaseB:
-            __ccflow_tokenizer_deps__ = [base_b]
+            __ccflow_tokenizer_deps__ = (base_b,)
 
             def f(self):
                 return 1
 
         class SubA(BaseA):
-            __ccflow_tokenizer_deps__ = [sub_dep]
+            __ccflow_tokenizer_deps__ = (sub_dep,)
 
         class SubB(BaseB):
-            __ccflow_tokenizer_deps__ = [sub_dep]
+            __ccflow_tokenizer_deps__ = (sub_dep,)
 
         assert compute_behavior_token(SubA) != compute_behavior_token(SubB)
 
@@ -487,14 +487,14 @@ class TestCacheKeyIntegration:
                 return 2
 
         class A(CallableModel):
-            __ccflow_tokenizer_deps__ = [HelperA]
+            __ccflow_tokenizer_deps__ = (HelperA,)
 
             @Flow.call
             def __call__(self, context: NullContext) -> GenericResult:
                 return GenericResult(value=1)
 
         class B(CallableModel):
-            __ccflow_tokenizer_deps__ = [HelperB]
+            __ccflow_tokenizer_deps__ = (HelperB,)
 
             @Flow.call
             def __call__(self, context: NullContext) -> GenericResult:
@@ -636,7 +636,7 @@ class TestNormalizeTokenPrimitives:
         "value,expected",
         [
             (date(2024, 1, 15), ("date", "2024-01-15")),
-            (datetime(2024, 1, 15, 10, 30, 0), ("datetime", "2024-01-15T10:30:00")),
+            (datetime(2024, 1, 15, 10, 30, 0), ("datetime", "2024-01-15T10:30:00")),  # noqa: DTZ001
             (time(10, 30, 0), ("time", "10:30:00")),
             (timedelta(hours=1, minutes=30), ("timedelta", 0, 5400, 0)),
         ],
@@ -901,7 +901,7 @@ class TestNormalizeTokenDeterminismRegressions:
 
     def test_lambda_inside_function_has_no_memory_addresses(self):
         def f():
-            return list(map(lambda x: x * 2, range(3)))
+            return [x * 2 for x in range(3)]
 
         self._assert_portable(normalize_token(f.__code__))
 

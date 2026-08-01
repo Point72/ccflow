@@ -15,14 +15,14 @@ This module provides:
 import re
 import sys
 import uuid
-from typing import Any, Type
+from typing import Any
 
 __all__ = ("LOCAL_ARTIFACTS_MODULE_NAME", "create_ccflow_model")
 
 LOCAL_ARTIFACTS_MODULE_NAME = "ccflow.local_persistence"
 
 
-def _register_on_module(cls: Type[Any], module_name: str) -> None:
+def _register_on_module(cls: type[Any], module_name: str) -> None:
     """Register cls on the specified module with a unique name.
 
     This sets __ccflow_import_path__ on the class without modifying __module__ or
@@ -42,7 +42,7 @@ def _register_on_module(cls: Type[Any], module_name: str) -> None:
     cls.__ccflow_import_path__ = f"{module_name}.{unique}"
 
 
-def register_ccflow_import_path(cls: Type[Any]) -> None:
+def register_ccflow_import_path(cls: type[Any]) -> None:
     """Give cls a unique name and register it on ccflow.local_persistence.
 
     This sets __ccflow_import_path__ on the class without modifying __module__ or
@@ -51,7 +51,7 @@ def register_ccflow_import_path(cls: Type[Any]) -> None:
     _register_on_module(cls, LOCAL_ARTIFACTS_MODULE_NAME)
 
 
-def sync_to_module(cls: Type[Any]) -> None:
+def sync_to_module(cls: type[Any]) -> None:
     """Ensure cls is registered on the artifacts module in this process.
 
     This handles cross-process unpickle scenarios where cloudpickle recreates the class
@@ -66,7 +66,7 @@ def sync_to_module(cls: Type[Any]) -> None:
             setattr(base, name, cls)
 
 
-def create_ccflow_model(__model_name: str, *, __base__: Any = None, **field_definitions: Any) -> Type[Any]:
+def create_ccflow_model(__model_name: str, /, *, __base__: Any = None, **field_definitions: Any) -> type[Any]:
     """Create a dynamic ccflow model and register it for PyObjectPath serialization.
 
     Wraps pydantic's create_model and registers the model so it can be serialized

@@ -2,7 +2,7 @@ import logging
 import random
 import secrets
 import time
-from typing import Callable, List, Optional, Union
+from collections.abc import Callable
 
 from pydantic import Field, field_validator
 
@@ -44,16 +44,16 @@ class RetryPolicy(BaseModel):
     """
 
     max_attempts: int = Field(default=3, ge=1, description="Maximum number of attempts (including the first) before giving up.")
-    max_delay: Optional[float] = Field(
+    max_delay: float | None = Field(
         default=None,
         ge=0.0,
         description="Optional cap on the total time (in seconds) spent waiting between retries. Once a further wait would exceed this budget, no more retries are attempted.",
     )
-    retry_exceptions: List[PyObjectPath] = Field(
+    retry_exceptions: list[PyObjectPath] = Field(
         default_factory=lambda: [PyObjectPath.validate(Exception)],
         description="Exception types that trigger a retry. An exception is retried if it is an instance of any of these.",
     )
-    no_retry_exceptions: List[PyObjectPath] = Field(
+    no_retry_exceptions: list[PyObjectPath] = Field(
         default_factory=list,
         description="Exception types that are never retried, even if they match ``retry_exceptions``. Takes precedence over ``retry_exceptions``.",
     )
@@ -61,7 +61,7 @@ class RetryPolicy(BaseModel):
     wait_multiplier: float = Field(
         default=2.0, ge=1.0, description="Exponential backoff multiplier applied per attempt: delay = wait_initial * multiplier^(attempt-1)."
     )
-    wait_max: Optional[float] = Field(
+    wait_max: float | None = Field(
         default=None, ge=0.0, description="Optional cap on the delay (in seconds) for any single retry, applied before jitter."
     )
     wait_jitter: float = Field(
@@ -73,29 +73,29 @@ class RetryPolicy(BaseModel):
         default=True, description="If True, re-raise the last underlying exception on failure. If False, raise a RetryError that wraps it."
     )
     log_level: int = Field(default=logging.WARNING, description="Log level used to report each retry attempt.")
-    reporter: Optional[Reporter] = Field(
+    reporter: Reporter | None = Field(
         default=None,
         description="Optional reporting sink that receives retry lifecycle events (failure, retry, success, give-up). See ccflow.utils.reporting.",
     )
 
     @field_validator("log_level", mode="before")
     @classmethod
-    def _validate_log_level(cls, v: Union[int, str]) -> int:
+    def _validate_log_level(cls, v: int | str) -> int:
         """Allow the log level to be specified as a name (e.g. "INFO") in addition to an int."""
         if isinstance(v, str):
             level = logging.getLevelName(v.upper())
             if not isinstance(level, int):
-                raise ValueError(f"Invalid log level: {v}")
+                raise ValueError(f"Invalid log level: {v}")  # noqa: TRY004
             return level
         return v
 
     @field_validator("retry_exceptions", "no_retry_exceptions")
     @classmethod
-    def _validate_exception_types(cls, value: List[PyObjectPath]) -> List[PyObjectPath]:
+    def _validate_exception_types(cls, value: list[PyObjectPath]) -> list[PyObjectPath]:
         for path in value:
             obj = path.object
             if not (isinstance(obj, type) and issubclass(obj, Exception)):
-                raise ValueError(f"{path} does not resolve to an Exception subclass")
+                raise ValueError(f"{path} does not resolve to an Exception subclass")  # noqa: TRY004
         return value
 
     def _should_retry(self, exc: BaseException) -> bool:
@@ -105,7 +105,7 @@ class RetryPolicy(BaseModel):
         retry = tuple(path.object for path in self.retry_exceptions)
         return isinstance(exc, retry)
 
-    def _compute_delay(self, attempt: int, jitter_value: Optional[float] = None) -> float:
+    def _compute_delay(self, attempt: int, jitter_value: float | None = None) -> float:
         """Compute the delay (in seconds) before the retry following ``attempt`` (1-based)."""
         delay = self.wait_initial * (self.wait_multiplier ** (attempt - 1))
         if self.wait_max is not None:
@@ -121,11 +121,11 @@ class RetryPolicy(BaseModel):
         *,
         name: str,
         detail: str,
-        span_id: Optional[str],
+        span_id: str | None,
         attempt: int,
-        exc: Optional[BaseException] = None,
-        delay: Optional[float] = None,
-        reason: Optional[str] = None,
+        exc: BaseException | None = None,
+        delay: float | None = None,
+        reason: str | None = None,
     ) -> None:
         """Emit a single retry-lifecycle event to the configured reporter (no-op if unset)."""
         if self.reporter is None or span_id is None:
@@ -169,7 +169,7 @@ class RetryPolicy(BaseModel):
             detail: A description of the call (e.g. ``"__call__ on <context>"``) used in log messages.
         """
         total_wait = 0.0
-        last_exception: Optional[Exception] = None
+        last_exception: Exception | None = None
         budget_exceeded = False
         span_id = secrets.token_hex(8) if self.reporter is not None else None
         for attempt in range(1, self.max_attempts + 1):

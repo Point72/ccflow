@@ -28,9 +28,9 @@ class JinjaTemplate(str):
         if isinstance(value, str):
             value = cls(value)
             try:
-                value.template
-            except Exception as e:
-                raise ValueError(f"ensure this value contains a valid Jinja2 template string: {e}")
+                _ = value.template
+            except jinja2.TemplateError as e:
+                raise ValueError(f"ensure this value contains a valid Jinja2 template string: {e}") from e
 
         return value
 

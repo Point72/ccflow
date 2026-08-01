@@ -1,20 +1,20 @@
 import logging
-from typing import Any, Dict, Generic
+from typing import Any, Generic, Literal
 
 import yaml
 from pydantic import Field, field_validator
-from typing_extensions import Literal, override
+from typing_extensions import override
 
 from ..publisher import BasePublisher
 from ..serialization import orjson_dumps
 from ..utils import PydanticDictOptions, PydanticModelType, dict_to_model
 
 __all__ = (
-    "PrintPublisher",
     "LogPublisher",
     "PrintJSONPublisher",
-    "PrintYAMLPublisher",
+    "PrintPublisher",
     "PrintPydanticJSONPublisher",
+    "PrintYAMLPublisher",
 )
 
 
@@ -62,7 +62,7 @@ class LogPublisher(BasePublisher):
 class PrintJSONPublisher(BasePublisher):
     """Print data in JSON format."""
 
-    kwargs: Dict[str, Any] = Field(default_factory=dict)
+    kwargs: dict[str, Any] = Field(default_factory=dict)
 
     @override
     def __call__(self) -> Any:
@@ -73,7 +73,7 @@ class PrintJSONPublisher(BasePublisher):
 class PrintYAMLPublisher(BasePublisher):
     """Print data in YAML format."""
 
-    kwargs: Dict[str, Any] = Field(default_factory=dict)
+    kwargs: dict[str, Any] = Field(default_factory=dict)
 
     @override
     def __call__(self) -> Any:
@@ -89,7 +89,7 @@ class PrintPydanticJSONPublisher(BasePublisher, Generic[PydanticModelType]):
 
     data: PydanticModelType = None
     options: PydanticDictOptions = Field(default_factory=PydanticDictOptions)
-    kwargs: Dict[str, Any] = Field(default_factory=dict)
+    kwargs: dict[str, Any] = Field(default_factory=dict)
 
     _normalize_data = field_validator("data", mode="before")(dict_to_model)
 

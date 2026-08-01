@@ -1,8 +1,12 @@
 import logging
-from datetime import date
+from datetime import date, datetime
 from unittest import TestCase
 
 from ccflow import CallableModel, DateContext, EvaluatorBase, Flow, FlowOptions, FlowOptionsOverride, GenericResult, ModelEvaluationContext
+
+
+def _local_today() -> date:
+    return datetime.now().astimezone().date()
 
 
 class MyModel(CallableModel):
@@ -66,9 +70,9 @@ class TestModelEvaluationContext(TestCase):
     def test_model_evaluation_context(self):
         model = DefaultModel()
         evaluation_context = ModelEvaluationContext(model=model, context="0d")
-        self.assertEqual(evaluation_context.context, DateContext(date=date.today()))
+        self.assertEqual(evaluation_context.context, DateContext(date=_local_today()))
         out = evaluation_context()
-        self.assertEqual(out, GenericResult(value=date.today()))
+        self.assertEqual(out, GenericResult(value=_local_today()))
 
 
 class TestFlowDecorator(TestCase):
@@ -93,7 +97,7 @@ class TestFlowDecorator(TestCase):
 
     def test_evaluation_context(self):
         model = DefaultModel()
-        context = DateContext(date=date.today())
+        context = DateContext(date=_local_today())
         evaluation_context = model.__call__.get_evaluation_context(model, context)
         self.assertIsInstance(evaluation_context, ModelEvaluationContext)
         self.assertIsInstance(evaluation_context.model, EvaluatorBase)
@@ -103,13 +107,13 @@ class TestFlowDecorator(TestCase):
 
     def test_evaluation_context_options(self):
         model = DefaultModel()
-        context = DateContext(date=date.today())
+        context = DateContext(date=_local_today())
         options = FlowOptions(log_level=0)
 
         evaluation_context = model.__call__.get_evaluation_context(model, context, _options=options)
         self.assertEqual(evaluation_context.model.log_level, 0)
 
-        evaluation_context = model.__call__.get_evaluation_context(model, context, _options=dict(log_level=0))
+        evaluation_context = model.__call__.get_evaluation_context(model, context, _options={"log_level": 0})
         self.assertEqual(evaluation_context.model.log_level, 0)
 
         with FlowOptionsOverride(options=options):
@@ -118,20 +122,20 @@ class TestFlowDecorator(TestCase):
             self.assertEqual(evaluation_context.model.log_level, 0)
 
             # Make sure passing _options takes precedence over the FlowOptionsOverride context
-            evaluation_context = model.__call__.get_evaluation_context(model, context, _options=dict(log_level=1))
+            evaluation_context = model.__call__.get_evaluation_context(model, context, _options={"log_level": 1})
             self.assertEqual(evaluation_context.model.log_level, 1)
 
     def test_new_evaluator(self):
         """Test that we can call the model easily with a new evaluator."""
         model = MyModel()
         new_evaluator = DummyEvaluator()
-        context = DateContext(date=date.today())
+        context = DateContext(date=_local_today())
         self.assertEqual(model(context), GenericResult(value=context.date))
-        self.assertEqual(model(context, _options=dict(evaluator=new_evaluator)), new_evaluator.return_value)
+        self.assertEqual(model(context, _options={"evaluator": new_evaluator}), new_evaluator.return_value)
 
         # Now test it on foo
         self.assertEqual(model(context), GenericResult(value=context.date))
-        self.assertEqual(model.foo(context, _options=dict(evaluator=new_evaluator)), new_evaluator.return_value)
+        self.assertEqual(model.foo(context, _options={"evaluator": new_evaluator}), new_evaluator.return_value)
 
     def test_coercion(self):
         model = MyModel()
@@ -142,7 +146,7 @@ class TestFlowDecorator(TestCase):
 
     def test_default(self):
         model = DefaultModel()
-        self.assertEqual(model(), GenericResult(value=date.today()))
+        self.assertEqual(model(), GenericResult(value=_local_today()))
 
         model = MyModel()
         self.assertRaisesRegex(
@@ -159,19 +163,18 @@ class TestFlowDecorator(TestCase):
             model.bar("2022-01-02")
         # 3 calls, (start+end), 2 messages for each
         self.assertEqual(len(captured.records), 9)
-        for i in range(0, 3):
+        for i in range(3):
             self.assertEqual(captured.records[i].levelno, logging.WARNING)
         for i in range(3, 9):
             self.assertEqual(captured.records[i].levelno, logging.DEBUG)
 
-        with FlowOptionsOverride(options=FlowOptions(log_level=logging.INFO)):
-            with self.assertLogs(level=logging.DEBUG) as captured:
-                model("2022-01-01")
-                model.foo("2022-01-02")
-                model.bar("2022-01-02")
+        with FlowOptionsOverride(options=FlowOptions(log_level=logging.INFO)), self.assertLogs(level=logging.DEBUG) as captured:
+            model("2022-01-01")
+            model.foo("2022-01-02")
+            model.bar("2022-01-02")
         # 3 calls, (start+end), 2 messages for each
         self.assertEqual(len(captured.records), 9)
-        for i in range(0, 3):
+        for i in range(3):
             self.assertEqual(captured.records[i].levelno, logging.WARNING)
         for i in range(3, 9):
             self.assertEqual(captured.records[i].levelno, logging.INFO)

@@ -8,7 +8,6 @@ small, performance suffers from too many repeated trips to the underlying data s
 
 import warnings
 from datetime import date
-from typing import List, Tuple
 
 from ccflow.exttypes.frequency import _normalize_frequency_alias
 
@@ -17,7 +16,7 @@ _MIN_END_DATE = date(1969, 12, 31)
 __all__ = ("dates_to_chunks",)
 
 
-def dates_to_chunks(start: date, end: date, chunk_size: str = "ME", trim: bool = False) -> List[Tuple[date, date]]:
+def dates_to_chunks(start: date, end: date, chunk_size: str = "ME", trim: bool = False) -> list[tuple[date, date]]:
     """
     Chunks a date range in a consistent way (i.e. the same middle chunks will always be generated for overlapping
     ranges).

@@ -4,7 +4,7 @@ Note that arrow related extension types are in exttypes.arrow.
 
 import abc
 from datetime import date, datetime, time
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Literal
 
 import pyarrow as pa
 from pydantic import Field, model_validator
@@ -14,16 +14,16 @@ from .exttypes import JinjaTemplate, PyArrowDatatype, PyObjectPath
 from .object_config import ObjectConfig
 
 __all__ = (
-    "ArrowSchemaModel",
-    "ArrowPartitioning",
     "ArrowDateFilter",
     "ArrowDatetimeFilter",
-    "ArrowFilter",
-    "ArrowTimeFilter",
-    "ArrowTemplateFilter",
     "ArrowFileSystem",
+    "ArrowFilter",
     "ArrowLocalFileSystem",
+    "ArrowPartitioning",
     "ArrowS3FileSystem",
+    "ArrowSchemaModel",
+    "ArrowTemplateFilter",
+    "ArrowTimeFilter",
     "render_filters",
 )
 
@@ -38,7 +38,7 @@ class ArrowFilter(BaseModel):
     op: str
     value: Any
 
-    def tuple(self) -> Tuple:
+    def tuple(self) -> tuple:
         """Convert the filter back to a tuple"""
         return self.key, self.op, self.value
 
@@ -46,7 +46,7 @@ class ArrowFilter(BaseModel):
     def _validate_fields(cls, v, info):
         if isinstance(v, (list, tuple)):
             key, op, value = v
-            return dict(key=key, op=op, value=value)
+            return {"key": key, "op": op, "value": value}
         return v
 
 
@@ -82,9 +82,9 @@ def _render_filter(f, template_args):
 
 
 def render_filters(
-    filters: Union[List[ArrowFilter], List[List[ArrowFilter]]],
-    template_args: Dict[str, Any],
-) -> Union[List[ArrowFilter], List[List[ArrowFilter]]]:
+    filters: list[ArrowFilter] | list[list[ArrowFilter]],
+    template_args: dict[str, Any],
+) -> list[ArrowFilter] | list[list[ArrowFilter]]:
     """Fill in template arguments in a list of filters, and return the standard Arrow form.
 
     Args:
@@ -128,8 +128,8 @@ class ArrowS3FileSystem(ArrowFileSystem):
 class ArrowSchemaModel(BaseModel):
     """Wrapping of pyarrow.Schema as a ccflow BaseModel."""
 
-    fields: Dict[str, PyArrowDatatype]
-    metadata: Optional[Dict[bytes, bytes]] = None
+    fields: dict[str, PyArrowDatatype]
+    metadata: dict[bytes, bytes] | None = None
 
     @model_validator(mode="before")
     def _validate_fields(cls, values, info):
@@ -140,20 +140,20 @@ class ArrowSchemaModel(BaseModel):
     @model_validator(mode="wrap")
     def _schema_validator(cls, v, handler, info):
         if isinstance(v, pa.Schema):
-            v = dict(
-                fields={name: v.field(name).type for name in v.names},
-                metadata=v.metadata,
-            )
+            v = {
+                "fields": {name: v.field(name).type for name in v.names},
+                "metadata": v.metadata,
+            }
         return handler(v)
 
     @property
     def schema(self) -> pa.Schema:
-        if isinstance(self.fields, Dict):
+        if isinstance(self.fields, dict):
             return pa.schema(
                 {k: v.datatype if isinstance(v, PyArrowDatatype) else v for k, v in self.fields.items()},
                 self.metadata,
             )
-        if isinstance(self.fields, List):
+        if isinstance(self.fields, list):
             return pa.schema(
                 [(k, v.datatype if isinstance(v, PyArrowDatatype) else v) for (k, v) in self.fields],
                 self.metadata,
@@ -171,10 +171,10 @@ class ArrowPartitioning(BaseModel):
     See https://arrow.apache.org/docs/python/generated/pyarrow.dataset.partitioning.html
     """
 
-    arrow_schema: Optional[ArrowSchemaModel] = Field(None, alias="schema")
-    field_names: Optional[List[str]] = None
-    flavor: Optional[str] = None
-    dictionaries: Optional[Dict[str, Any]] = None
+    arrow_schema: ArrowSchemaModel | None = Field(None, alias="schema")
+    field_names: list[str] | None = None
+    flavor: str | None = None
+    dictionaries: dict[str, Any] | None = None
 
     @property
     def object(self):  # -> Union[ds.Partitioning, ds.PartitioningFactory]:
@@ -188,7 +188,7 @@ class ArrowPartitioning(BaseModel):
             dictionaries=self.dictionaries,
         )
 
-    def get_partition_columns(self) -> List[str]:
+    def get_partition_columns(self) -> list[str]:
         """Return the list of partition columns"""
         if self.arrow_schema:
             return self.arrow_schema.object.names

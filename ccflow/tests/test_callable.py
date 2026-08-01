@@ -1,10 +1,10 @@
 from pickle import dumps as pdumps, loads as ploads
-from typing import Generic, List, Optional, Tuple, Type, TypeVar, Union
+from typing import Generic, TypeVar
 from unittest import TestCase
 
 import cloudpickle
 import ray
-from pydantic import ValidationError
+from pydantic import Field, ValidationError
 from ray.cloudpickle import dumps as rcpdumps, loads as rcploads
 
 from ccflow import (
@@ -66,7 +66,7 @@ def _make_auto_context_kwargs_callable():
 
 
 class ListContext(ContextBase):
-    ll: List[str] = []
+    ll: list[str] = Field(default_factory=list)
 
 
 class MyResult(ResultBase):
@@ -76,7 +76,7 @@ class MyResult(ResultBase):
 
 class MyCallable(CallableModel):
     i: int
-    ll: List[int] = []
+    ll: list[int] = Field(default_factory=list)
 
     @Flow.call
     def __call__(self, context: MyContext) -> MyResult:
@@ -85,7 +85,7 @@ class MyCallable(CallableModel):
 
 class MyCallableOptionalContext(CallableModel):
     @Flow.call
-    def __call__(self, context: Optional[MyContext] = None) -> MyResult:
+    def __call__(self, context: MyContext | None = None) -> MyResult:
         context = context or MyContext(a="default")
         return MyResult(x=1, y=context.a)
 
@@ -311,36 +311,36 @@ class BResult(ResultBase):
 
 class UnionReturn(CallableModel):
     @property
-    def result_type(self) -> Type[ResultType]:
+    def result_type(self) -> type[ResultType]:
         return AResult
 
     @Flow.call
-    def __call__(self, context: NullContext) -> Union[AResult, BResult]:
+    def __call__(self, context: NullContext) -> AResult | BResult:
         # Return one branch of the Union
         return AResult(a=1)
 
 
 class BadModelUnionReturnNoProperty(CallableModel):
     @Flow.call
-    def __call__(self, context: NullContext) -> Union[AResult, BResult]:
+    def __call__(self, context: NullContext) -> AResult | BResult:
         # Return one branch of the Union
         return AResult(a=1)
 
 
-class UnionReturnGeneric(CallableModelGenericType[NullContext, Union[AResult, BResult]]):
+class UnionReturnGeneric(CallableModelGenericType[NullContext, AResult | BResult]):
     @property
-    def result_type(self) -> Type[ResultType]:
+    def result_type(self) -> type[ResultType]:
         return AResult
 
     @Flow.call
-    def __call__(self, context: NullContext) -> Union[AResult, BResult]:
+    def __call__(self, context: NullContext) -> AResult | BResult:
         # Return one branch of the Union
         return AResult(a=1)
 
 
-class BadModelUnionReturnGeneric(CallableModelGenericType[NullContext, Union[AResult, BResult]]):
+class BadModelUnionReturnGeneric(CallableModelGenericType[NullContext, AResult | BResult]):
     @Flow.call
-    def __call__(self, context: NullContext) -> Union[AResult, BResult]:
+    def __call__(self, context: NullContext) -> AResult | BResult:
         # Return one branch of the Union
         return AResult(a=1)
 
@@ -353,15 +353,15 @@ class ModelMixedGenericsEnforceContextMatch(CallableModel, Generic[TContext, TRe
     model: CallableModelGenericType[TContext, TResult]
 
     @property
-    def context_type(self) -> Type[ContextType]:
+    def context_type(self) -> type[ContextType]:
         return MyGenericContext[self.model.context_type]
 
     @property
-    def result_type(self) -> Type[ResultType]:
+    def result_type(self) -> type[ResultType]:
         return GenericResult[self.model.result_type]
 
     @Flow.deps
-    def __deps__(self, context: MyGenericContext[TContext]) -> List[Tuple[CallableModelGenericType[TContext, TResult], List[ContextType]]]:
+    def __deps__(self, context: MyGenericContext[TContext]) -> list[tuple[CallableModelGenericType[TContext, TResult], list[ContextType]]]:
         return []
 
     @Flow.call
@@ -376,7 +376,7 @@ class TestContext(TestCase):
         def f():
             x.a = "bar"
 
-        self.assertRaises(Exception, f)  # v2 raises a ValidationError instead of a TypeError
+        self.assertRaises(ValidationError, f)
 
     def test_hashable(self):
         x = MyContext(a="foo")
@@ -428,8 +428,8 @@ class TestCallableModel(TestCase):
         target = m(context)
         self.assertEqual(m(context=context), m(context))
         # Validate from dict
-        self.assertEqual(m(dict(a="foo")), target)
-        self.assertEqual(m(context=dict(a="foo")), target)
+        self.assertEqual(m({"a": "foo"}), target)
+        self.assertEqual(m(context={"a": "foo"}), target)
         # Kwargs passed in
         self.assertEqual(m(a="foo"), target)
         # No argument
@@ -847,7 +847,7 @@ class TestAutoContext(TestCase):
 
         class PlainCallable(CallableModel):
             @Flow.call
-            def __call__(self, context: MyContext = MyContext(a="plain")) -> MyResult:
+            def __call__(self, context: MyContext = MyContext(a="plain")) -> MyResult:  # noqa: B008
                 return MyResult(x=1, y=context.a)
 
         self.assertEqual(AutoContextCallable()().value, "1-a")
@@ -951,7 +951,7 @@ class TestAutoContext(TestCase):
 
     def test_postponed_annotations_are_resolved(self):
         namespace = {}
-        exec(
+        exec(  # noqa: S102
             """
 from __future__ import annotations
 
@@ -975,7 +975,7 @@ result = AutoContextCallable().flow.compute(x=1)
     def test_postponed_annotations_unresolved_names_stay_loud(self):
         namespace = {}
         with self.assertRaises(NameError):
-            exec(
+            exec(  # noqa: S102
                 """
 from __future__ import annotations
 

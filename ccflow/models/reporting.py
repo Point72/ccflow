@@ -29,14 +29,14 @@ from ..utils.reporting import (
 )
 
 __all__ = [
-    "ReportingModel",
-    "LoggingModel",
-    "TracingReportingModel",
-    "MetricsReportingModel",
     "AlertsReportingModel",
-    "OpenTelemetryTracingReportingModel",
+    "LoggingModel",
+    "MetricsReportingModel",
     "OpenTelemetryMetricsReportingModel",
     "OpenTelemetryModel",
+    "OpenTelemetryTracingReportingModel",
+    "ReportingModel",
+    "TracingReportingModel",
 ]
 
 

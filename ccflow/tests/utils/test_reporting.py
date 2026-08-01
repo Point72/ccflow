@@ -1,6 +1,7 @@
 import logging
 import pickle
-from typing import Callable, ClassVar
+from collections.abc import Callable
+from typing import ClassVar
 from unittest import TestCase
 
 from ccflow.utils.reporting import (
@@ -255,9 +256,8 @@ class TestRunScope(TestCase):
             self.assertTrue(rid)
 
     def test_nested_run_scope_reuses_outer(self):
-        with run_scope("outer"):
-            with run_scope() as inner:
-                self.assertEqual(inner, "outer")
+        with run_scope("outer"), run_scope() as inner:
+            self.assertEqual(inner, "outer")
 
     def test_events_tagged_with_run_id(self):
         reporter = InMemoryReporter()

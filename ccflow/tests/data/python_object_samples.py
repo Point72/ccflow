@@ -1,12 +1,10 @@
 """Sample python objects for testing from_python and identity preservation."""
 
-from typing import Dict
-
 from ccflow import BaseModel
 
 # Module-level objects
-SHARED_CFG: Dict[str, int] = {"x": 1, "y": 2}
-OTHER_CFG: Dict[str, int] = {"x": 10, "y": 20}
+SHARED_CFG: dict[str, int] = {"x": 1, "y": 2}
+OTHER_CFG: dict[str, int] = {"x": 10, "y": 20}
 """Dict samples; identity for dicts is not guaranteed by Pydantic."""
 
 NESTED_CFG = {
@@ -17,7 +15,7 @@ NESTED_CFG = {
 
 class SharedHolder(BaseModel):
     name: str
-    cfg: Dict[str, int]
+    cfg: dict[str, int]
 
 
 class SharedModel(BaseModel):
