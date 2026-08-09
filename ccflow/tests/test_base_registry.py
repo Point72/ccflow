@@ -197,6 +197,15 @@ class TestRegistry(TestCase):
         self.assertListEqual(m.get_registrations(), [(r, "foo"), (r, "bar"), (r2, "foo2"), (r2, "bar2")])
         self.assertListEqual(m.get_registered_names(), ["/foo", "/bar"])
 
+    def test_setitem_directs_users_to_add(self):
+        registry = ModelRegistry(name="test")
+        model = MyTestModel(a="test", b=0.0)
+
+        with self.assertRaisesRegex(TypeError, "use the 'add' method"):
+            registry["foo"] = model
+
+        self.assertEqual(registry.models, {})
+
     def test_add_two_places(self):
         m = MyTestModel(a="test", b=0.0)
         r1 = ModelRegistry(name="test")

@@ -584,6 +584,10 @@ class ModelRegistry(BaseModel, collections.abc.Mapping):
             else:
                 raise KeyError(f"No registered model found by the name '{item}' in registry '{self._debug_name}'")
 
+    def __setitem__(self, name: str, model: BaseModel) -> None:
+        """Reject item assignment in favor of the registry's controlled API."""
+        raise TypeError("ModelRegistry does not support item assignment; use the 'add' method instead.")
+
     def __iter__(self):
         for key, model in self._models.items():
             yield key
