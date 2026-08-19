@@ -2,7 +2,7 @@
 
 from spaday.validate import validate
 
-from ccflow import BaseModel, ModelRegistry
+from ccflow import BaseModel, LazyRegistry, ModelRegistry
 from ccflow.ui.spaday.registry import (
     SELECTED_FIELD,
     registry_leaves,
@@ -135,3 +135,20 @@ class TestRegistryViewer:
         node = registry_viewer(ModelRegistry(name="empty")).to_node()
         # Only the placeholder show panel, no model panels.
         assert [show_when_value(n) for n in nodes_with_tag(node, "spa-show")] == [""]
+
+    def test_lazy_registry_renders_without_materializing_models(self):
+        lazy = LazyRegistry(
+            name="lazy",
+            group={
+                "model": {
+                    "_target_": "ccflow.tests.ui.spaday.test_registry.SimpleModel",
+                    "name": "pending",
+                }
+            },
+        )
+
+        node = registry_viewer(lazy).to_node()
+
+        assert not lazy["group"].is_loaded("model")
+        show_targets = {show_when_value(item) for item in nodes_with_tag(node, "spa-show")}
+        assert "group/model" in show_targets
