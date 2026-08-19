@@ -143,12 +143,17 @@ class TestRegistryViewer:
                 "model": {
                     "_target_": "ccflow.tests.ui.spaday.test_registry.SimpleModel",
                     "name": "pending",
-                }
+                },
+                "other": {
+                    "_target_": "ccflow.tests.ui.spaday.test_registry.SimpleModel",
+                    "name": "other",
+                },
             },
         )
 
         node = registry_viewer(lazy).to_node()
 
         assert not lazy["group"].is_loaded("model")
-        show_targets = {show_when_value(item) for item in nodes_with_tag(node, "spa-show")}
-        assert "group/model" in show_targets
+        assert not lazy["group"].is_loaded("other")
+        # Placeholder plus one shared pending-model panel, not one detail card per pending leaf.
+        assert len(nodes_with_tag(node, "spa-show")) == 2

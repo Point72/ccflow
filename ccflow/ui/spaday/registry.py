@@ -6,8 +6,10 @@ field, and each model's detail card is wrapped in a :class:`~spaday.components.s
 only when ``selected`` equals its path. No round-trip to Python is needed to change the selection.
 """
 
+from collections.abc import Mapping
+
 from spaday import Component, Strong, Text
-from spaday.actions import SetField, eq, field, lit
+from spaday.actions import SetField, any_, eq, field, lit
 from spaday.components import App, Body, Column, Gutter, Main, Nav, Show
 from spaday_webawesome import WaOption, WaSelect, WaTree, WaTreeItem
 
@@ -93,9 +95,15 @@ def registry_viewer(registry, *, title: str = "ccflow Model Registry", browser_w
     )
 
     panels: list[Component] = [Show(_placeholder(), when=eq(field(SELECTED_FIELD), lit("")))]
+    pending_paths = []
     for path, model in leaves:
-        detail = pending_model_view(model, path) if isinstance(model, dict) and "_target_" in model else model_view(model, path)
-        panels.append(Show(detail, when=eq(field(SELECTED_FIELD), lit(path))))
+        if isinstance(model, Mapping) and "_target_" in model:
+            pending_paths.append(path)
+        else:
+            panels.append(Show(model_view(model, path), when=eq(field(SELECTED_FIELD), lit(path))))
+    if pending_paths:
+        pending_selected = any_(*(eq(field(SELECTED_FIELD), lit(path)) for path in pending_paths))
+        panels.append(Show(pending_model_view(field(SELECTED_FIELD)), when=pending_selected))
 
     return App(
         Nav(Strong(title)),

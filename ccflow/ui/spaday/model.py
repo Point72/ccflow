@@ -6,10 +6,10 @@ an instance summary, the model / context / result types with their fields, and t
 """
 
 import json
-from urllib.parse import urlencode
 
 from pydantic._internal._repr import display_as_type
 from spaday import Component, Strong, Text, element
+from spaday.actions import Expr
 from spaday.components import Column, Row
 from spaday_webawesome import Tabs, WaBadge, WaButton, WaCard, WaDivider
 
@@ -37,7 +37,7 @@ def _labeled(label: str, *body: Component) -> Component:
     return Column(Strong(label), *body, gap="0.25rem")
 
 
-def _code(text: str, *, color: str = "") -> Component:
+def _code(text: str | Expr, *, color: str = "") -> Component:
     """An inline ``<code>`` element that wraps long identifiers."""
     node = element("code").text(text).style(overflow_wrap="anywhere")
     return node.style(color=color) if color else node
@@ -126,31 +126,28 @@ def model_view(model, path: str = "") -> Component:
     return WaCard(appearance="outlined").child(Column(header, WaDivider(), tabs, gap="0.75rem"))
 
 
-def _materialize_button(path: str) -> Component:
-    """A link that asks the server to instantiate the pending model and reselect it once loaded."""
-    href = f"{MATERIALIZE_ENDPOINT}?{urlencode({'path': path})}"
-    return WaButton(variant="brand", href=href).text("Materialize")
+def _materialize_button() -> Component:
+    """A form that asks the server to instantiate the pending model and reselect it once loaded."""
+    path = element("input", type="hidden", name="path").bind("value", "selected")
+    return element("form", path, WaButton(variant="brand", type="submit").text("Materialize"), method="post", action=MATERIALIZE_ENDPOINT)
 
 
-def pending_model_view(config, path: str) -> Component:
-    """A card showing configuration for a model that has not been instantiated.
+def pending_model_view(path: str | Expr) -> Component:
+    """A shared card for the currently selected model that has not been instantiated.
 
-    The model is only inspected as its unresolved config here; the ``Materialize`` action instantiates
-    it on the server (in a try/except) and reloads the page with the now-loaded model selected, so its
-    full :func:`model_view` detail is shown.
+    The ``Materialize`` action instantiates it on the server and reloads the page with the now-loaded
+    model selected, so its full :func:`model_view` detail is shown.
     """
-    target = str(config.get("_target_", "Pending model"))
     tabs = Tabs(active="summary")
     tabs.tab(
         "Summary",
         Column(
             _labeled("Registry Path", _code(path)),
             Text("This model has not been instantiated. Materialize it to inspect its type, context, result, and parameters."),
-            _materialize_button(path),
+            _materialize_button(),
             gap="0.75rem",
         ),
         name="summary",
     )
-    tabs.tab("Configuration", _pre(json.dumps(config, indent=2, default=str)), name="configuration")
-    header = Row(WaBadge(variant="neutral").text("Pending"), Strong(target), gap="0.5rem", align="center")
+    header = Row(WaBadge(variant="neutral").text("Pending"), Strong("Pending model"), gap="0.5rem", align="center")
     return WaCard(appearance="outlined").child(Column(header, WaDivider(), tabs, gap="0.75rem"))

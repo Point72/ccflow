@@ -6,15 +6,17 @@ hydra-config-driven command wrapped by the ``ccflow-ui-spaday`` console script.
 """
 
 import argparse
+import asyncio
 import logging
 import os
 from collections.abc import Callable
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote
+
+from spaday_webawesome import package as webawesome_package
 
 from ccflow import ModelRegistry
 from ccflow.utils.hydra import add_hydra_config_args, load_config, resolve_config_paths
-from spaday_webawesome import package as webawesome_package
 
 from .model import MATERIALIZE_ENDPOINT
 from .registry import SELECTED_FIELD, registry_store, registry_viewer
@@ -85,10 +87,11 @@ def serve_registry(
         or an unavailable dependency) the failure is logged and the page still reloads, leaving the
         entry pending so it can be retried.
         """
-        path = request.query_params.get("path", "")
+        body = parse_qs((await request.body()).decode())
+        path = request.query_params.get("path", "") or body.get("path", [""])[0]
         if path:
             try:
-                registry[path]
+                await asyncio.to_thread(registry.__getitem__, path)
             except Exception:
                 log.exception("Failed to materialize lazy registry model %r", path)
         return RedirectResponse(url=f"/?sel={quote(path)}", status_code=303)
@@ -104,7 +107,7 @@ def serve_registry(
         store=registry_store(),
         title=title,
         layout=layout,
-        routes=[Route(MATERIALIZE_ENDPOINT, materialize, methods=["GET"])],
+        routes=[Route(MATERIALIZE_ENDPOINT, materialize, methods=["POST"])],
     )
     # Prepend a homepage that seeds the selection from ?sel= so the freshly materialized model's detail
     # card is shown immediately after the materialize redirect (Starlette matches routes in order).
