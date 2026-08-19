@@ -13,7 +13,7 @@ from spaday.components import Column, Row, Tabs, WaBadge, WaCard, WaDivider
 
 import ccflow
 
-__all__ = ("model_type_view", "model_config_view", "model_view")
+__all__ = ("model_type_view", "model_config_view", "model_view", "pending_model_view")
 
 _PRE_STYLE = {
     "white_space": "pre-wrap",
@@ -117,4 +117,22 @@ def model_view(model, path: str = "") -> Component:
     tabs.tab("Parameters", _pre(json.dumps(params, indent=2, default=str)), name="parameters")
 
     header = Row(WaBadge(variant="brand").text(type_name), Strong(path or type_name), gap="0.5rem", align="center")
+    return WaCard(appearance="outlined").child(Column(header, WaDivider(), tabs, gap="0.75rem"))
+
+
+def pending_model_view(config, path: str) -> Component:
+    """A card showing configuration for a model that has not been instantiated."""
+    target = str(config.get("_target_", "Pending model"))
+    tabs = Tabs(active="summary")
+    tabs.tab(
+        "Summary",
+        Column(
+            _labeled("Registry Path", _code(path)),
+            Text("This model will be instantiated when accessed from Python."),
+            gap="0.75rem",
+        ),
+        name="summary",
+    )
+    tabs.tab("Configuration", _pre(json.dumps(config, indent=2, default=str)), name="configuration")
+    header = Row(WaBadge(variant="neutral").text("Pending"), Strong(target), gap="0.5rem", align="center")
     return WaCard(appearance="outlined").child(Column(header, WaDivider(), tabs, gap="0.75rem"))
