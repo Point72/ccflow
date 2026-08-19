@@ -10,7 +10,8 @@ from urllib.parse import urlencode
 
 from pydantic._internal._repr import display_as_type
 from spaday import Component, Strong, Text, element
-from spaday.components import Column, Row, Tabs, WaBadge, WaButton, WaCard, WaDivider
+from spaday.components import Column, Row
+from spaday_webawesome import Tabs, WaBadge, WaButton, WaCard, WaDivider
 
 import ccflow
 
@@ -18,7 +19,7 @@ import ccflow
 #: pending model server-side and redirects back with it selected.
 MATERIALIZE_ENDPOINT = "/materialize"
 
-__all__ = ("MATERIALIZE_ENDPOINT", "model_type_view", "model_config_view", "model_view", "pending_model_view")
+__all__ = ("MATERIALIZE_ENDPOINT", "model_config_view", "model_type_view", "model_view", "pending_model_view")
 
 _PRE_STYLE = {
     "white_space": "pre-wrap",

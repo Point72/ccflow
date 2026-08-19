@@ -1,6 +1,6 @@
 """Unit tests for ccflow.ui.spaday.model module."""
 
-from typing import Type
+from typing import ClassVar
 
 from pydantic import Field
 from spaday.validate import validate
@@ -30,7 +30,7 @@ class MyCallable(CallableModel):
     x: str = "hi"
 
     @property
-    def context_type(self) -> Type[Ctx]:
+    def context_type(self) -> type[Ctx]:
         return Ctx
 
     @Flow.call
@@ -115,7 +115,7 @@ class TestModelView:
 
 
 class TestPendingModelView:
-    _config = {"_target_": "ccflow.tests.ui.spaday.test_model.SimpleModel", "name": "pending"}
+    _config: ClassVar = {"_target_": "ccflow.tests.ui.spaday.test_model.SimpleModel", "name": "pending"}
 
     def test_is_card(self):
         node = pending_model_view(self._config, "group/model").to_node()
