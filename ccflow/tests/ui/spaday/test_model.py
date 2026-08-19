@@ -1,8 +1,7 @@
 """Unit tests for ccflow.ui.spaday.model module."""
 
-from typing import ClassVar
-
 from pydantic import Field
+from spaday.actions import field
 from spaday.validate import validate
 
 from ccflow import BaseModel, CallableModel, ContextBase, Flow, GenericResult, ModelRegistry
@@ -115,27 +114,22 @@ class TestModelView:
 
 
 class TestPendingModelView:
-    _config: ClassVar = {"_target_": "ccflow.tests.ui.spaday.test_model.SimpleModel", "name": "pending"}
-
     def test_is_card(self):
-        node = pending_model_view(self._config, "group/model").to_node()
+        node = pending_model_view("group/model").to_node()
         assert node["tag"] == "wa-card"
 
-    def test_shows_pending_badge_and_target(self):
-        text = " ".join(all_text(pending_model_view(self._config, "group/model").to_node()))
+    def test_shows_pending_badge_and_path(self):
+        text = " ".join(all_text(pending_model_view("group/model").to_node()))
         assert "Pending" in text
-        assert "SimpleModel" in text
-
-    def test_configuration_tab_shows_target(self):
-        text = " ".join(all_text(pending_model_view(self._config, "group/model").to_node()))
-        assert "_target_" in text
+        assert "group/model" in text
 
     def test_materialize_button_links_to_endpoint_with_path(self):
-        from urllib.parse import urlencode
-
-        node = pending_model_view(self._config, "group/model").to_node()
-        hrefs = [prop_str(button, "href") for button in nodes_with_tag(node, "wa-button")]
-        assert f"{MATERIALIZE_ENDPOINT}?{urlencode({'path': 'group/model'})}" in hrefs
+        node = pending_model_view(field("selected")).to_node()
+        forms = nodes_with_tag(node, "form")
+        assert prop_str(forms[0], "method") == "post"
+        assert prop_str(forms[0], "action") == MATERIALIZE_ENDPOINT
+        inputs = nodes_with_tag(node, "input")
+        assert prop_str(inputs[0], "name") == "path"
 
     def test_validates(self):
-        validate(pending_model_view(self._config, "group/model").to_node())
+        validate(pending_model_view(field("selected")).to_node())
