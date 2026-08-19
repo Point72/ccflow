@@ -1,14 +1,16 @@
 """This module defines the base model and registry for flow."""
 
 import collections.abc
+import contextvars
 import copy
 import inspect
 import logging
 import pathlib
 import platform
 import sys
+import threading
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Iterator, Mapping
 from types import GenericAlias, MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, Optional, TypeVar, Union, get_args, get_origin
 
@@ -43,6 +45,7 @@ __all__ = (
     "BaseModel",
     "ContextBase",
     "ContextType",
+    "LazyRegistry",
     "ModelRegistry",
     "ModelType",
     "RegistryLookupContext",
@@ -59,6 +62,47 @@ REGISTRY_SEPARATOR = "/"
 
 class RegistryKeyError(KeyError):
     """Subclass for KeyError specific to Registry lookup errors."""
+
+
+class _LazyMaterialization:
+    def __init__(self, owner: int, registry: "LazyRegistry", name: str):
+        self.owner = owner
+        self.registry = registry
+        self.name = name
+        self.event = threading.Event()
+        self.error: BaseException | None = None
+
+
+_LAZY_LOADING_STACK: contextvars.ContextVar[tuple[tuple["LazyRegistry", str], ...]] = contextvars.ContextVar("ccflow_lazy_loading_stack", default=())
+_LAZY_COORDINATION_LOCK = threading.RLock()
+_LAZY_MATERIALIZATIONS: dict[tuple[int, str], _LazyMaterialization] = {}
+_LAZY_THREAD_WAITS: dict[int, tuple[int, str]] = {}
+
+
+def _lazy_entry_path(registry: "LazyRegistry", name: str) -> str:
+    prefix = registry._debug_name.rstrip(REGISTRY_SEPARATOR)
+    return f"{prefix}{REGISTRY_SEPARATOR}{name}" if prefix else f"{REGISTRY_SEPARATOR}{name}"
+
+
+def _registry_key_error_from_exception(error: BaseException) -> RegistryKeyError | None:
+    pending = [error]
+    seen = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, RegistryKeyError):
+            return current
+        if isinstance(current, ValidationError):
+            for detail in current.errors():
+                context_error = detail.get("ctx", {}).get("error")
+                if isinstance(context_error, BaseException):
+                    pending.append(context_error)
+        for nested in (current.__cause__, current.__context__):
+            if nested is not None:
+                pending.append(nested)
+    return None
 
 
 class _RegistryMixin:
@@ -584,6 +628,20 @@ class ModelRegistry(BaseModel, collections.abc.Mapping):
             else:
                 raise KeyError(f"No registered model found by the name '{item}' in registry '{self._debug_name}'")
 
+    def __contains__(self, item: object) -> bool:
+        if not isinstance(item, str):
+            return False
+        if REGISTRY_SEPARATOR in item:
+            if "." in item:
+                raise ValueError("Path references to registry objects do not support '.' or '..'")
+            registry_name, name = item.split(REGISTRY_SEPARATOR, 1)
+            if registry_name == "":
+                registry = ModelRegistry.root()
+            else:
+                registry = self._models.get(registry_name)
+            return isinstance(registry, ModelRegistry) and name in registry
+        return item in self._models
+
     def __iter__(self):
         for key, model in self._models.items():
             yield key
@@ -671,6 +729,317 @@ class ModelRegistry(BaseModel, collections.abc.Mapping):
         if config_key is not None:
             cfg = cfg[config_key]
         return self.load_config(cfg, overwrite=overwrite)
+
+
+class _LazyRegistryModels(Mapping[str, BaseModel]):
+    """Read-only direct-child view of a lazy registry."""
+
+    def __init__(self, registry: "LazyRegistry"):
+        self._registry = registry
+
+    def __getitem__(self, name: str) -> BaseModel:
+        if REGISTRY_SEPARATOR in name:
+            raise KeyError(name)
+        return self._registry[name]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(tuple(self._registry._entry_order))
+
+    def __len__(self) -> int:
+        return len(self._registry._entry_order)
+
+    def __contains__(self, name: object) -> bool:
+        return isinstance(name, str) and REGISTRY_SEPARATOR not in name and name in self._registry._entry_order
+
+
+class LazyRegistry(ModelRegistry):
+    """Registry that instantiates configured models when they are first accessed."""
+
+    name: str = ""
+    _pending: dict[str, Any] = PrivateAttr(default_factory=dict)
+    _pending_lookup_registries: dict[str, list[ModelRegistry]] = PrivateAttr(default_factory=dict)
+    _entry_order: list[str] = PrivateAttr(default_factory=list)
+    _lookup_registries: list[ModelRegistry] = PrivateAttr(default_factory=list)
+    _lock: Any = PrivateAttr(default_factory=threading.RLock)
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, value):
+        return value
+
+    def __init__(self, name: str = "", **config):
+        super().__init__(name=name)
+        lookup_registries = list(RegistryLookupContext.registry_search_paths() or [])
+        self._lookup_registries = [*lookup_registries, self] if lookup_registries else [self]
+        self._load_config(config, overwrite=False, lookup_registries=self._lookup_registries)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, LazyRegistry) or self.name != other.name or self._entry_order != other._entry_order:
+            return False
+        self.materialize_all()
+        other.materialize_all()
+        return self._models == other._models
+
+    @model_serializer(mode="wrap")
+    def _lazy_registry_serializer(self, handler):
+        values = handler(self)
+        values["_recursive_"] = False
+        values.update(self._config_tree())
+        return values
+
+    def _config_tree(self) -> dict[str, Any]:
+        values = {}
+        for name in self._entry_order:
+            if name in self._models:
+                model = self._models[name]
+                values[name] = model._config_tree() if isinstance(model, LazyRegistry) else model.model_dump(by_alias=True)
+            else:
+                values[name] = copy.deepcopy(self._pending[name])
+        return values
+
+    @property
+    def models(self) -> Mapping[str, BaseModel]:
+        """Return a read-only view that materializes values only when accessed."""
+        return _LazyRegistryModels(self)
+
+    def is_loaded(self, name: str) -> bool:
+        """Return whether a direct child has been instantiated."""
+        return name in self._models
+
+    def get_loaded(self, name: str) -> BaseModel | None:
+        """Return an instantiated direct child without loading a pending entry."""
+        return self._models.get(name)
+
+    def get_pending_config(self, name: str) -> Mapping[str, Any] | None:
+        """Return a pending direct child's configuration without instantiating it."""
+        if name in self._models or name not in self._pending:
+            return None
+        return MappingProxyType(copy.deepcopy(self._pending[name]))
+
+    def clone(self, name: str | None = None) -> Self:
+        """Shallow-clone this registry without instantiating pending entries."""
+        cloned = type(self)(name=name or self.name)
+        cloned._lookup_registries = [cloned if registry is self else registry for registry in self._lookup_registries]
+        for entry_name in self._entry_order:
+            if entry_name in self._models:
+                cloned.add(entry_name, self._models[entry_name])
+            else:
+                lookup_registries = [cloned if registry is self else registry for registry in self._pending_lookup_registries[entry_name]]
+                cloned._add_pending(entry_name, copy.deepcopy(self._pending[entry_name]), False, lookup_registries)
+        return cloned
+
+    def __getstate__(self):
+        state = super().__getstate__()
+        private = dict(state.get("__pydantic_private__") or {})
+        private.pop("_lock", None)
+        state["__pydantic_private__"] = private
+        return state
+
+    def __setstate__(self, state):
+        super().__setstate__(state)
+        self._lock = threading.RLock()
+
+    def _load_config(self, cfg, overwrite: bool, lookup_registries: list[ModelRegistry]) -> None:
+        from omegaconf import DictConfig, OmegaConf
+
+        if isinstance(cfg, DictConfig):
+            cfg = OmegaConf.to_container(cfg, resolve=True)
+        for key, value in cfg.items():
+            if isinstance(value, BaseModel):
+                raise TypeError(
+                    f"Lazy registry entry '{key}' was instantiated before reaching LazyRegistry. "
+                    "Set '_recursive_: false' on the LazyRegistry Hydra config."
+                )
+            if not isinstance(value, (dict, DictConfig)):
+                continue
+            if isinstance(value, DictConfig):
+                value = OmegaConf.to_container(value, resolve=True)
+            if _is_config_model(value):
+                self._add_pending(key, value, overwrite, lookup_registries)
+            elif _is_config_subregistry(value):
+                child = LazyRegistry(name=key)
+                child._lookup_registries = [*lookup_registries, child]
+                child._load_config(value, overwrite=False, lookup_registries=child._lookup_registries)
+                self.add(key, child, overwrite=overwrite)
+
+    def _add_pending(self, name: str, cfg: Any, overwrite: bool, lookup_registries: list[ModelRegistry]) -> None:
+        if REGISTRY_SEPARATOR in name:
+            raise ValueError(f"Cannot add '{name}' to '{self._debug_name}' because it contains '{REGISTRY_SEPARATOR}'")
+        if name in self._entry_order and not overwrite:
+            raise ValueError(f"Cannot add '{name}' to '{self._debug_name}' as it already exists!")
+        with _LAZY_COORDINATION_LOCK:
+            if (id(self), name) in _LAZY_MATERIALIZATIONS:
+                raise RuntimeError(f"Cannot replace '{name}' in '{self._debug_name}' while it is being materialized")
+        if name in self._models:
+            ModelRegistry.remove(self, name)
+        if name not in self._entry_order:
+            self._entry_order.append(name)
+        self._pending[name] = cfg
+        self._pending_lookup_registries[name] = list(lookup_registries)
+
+    def _materialize(self, name: str) -> BaseModel:
+        from hydra.utils import instantiate
+
+        key = (id(self), name)
+        stack = _LAZY_LOADING_STACK.get()
+        for index, entry in enumerate(stack):
+            if (id(entry[0]), entry[1]) == key:
+                cycle = [*stack[index:], (self, name)]
+                paths = " -> ".join(_lazy_entry_path(registry, entry_name) for registry, entry_name in cycle)
+                raise RegistryKeyError(f"Circular lazy registry dependency detected: {paths}")
+
+        with self._lock:
+            if name in self._models:
+                return self._models[name]
+            if name not in self._pending:
+                raise KeyError(f"No registered model found by the name '{name}' in registry '{self._debug_name}'")
+            cfg = self._pending[name]
+            lookup_registries = self._pending_lookup_registries[name]
+
+        owner = threading.get_ident()
+        with _LAZY_COORDINATION_LOCK:
+            materialization = _LAZY_MATERIALIZATIONS.get(key)
+            if materialization is None:
+                materialization = _LazyMaterialization(owner, self, name)
+                _LAZY_MATERIALIZATIONS[key] = materialization
+                owns_materialization = True
+            else:
+                owns_materialization = False
+                _LAZY_THREAD_WAITS[owner] = key
+                waiting_owner = materialization.owner
+                wait_chain = [key]
+                while waiting_owner in _LAZY_THREAD_WAITS:
+                    waiting_key = _LAZY_THREAD_WAITS[waiting_owner]
+                    wait_chain.append(waiting_key)
+                    waiting_materialization = _LAZY_MATERIALIZATIONS.get(waiting_key)
+                    if waiting_materialization is None:
+                        break
+                    waiting_owner = waiting_materialization.owner
+                    if waiting_owner == owner:
+                        _LAZY_THREAD_WAITS.pop(owner, None)
+                        cycle = [*stack, *((entry.registry, entry.name) for entry in (materialization,))]
+                        cycle.extend(
+                            (_LAZY_MATERIALIZATIONS[waiting_key].registry, _LAZY_MATERIALIZATIONS[waiting_key].name)
+                            for waiting_key in wait_chain[1:]
+                            if waiting_key in _LAZY_MATERIALIZATIONS
+                        )
+                        paths = " -> ".join(_lazy_entry_path(registry, entry_name) for registry, entry_name in cycle)
+                        raise RegistryKeyError(f"Circular lazy registry dependency detected: {paths}")
+
+        if not owns_materialization:
+            materialization.event.wait()
+            with _LAZY_COORDINATION_LOCK:
+                _LAZY_THREAD_WAITS.pop(owner, None)
+            if materialization.error is not None:
+                raise materialization.error
+            return self._materialize(name)
+
+        token = _LAZY_LOADING_STACK.set((*stack, (self, name)))
+        try:
+            with RegistryLookupContext(registries=lookup_registries):
+                model = instantiate(cfg, _convert_="all")
+            if not isinstance(model, BaseModel):
+                raise TypeError(f"Lazy registry entry '{name}' produced '{type(model)}', not a child class of {BaseModel}.")
+            if hasattr(model, "meta") and hasattr(model.meta, "name") and model.meta.name == "":
+                model.meta.name = name
+            with self._lock:
+                ModelRegistry.add(self, name, model)
+                del self._pending[name]
+                del self._pending_lookup_registries[name]
+            return model
+        except BaseException as error:
+            registry_error = _registry_key_error_from_exception(error)
+            materialization.error = registry_error or error
+            if registry_error is not None:
+                raise registry_error from error
+            raise
+        finally:
+            _LAZY_LOADING_STACK.reset(token)
+            with _LAZY_COORDINATION_LOCK:
+                _LAZY_MATERIALIZATIONS.pop(key, None)
+                materialization.event.set()
+
+    def add(self, name: str, model: ModelType, overwrite: bool = False) -> ModelType:
+        with self._lock:
+            if name in self._pending and not overwrite:
+                raise ValueError(f"Cannot add '{name}' to '{self._debug_name}' as it already exists!")
+            result = super().add(name, model, overwrite=overwrite)
+            if name not in self._entry_order:
+                self._entry_order.append(name)
+            if name in self._pending:
+                del self._pending[name]
+                del self._pending_lookup_registries[name]
+            return result
+
+    def remove(self, name: str) -> None:
+        with self._lock:
+            if name in self._models:
+                super().remove(name)
+                self._pending.pop(name, None)
+                self._pending_lookup_registries.pop(name, None)
+            elif name in self._pending:
+                del self._pending[name]
+                del self._pending_lookup_registries[name]
+            else:
+                raise ValueError(f"Cannot remove '{name}' from '{self._debug_name}' as it does not exist there!")
+            self._entry_order.remove(name)
+
+    def clear(self) -> Self:
+        for name in list(self._entry_order):
+            self.remove(name)
+        return self
+
+    def __getitem__(self, item) -> ModelType:
+        if REGISTRY_SEPARATOR in item:
+            head, _, _ = item.partition(REGISTRY_SEPARATOR)
+            if head and head in self._pending:
+                self._materialize(head)
+            return super().__getitem__(item)
+        return self._materialize(item) if item in self._pending else super().__getitem__(item)
+
+    def __contains__(self, item: object) -> bool:
+        if not isinstance(item, str):
+            return False
+        if REGISTRY_SEPARATOR in item:
+            return super().__contains__(item)
+        return item in self._entry_order
+
+    def __iter__(self):
+        for key in tuple(self._entry_order):
+            yield key
+            model = self._models.get(key)
+            if isinstance(model, ModelRegistry):
+                for subkey in model:
+                    yield REGISTRY_SEPARATOR.join((key, subkey))
+
+    def __len__(self) -> int:
+        count = len(self._entry_order)
+        for model in self._models.values():
+            if isinstance(model, ModelRegistry):
+                count += len(model)
+        return count
+
+    def load_config(
+        self,
+        cfg: "DictConfig",
+        overwrite: bool = False,
+        skip_exceptions: bool = False,
+        resolve_from: ModelRegistry | None = None,
+    ) -> Self:
+        if skip_exceptions:
+            raise ValueError("skip_exceptions is not supported by LazyRegistry")
+        lookup_registries = [resolve_from, self] if resolve_from is not None and resolve_from is not self else self._lookup_registries
+        with self._lock:
+            self._load_config(cfg, overwrite=overwrite, lookup_registries=lookup_registries)
+        return self
+
+    def materialize_all(self) -> Self:
+        """Instantiate every pending model in this registry tree."""
+        for name in tuple(self._entry_order):
+            model = self[name]
+            if isinstance(model, LazyRegistry):
+                model.materialize_all()
+        return self
 
 
 class RootModelRegistry(ModelRegistry):
@@ -771,6 +1140,8 @@ class _ModelRegistryLoader:
 
                 if hasattr(model, "meta") and hasattr(model.meta, "name") and model.meta.name == "":
                     model.meta.name = k
+                if isinstance(model, LazyRegistry) and not model.name:
+                    model.name = k
                 registries[-1].add(k, model, overwrite=self._overwrite)
 
             if not unresolved_models:
@@ -817,7 +1188,7 @@ class RegistryLookupContext:
     Do not confuse the name with "Context" from callable.py.
     """
 
-    _REGISTRIES: ClassVar[list[ModelRegistry]] = []
+    _REGISTRIES: ClassVar[contextvars.ContextVar[tuple[ModelRegistry, ...]]] = contextvars.ContextVar("ccflow_registry_lookup_context", default=())
 
     def __init__(self, registries: list[ModelRegistry] | None = None):
         """Constructor.
@@ -827,19 +1198,19 @@ class RegistryLookupContext:
                 this context.
         """
         self.registries = registries
-        self._previous_registries = []
+        self._token = None
 
     @classmethod
     def registry_search_paths(cls) -> list[ModelRegistry]:
         """Return the active list of additional registry search paths."""
-        return cls._REGISTRIES
+        return list(cls._REGISTRIES.get())
 
     def __enter__(self):
-        self._previous_registries = self._REGISTRIES
-        RegistryLookupContext._REGISTRIES = self.registries
+        self._token = self._REGISTRIES.set(tuple(self.registries or ()))
 
     def __exit__(self, exc_type, exc_value, exc_tb):
-        RegistryLookupContext._REGISTRIES = self._previous_registries
+        if self._token is not None:
+            self._REGISTRIES.reset(self._token)
 
 
 def resolve_str(v: str) -> ModelType:
@@ -864,6 +1235,8 @@ def resolve_str(v: str) -> ModelType:
     search_registry = search_registries[idx]
     try:
         return search_registry[v]
+    except RegistryKeyError:
+        raise
     except KeyError:
         # A common mistake is to forget to start an absolute lookup with a forward slash. Return a better error message in that case.
         if not original_v.startswith("/"):

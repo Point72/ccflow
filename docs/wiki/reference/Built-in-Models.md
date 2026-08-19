@@ -15,6 +15,13 @@ Beyond the `CallableModel` and `BaseModel` subclasses you write yourself, `ccflo
 
 Additional data-reading models are being open-sourced over time.
 
+## Registries
+
+| Name            | Path     | Description                                                        |
+| :-------------- | :------- | :----------------------------------------------------------------- |
+| `ModelRegistry` | `ccflow` | Stores named models and nested registries.                         |
+| `LazyRegistry`  | `ccflow` | Stores model configuration and constructs each model on first use. |
+
 ## Publishers
 
 Publishers (`ccflow.publishers`) are models that write or send data. A common interface lets one be substituted for another purely through configuration. See [Bind Logic to Configs](Bind-Logic-to-Configs#write-a-custom-publisher) to write your own.
