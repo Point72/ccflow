@@ -387,6 +387,7 @@ class _LocalFlowModelPicklePayload(NamedTuple):
     serialized_config: Any
     factory_kwargs: dict[str, Any]
 
+
 def _context_values(context: ContextBase) -> dict[str, Any]:
     return dict(context)
 

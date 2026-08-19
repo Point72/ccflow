@@ -6,17 +6,16 @@ field, and each model's detail card is wrapped in a :class:`~spaday.components.s
 only when ``selected`` equals its path. No round-trip to Python is needed to change the selection.
 """
 
-from typing import List, Tuple
-
 from spaday import Component, Strong, Text
 from spaday.actions import SetField, eq, field, lit
-from spaday.components import App, Body, Column, Gutter, Main, Nav, Show, WaOption, WaSelect, WaTree, WaTreeItem
+from spaday.components import App, Body, Column, Gutter, Main, Nav, Show
+from spaday_webawesome import WaOption, WaSelect, WaTree, WaTreeItem
 
 import ccflow
 
 from .model import model_view, pending_model_view
 
-__all__ = ("SELECTED_FIELD", "registry_store", "registry_leaves", "registry_tree", "registry_viewer")
+__all__ = ("SELECTED_FIELD", "registry_leaves", "registry_store", "registry_tree", "registry_viewer")
 
 #: The signal-store field holding the selected model's registry path ("" when nothing is selected).
 SELECTED_FIELD = "selected"
@@ -41,9 +40,9 @@ def _sorted_items(registry, sort_children: bool):
     return list(items)
 
 
-def registry_leaves(registry, *, sort_children: bool = True, _prefix: str = "") -> List[Tuple[str, object]]:
+def registry_leaves(registry, *, sort_children: bool = True, _prefix: str = "") -> list[tuple[str, object]]:
     """Return ``(path, model)`` for every leaf model in the registry, depth-first."""
-    leaves: List[Tuple[str, object]] = []
+    leaves: list[tuple[str, object]] = []
     for name, model in _sorted_items(registry, sort_children):
         path = f"{_prefix}/{name}" if _prefix else name
         if isinstance(model, ccflow.ModelRegistry):
@@ -53,9 +52,9 @@ def registry_leaves(registry, *, sort_children: bool = True, _prefix: str = "") 
     return leaves
 
 
-def registry_tree(registry, *, sort_children: bool = True, _prefix: str = "") -> List[WaTreeItem]:
+def registry_tree(registry, *, sort_children: bool = True, _prefix: str = "") -> list[WaTreeItem]:
     """Build the ``wa-tree-item`` nodes for the registry; leaf clicks select the model by path."""
-    nodes: List[WaTreeItem] = []
+    nodes: list[WaTreeItem] = []
     for name, model in _sorted_items(registry, sort_children):
         path = f"{_prefix}/{name}" if _prefix else name
         if isinstance(model, ccflow.ModelRegistry):
@@ -75,7 +74,7 @@ def _placeholder() -> Component:
     )
 
 
-def _search(leaves: List[Tuple[str, object]]) -> WaSelect:
+def _search(leaves: list[tuple[str, object]]) -> WaSelect:
     """A select of every model path, two-way bound to the selection so it both jumps and reflects."""
     options = [WaOption(value="").text("— jump to a model —")]
     options += [WaOption(value=path).text(path) for path, _ in sorted(leaves)]
@@ -93,7 +92,7 @@ def registry_viewer(registry, *, title: str = "ccflow Model Registry", browser_w
         gap="0.75rem",
     )
 
-    panels: List[Component] = [Show(_placeholder(), when=eq(field(SELECTED_FIELD), lit("")))]
+    panels: list[Component] = [Show(_placeholder(), when=eq(field(SELECTED_FIELD), lit("")))]
     for path, model in leaves:
         detail = pending_model_view(model, path) if isinstance(model, dict) and "_target_" in model else model_view(model, path)
         panels.append(Show(detail, when=eq(field(SELECTED_FIELD), lit(path))))

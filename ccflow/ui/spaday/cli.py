@@ -8,17 +8,18 @@ hydra-config-driven command wrapped by the ``ccflow-ui-spaday`` console script.
 import argparse
 import logging
 import os
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Optional
 from urllib.parse import quote
 
 from ccflow import ModelRegistry
 from ccflow.utils.hydra import add_hydra_config_args, load_config, resolve_config_paths
+from spaday_webawesome import package as webawesome_package
 
 from .model import MATERIALIZE_ENDPOINT
 from .registry import SELECTED_FIELD, registry_store, registry_viewer
 
-__all__ = ("serve_registry", "registry_viewer_cli", "main")
+__all__ = ("main", "registry_viewer_cli", "serve_registry")
 
 log = logging.getLogger(__name__)
 
@@ -95,11 +96,11 @@ def serve_registry(
     def homepage(request):
         """Serve the page with the ``?sel=`` model preselected (used by the materialize redirect)."""
         selected = request.query_params.get("sel", "")
-        return HTMLResponse(bootstrap(bundles=["webawesome"], store={SELECTED_FIELD: selected}, title=title, layout=layout))
+        return HTMLResponse(bootstrap(packages=webawesome_package, store={SELECTED_FIELD: selected}, title=title, layout=layout))
 
     app = serve(
         page,
-        bundles=["webawesome"],
+        packages=webawesome_package,
         store=registry_store(),
         title=title,
         layout=layout,
@@ -150,7 +151,7 @@ def _get_ui_args_parser() -> argparse.ArgumentParser:
 def registry_viewer_cli(
     config_path: str = "",
     config_name: str = "",
-    hydra_main: Optional[Callable] = None,
+    hydra_main: Callable | None = None,
 ):
     """CLI entry point for serving the spaday ModelRegistry viewer.
 
