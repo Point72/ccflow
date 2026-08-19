@@ -76,6 +76,23 @@ Hydra is excellent at composing files and instantiating objects, but on its own 
 
 **The same power without files.** The registry provides the interactive half of the story. `ModelRegistry.load_config(...)` loads a dictionary of configs (resolving name references as it goes), and `load_config_from_path(...)` loads the same Hydra files a CLI would use — so a researcher can pull the production configuration into a notebook, inspect it, tweak an object, and re-run, all as live Python objects.
 
+### Deferred registry construction
+
+`LazyRegistry` keeps composed model configuration without importing or constructing each model immediately. Hydra must pass nested targets through unchanged, so a lazy registry target includes `_recursive_: false`:
+
+```yaml
+models:
+  _target_: ccflow.LazyRegistry
+  _recursive_: false
+
+  source:
+    _target_: my_package.SourceModel
+```
+
+Accessing `registry["source"]` constructs and caches that model. References encountered during validation materialize their dependencies in the same way, so forward references do not require the eager loader's retry loop. `materialize_all()` constructs the complete tree when eager validation is useful, such as in configuration tests.
+
+Deferral changes when errors appear: missing references, dependency cycles, import failures, and validation errors surface when the affected entry is accessed rather than when the registry configuration is loaded.
+
 ## The payoff
 
 Put together, the configuration story gives you:
