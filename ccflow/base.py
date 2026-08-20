@@ -642,6 +642,10 @@ class ModelRegistry(BaseModel, collections.abc.Mapping):
             return isinstance(registry, ModelRegistry) and name in registry
         return item in self._models
 
+    def __setitem__(self, name: str, model: BaseModel) -> None:
+        """Reject item assignment in favor of the registry's controlled API."""
+        raise TypeError("ModelRegistry does not support item assignment; use the 'add' method instead.")
+
     def __iter__(self):
         for key, model in self._models.items():
             yield key
