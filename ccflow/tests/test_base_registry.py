@@ -1,9 +1,12 @@
 import collections.abc
+import concurrent.futures
 import json
 import os
 import pickle
 import sys
-from unittest import TestCase
+import threading
+from typing import ClassVar
+from unittest import TestCase, mock
 
 import pytest
 from hydra.errors import InstantiationException
@@ -11,7 +14,7 @@ from omegaconf import OmegaConf
 from omegaconf.errors import InterpolationKeyError
 from pydantic import ConfigDict, Field
 
-from ccflow import BaseModel, ModelRegistry, RegistryLookupContext, RootModelRegistry, model_alias
+from ccflow import BaseModel, LazyRegistry, ModelRegistry, RegistryLookupContext, RootModelRegistry, model_alias
 from ccflow.base import RegistryKeyError, resolve_str
 
 
@@ -28,6 +31,32 @@ class MyTestModel2(BaseModel):
 
 class MyTestModelSubclass(MyTestModel):
     pass
+
+
+class LazyTestModel(MyTestModel):
+    constructions: ClassVar[int] = 0
+
+    def __init__(self, **data):
+        type(self).constructions += 1
+        super().__init__(**data)
+
+
+class ConcurrentLazyTestModel(MyTestModel):
+    barrier: ClassVar[threading.Barrier | None] = None
+
+    def __init__(self, **data):
+        if self.barrier is not None:
+            self.barrier.wait(timeout=2)
+        super().__init__(**data)
+
+
+class IndexableLazyTestModel(BaseModel):
+    child: MyTestModel
+
+    def __getitem__(self, name: str) -> MyTestModel:
+        if name != "child":
+            raise KeyError(name)
+        return self.child
 
 
 class MyClass:
@@ -670,6 +699,363 @@ class TestRegistryLoading(TestCase):
         )
         r.load_config(cfg, resolve_from=r)
         self.assertEqual(r["foo"], MyTestModel(a="test", b=0.0))
+
+
+class TestLazyRegistry(TestCase):
+    def setUp(self) -> None:
+        ModelRegistry.root().clear()
+        LazyTestModel.constructions = 0
+
+    def tearDown(self) -> None:
+        ModelRegistry.root().clear()
+
+    @staticmethod
+    def _load_registry():
+        cfg = OmegaConf.create(
+            {
+                "lazy": {
+                    "_target_": "ccflow.base.LazyRegistry",
+                    "_recursive_": False,
+                    "group": {
+                        "source": {
+                            "_target_": "ccflow.tests.test_base_registry.LazyTestModel",
+                            "a": "source",
+                            "b": 1.0,
+                        },
+                        "dependent": {
+                            "_target_": "ccflow.tests.test_base_registry.MyNestedModel",
+                            "x": "/lazy/group/source",
+                            "y": "source",
+                        },
+                    },
+                }
+            }
+        )
+        root = ModelRegistry.root()
+        root.load_config(cfg)
+        return root
+
+    def test_defers_models_until_access(self):
+        root = self._load_registry()
+        lazy = root["lazy"]
+
+        self.assertIsInstance(lazy, LazyRegistry)
+        self.assertEqual(lazy.name, "lazy")
+        self.assertEqual(LazyTestModel.constructions, 0)
+        self.assertIn("lazy/group/source", root)
+        self.assertIn("group/source", lazy)
+        self.assertIn("source", lazy["group"].models)
+        self.assertIn("lazy/group/source", list(root.keys()))
+        self.assertEqual(LazyTestModel.constructions, 0)
+
+        source = root["/lazy/group/source"]
+        self.assertIsInstance(source, LazyTestModel)
+        self.assertEqual(LazyTestModel.constructions, 1)
+        self.assertIs(root["/lazy/group/source"], source)
+        self.assertEqual(LazyTestModel.constructions, 1)
+
+    def test_materializes_dependency_closure(self):
+        root = self._load_registry()
+
+        dependent = root["/lazy/group/dependent"]
+
+        self.assertEqual(LazyTestModel.constructions, 1)
+        self.assertIs(dependent.x, root["/lazy/group/source"])
+        self.assertIs(dependent.y, root["/lazy/group/source"])
+
+    def test_nested_path_materializes_pending_head(self):
+        root = ModelRegistry.root()
+        root.load_config(
+            OmegaConf.create(
+                {
+                    "lazy": {
+                        "_target_": "ccflow.base.LazyRegistry",
+                        "_recursive_": False,
+                        "parent": {
+                            "_target_": "ccflow.tests.test_base_registry.IndexableLazyTestModel",
+                            "child": {
+                                "_target_": "ccflow.tests.test_base_registry.MyTestModel",
+                                "a": "child",
+                                "b": 1.0,
+                            },
+                        },
+                    }
+                }
+            )
+        )
+        lazy = root["lazy"]
+
+        child = root["/lazy/parent/child"]
+
+        self.assertEqual(child.a, "child")
+        self.assertTrue(lazy.is_loaded("parent"))
+
+    def test_pending_entries_support_mutation(self):
+        registry = LazyRegistry(
+            name="lazy",
+            pending={
+                "_target_": "ccflow.tests.test_base_registry.LazyTestModel",
+                "a": "pending",
+                "b": 1.0,
+            },
+        )
+        replacement = MyTestModel(a="replacement", b=2.0)
+
+        with self.assertRaises(ValueError):
+            registry.add("pending", replacement)
+        registry.add("pending", replacement, overwrite=True)
+        self.assertIs(registry["pending"], replacement)
+        self.assertEqual(LazyTestModel.constructions, 0)
+
+        registry.load_config(
+            OmegaConf.create(
+                {
+                    "other": {
+                        "_target_": "ccflow.tests.test_base_registry.LazyTestModel",
+                        "a": "other",
+                        "b": 3.0,
+                    }
+                }
+            )
+        )
+        registry.remove("other")
+        self.assertNotIn("other", registry)
+        self.assertEqual(LazyTestModel.constructions, 0)
+
+    def test_cycle_reports_dependency_chain(self):
+        root = ModelRegistry.root()
+        root.load_config(
+            OmegaConf.create(
+                {
+                    "lazy": {
+                        "_target_": "ccflow.base.LazyRegistry",
+                        "_recursive_": False,
+                        "a": {
+                            "_target_": "ccflow.tests.test_base_registry.MyNestedModel",
+                            "x": "b",
+                            "y": "b",
+                        },
+                        "b": {
+                            "_target_": "ccflow.tests.test_base_registry.MyNestedModel",
+                            "x": "a",
+                            "y": "a",
+                        },
+                    }
+                }
+            )
+        )
+
+        with self.assertRaisesRegex(RegistryKeyError, "Circular lazy registry dependency detected: /lazy/a -> /lazy/b -> /lazy/a"):
+            root["/lazy/a"]
+
+    def test_cross_registry_cycle_reports_full_path(self):
+        root = ModelRegistry.root()
+        left = LazyRegistry(name="left")
+        right = LazyRegistry(name="right")
+        root.add("left", left)
+        root.add("right", right)
+        left.load_config(
+            OmegaConf.create({"model": {"_target_": "ccflow.tests.test_base_registry.MyNestedModel", "x": "/right/model", "y": "/right/model"}}),
+            resolve_from=root,
+        )
+        right.load_config(
+            OmegaConf.create({"model": {"_target_": "ccflow.tests.test_base_registry.MyNestedModel", "x": "/left/model", "y": "/left/model"}}),
+            resolve_from=root,
+        )
+
+        with self.assertRaisesRegex(
+            RegistryKeyError,
+            "Circular lazy registry dependency detected: /left/model -> /right/model -> /left/model",
+        ):
+            left["model"]
+
+    def test_concurrent_cross_registry_cycle_does_not_deadlock(self):
+        from hydra.utils import instantiate as hydra_instantiate
+
+        root = ModelRegistry.root()
+        left = LazyRegistry(name="left")
+        right = LazyRegistry(name="right")
+        root.add("left", left)
+        root.add("right", right)
+        for registry, dependency in ((left, "/right/model"), (right, "/left/model")):
+            registry.load_config(
+                OmegaConf.create({"model": {"_target_": "ccflow.tests.test_base_registry.MyNestedModel", "x": dependency, "y": dependency}}),
+                resolve_from=root,
+            )
+
+        barrier = threading.Barrier(2)
+        local = threading.local()
+
+        def synchronized_instantiate(*args, **kwargs):
+            if not getattr(local, "started", False):
+                local.started = True
+                barrier.wait(timeout=2)
+            return hydra_instantiate(*args, **kwargs)
+
+        with (
+            mock.patch("hydra.utils.instantiate", side_effect=synchronized_instantiate),
+            concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor,
+        ):
+            futures = [executor.submit(registry.__getitem__, "model") for registry in (left, right)]
+            messages = []
+            for future in futures:
+                with self.assertRaises(RegistryKeyError) as context:
+                    future.result(timeout=3)
+                messages.append(str(context.exception))
+
+        for message in messages:
+            self.assertIn("/left/model", message)
+            self.assertIn("/right/model", message)
+
+    def test_missing_reference_raises_registry_key_error_directly(self):
+        registry = LazyRegistry(
+            name="lazy",
+            model={"_target_": "ccflow.tests.test_base_registry.MyNestedModel", "x": "missing", "y": "missing"},
+        )
+
+        with self.assertRaisesRegex(RegistryKeyError, "Could not resolve model 'missing'"):
+            registry["model"]
+
+    def test_contains_rejects_dotted_paths_consistently(self):
+        registry = LazyRegistry(name="lazy")
+
+        with self.assertRaisesRegex(ValueError, "do not support"):
+            _ = "foo.bar/baz" in registry
+
+    def test_serialization_round_trip_preserves_pending_entries(self):
+        registry = self._load_registry()["lazy"]
+
+        dumped = registry.model_dump(by_alias=True)
+
+        self.assertEqual(LazyTestModel.constructions, 0)
+        self.assertNotIn("models", dumped)
+        self.assertFalse(registry["group"].is_loaded("source"))
+        restored = LazyRegistry.model_validate(dumped)
+        self.assertEqual(list(restored), list(registry))
+        self.assertFalse(restored["group"].is_loaded("source"))
+
+    def test_clone_preserves_pending_entries(self):
+        registry = self._load_registry()["lazy"]
+
+        cloned = registry.clone(name="clone")
+
+        self.assertIsInstance(cloned, LazyRegistry)
+        self.assertEqual(cloned.name, "clone")
+        self.assertEqual(list(cloned), list(registry))
+        self.assertFalse(registry["group"].is_loaded("source"))
+        self.assertFalse(cloned["group"].is_loaded("source"))
+
+    def test_failed_overwrite_preserves_pending_entry(self):
+        registry = LazyRegistry(
+            name="lazy",
+            pending={
+                "_target_": "ccflow.tests.test_base_registry.LazyTestModel",
+                "a": "pending",
+                "b": 1.0,
+            },
+        )
+
+        with self.assertRaises(TypeError):
+            registry.add("pending", object(), overwrite=True)
+
+        self.assertIn("pending", registry)
+        self.assertIsNotNone(registry.get_pending_config("pending"))
+        self.assertEqual(registry["pending"].a, "pending")
+
+    def test_pending_config_is_read_only_copy(self):
+        registry = LazyRegistry(
+            name="lazy",
+            pending={
+                "_target_": "ccflow.tests.test_base_registry.LazyTestModel",
+                "a": "pending",
+                "b": 1.0,
+            },
+        )
+        config = registry.get_pending_config("pending")
+
+        with self.assertRaises(TypeError):
+            config["a"] = "changed"
+
+        self.assertEqual(registry["pending"].a, "pending")
+
+    def test_recursive_hydra_instantiation_is_rejected(self):
+        from hydra.utils import instantiate
+
+        cfg = OmegaConf.create(
+            {
+                "_target_": "ccflow.base.LazyRegistry",
+                "name": "lazy",
+                "model": {
+                    "_target_": "ccflow.tests.test_base_registry.LazyTestModel",
+                    "a": "pending",
+                    "b": 1.0,
+                },
+            }
+        )
+
+        with self.assertRaisesRegex(InstantiationException, "Set '_recursive_: false'"):
+            instantiate(cfg, _convert_="all")
+
+    def test_resolve_from_applies_to_direct_pending_entry(self):
+        root = ModelRegistry.root()
+        source = MyTestModel(a="source", b=1.0)
+        root.add("source", source)
+        registry = LazyRegistry(name="lazy")
+        registry.load_config(
+            OmegaConf.create(
+                {
+                    "dependent": {
+                        "_target_": "ccflow.tests.test_base_registry.MyNestedModel",
+                        "x": "/source",
+                        "y": "/source",
+                    }
+                }
+            ),
+            resolve_from=root,
+        )
+
+        self.assertIs(registry["dependent"].x, source)
+
+    def test_equality_is_independent_of_materialization_state(self):
+        left = LazyRegistry(
+            name="lazy",
+            model={"_target_": "ccflow.tests.test_base_registry.LazyTestModel", "a": "same", "b": 1.0},
+        )
+        right = LazyRegistry(
+            name="lazy",
+            model={"_target_": "ccflow.tests.test_base_registry.LazyTestModel", "a": "same", "b": 1.0},
+        )
+
+        left["model"]
+
+        self.assertEqual(left, right)
+
+    def test_independent_registries_materialize_concurrently(self):
+        ConcurrentLazyTestModel.barrier = threading.Barrier(2)
+        left = LazyRegistry(
+            name="left",
+            model={"_target_": "ccflow.tests.test_base_registry.ConcurrentLazyTestModel", "a": "left", "b": 1.0},
+        )
+        right = LazyRegistry(
+            name="right",
+            model={"_target_": "ccflow.tests.test_base_registry.ConcurrentLazyTestModel", "a": "right", "b": 1.0},
+        )
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(registry.__getitem__, "model") for registry in (left, right)]
+            for future in futures:
+                future.result(timeout=3)
+        ConcurrentLazyTestModel.barrier = None
+
+    def test_pickle_preserves_pending_entries_and_recreates_lock(self):
+        registry = LazyRegistry(
+            name="lazy",
+            model={"_target_": "ccflow.tests.test_base_registry.LazyTestModel", "a": "pending", "b": 1.0},
+        )
+
+        restored = pickle.loads(pickle.dumps(registry))
+
+        self.assertFalse(restored.is_loaded("model"))
+        self.assertEqual(restored["model"].a, "pending")
 
 
 class TestRegistryLoadingErrors(TestCase):
