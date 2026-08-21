@@ -11,10 +11,10 @@ import numpy as np
 from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field, ValidationError
 
 from ccflow import BaseModel, GenericResult, NDArray
-from ccflow.enums import Enum
+from ccflow.enums import _CSP_ENUM, Enum
 from ccflow.exttypes.pydantic_numpy.ndtypes import bool_, complex64, float32, float64, int8, uint32
 from ccflow.pickling import reduce_generic_model_instance
-from ccflow.serialization import make_ndarray_orjson_valid
+from ccflow.serialization import make_ndarray_orjson_valid, orjson_dumps
 
 
 class ParentModel(BaseModel):
@@ -167,6 +167,10 @@ class TestBaseModelSerialization(unittest.TestCase):
 
     def test_serialization_enum(self):
         self._check_serialization(D(value=MyEnum.FIRST))
+
+    def test_orjson_serialization_enum_dict(self):
+        expected = '{"FIRST":"SECOND"}' if _CSP_ENUM else '{"1":2}'
+        self.assertEqual(orjson_dumps({MyEnum.FIRST: MyEnum.SECOND}), expected)
 
     def test_serialization_nested_subclass(self):
         self._check_serialization(NestedModel(a=ChildModel(field1=0, field2=10)))
