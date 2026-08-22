@@ -1254,3 +1254,126 @@ class TestAdversarialFixes:
         E1 = _enum.Enum("Color", {"RED": 1}, module="pkg.one")
         E2 = _enum.Enum("Color", {"RED": 1}, module="pkg.two")
         assert tokenize(E1.RED) != tokenize(E2.RED)
+
+
+class TestPrivateModuleNoStateCollapse:
+    """Objects in ``__main__``/private modules must fold state, not name-only-collapse.
+
+    Regression for a fallback that name-only-tokenized any object whose type module
+    started with ``_`` or contained ``._``, silently dropping instance state and
+    collapsing genuinely-different values onto one cache key.
+    """
+
+    @staticmethod
+    def _make(module):
+        class _Add:
+            def __init__(self, n):
+                self.n = n
+
+            def __call__(self, x):
+                return x + self.n
+
+        _Add.__module__ = module
+        return _Add
+
+    @pytest.mark.parametrize("module", ["_secret", "pkg._internal", "__main__"])
+    def test_picklable_private_module_instances_distinct(self, module):
+        cls = self._make(module)
+        assert compute_data_token(cls(5)) != compute_data_token(cls(7))
+
+    @pytest.mark.parametrize("module", ["_secret", "pkg._internal", "__main__"])
+    def test_picklable_private_module_instances_deterministic(self, module):
+        cls = self._make(module)
+        assert compute_data_token(cls(5)) == compute_data_token(cls(5))
+
+    def test_stateful_frozen_dataclass_in_private_module_distinct(self):
+        import dataclasses
+
+        @dataclasses.dataclass(frozen=True)
+        class _Config:
+            values: tuple
+
+        _Config.__module__ = "pkg._private"
+        assert compute_data_token(_Config((1, 2))) != compute_data_token(_Config((1, 3)))
+
+    def test_unpicklable_user_object_in_main_fails_loud(self):
+        import threading
+
+        class _Holder:
+            def __init__(self):
+                self.lock = threading.Lock()
+
+        _Holder.__module__ = "__main__"
+        with pytest.raises(TypeError):
+            normalize_token(_Holder())
+
+    def test_unpicklable_user_object_in_private_module_fails_loud(self):
+        # An unpicklable object in a private *user* package must fail loud rather than
+        # name-only-collapse: two distinct instances would otherwise share a key. Only
+        # curated interpreter-internal modules are exempt, never arbitrary ``pkg._x``.
+        import threading
+
+        class _Resource:
+            def __init__(self):
+                self.lock = threading.Lock()
+
+        _Resource.__module__ = "company._models"
+        with pytest.raises(TypeError):
+            normalize_token(_Resource())
+
+    def test_unpicklable_interpreter_internal_is_name_only_stable(self):
+        # _thread.lock is an allowlisted interpreter internal: unpicklable, but a behavior-
+        # irrelevant primitive with no semantic identity, so it degrades to a stable name-only
+        # token rather than crashing behavior hashing (same treatment as 3.14 _abc._abc_data).
+        import threading
+
+        lock = threading.Lock()
+        token = normalize_token(lock)
+        assert token == ("__internal__", "_thread", type(lock).__qualname__)
+        assert normalize_token(threading.Lock()) == token
+
+    def test_picklable_framework_internal_is_name_only(self):
+        # Picklable-but-behavior-irrelevant framework internals (pydantic compiled
+        # validators) fold only module + qualname, never volatile runtime state.
+        class _Fake:
+            pass
+
+        _Fake.__module__ = "pydantic_core._pydantic_core"
+        assert normalize_token(_Fake()) == ("__internal__", "pydantic_core._pydantic_core", _Fake.__qualname__)
+
+    @pytest.mark.parametrize(
+        "module",
+        [
+            "pydantic._internal._model_construction",
+            "pydantic_core._pydantic_core",
+            "pydantic.plugin._schema_validator",
+        ],
+    )
+    def test_private_pydantic_submodules_are_name_only(self, module):
+        # Private submodules across the whole pydantic namespace stay name-only, matching the
+        # original behavior; public modules like pydantic.fields must not (guarded below).
+        class _Fake:
+            pass
+
+        _Fake.__module__ = module
+        assert normalize_token(_Fake()) == ("__internal__", module, _Fake.__qualname__)
+
+    def test_public_pydantic_module_is_not_name_only(self):
+        class _Fake:
+            pass
+
+        _Fake.__module__ = "pydantic.fields"
+        assert normalize_token(_Fake())[0] == "__cloudpickle__"
+
+    def test_real_pydantic_internal_objects_are_name_only(self):
+        # Guards the concrete regression: a model's compiled validator/serializer live in a
+        # private pydantic submodule and must be keyed by name, whatever module path the
+        # installed pydantic version puts them in.
+        import pydantic
+
+        class M(pydantic.BaseModel):
+            x: int = 1
+
+        for obj in (M.__pydantic_validator__, M.__pydantic_serializer__):
+            token = normalize_token(obj)
+            assert token[0] == "__internal__", (type(obj).__module__, token)

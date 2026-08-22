@@ -74,6 +74,32 @@ def _with_cycle_check(obj: Any, build: Callable[[], Any]) -> Any:
             _visited.reset(token)
 
 
+# Frameworks whose *private* submodules expose compiled/derived objects that are picklable but carry
+# volatile runtime state (e.g. ``pydantic._internal._model_construction``, ``pydantic_core._pydantic_core``,
+# ``pydantic.plugin._schema_validator``). Key these by module + qualname only, never fold their bytes.
+# Matched by top-level package plus any underscore-prefixed path component, so public modules such as
+# ``pydantic.fields`` are unaffected and unrelated user packages are never captured.
+_FRAMEWORK_INTERNAL_TOP_LEVEL = ("pydantic", "pydantic_core")
+
+# Unpicklable interpreter internals that are behavior-irrelevant and safe to key by name alone: either
+# derived state already captured elsewhere in the hash (``_abc._abc_data``, surfaced in ABC-derived
+# classes' closures on Python 3.14) or primitives with no semantic identity (``_thread`` lock/RLock).
+# Anything else that fails to serialize raises loudly rather than silently collapsing distinct objects
+# (e.g. DB connections, sockets, or user classes in a private ``pkg._internal`` module) onto one key.
+_NAME_ONLY_UNPICKLABLE_MODULES = ("_abc", "_thread")
+
+
+def _is_framework_internal(module: str) -> bool:
+    """Return whether ``module`` is a private submodule of a known framework (see the list above)."""
+    parts = module.split(".")
+    return parts[0] in _FRAMEWORK_INTERNAL_TOP_LEVEL and any(part.startswith("_") for part in parts)
+
+
+def _module_in(module: str, prefixes: tuple[str, ...]) -> bool:
+    """Return whether ``module`` equals or is a submodule of any prefix in ``prefixes``."""
+    return any(module == prefix or module.startswith(prefix + ".") for prefix in prefixes)
+
+
 @singledispatch
 def normalize_token(obj: Any) -> Any:
     """Produce a canonical, deterministically hashable representation of ``obj``.
@@ -85,13 +111,17 @@ def normalize_token(obj: Any) -> Any:
             return ("mytype", ...)
 
     Unknown types fall back to a ``cloudpickle``-based digest, raising ``TypeError`` on pickling failure.
+
+    Serializability, not the module name, is the primary signal: any object cloudpickle can serialize
+    has its state folded in, so two genuinely different values (e.g. instances authored in ``__main__``
+    or a private module) never collapse to one key. The module name is consulted only via two small
+    curated allowlists -- one for private framework internals whose bytes are volatile, and one for
+    unpicklable interpreter internals that are behavior-irrelevant -- so that any other object that
+    cannot be serialized fails loud instead of silently sharing a key.
     """
-    # Python 3.14 exposes internal objects (e.g. _abc._abc_data, pydantic._internal.*,
-    # pydantic_core._pydantic_core.*) in function closures of ABC-derived classes.
-    # These are not behavior-relevant; produce a stable token keyed by module + qualname
-    # so they don't affect hashing.
     obj_module = getattr(type(obj), "__module__", "") or ""
-    if obj_module.startswith("_") or "._" in obj_module:
+
+    if _is_framework_internal(obj_module):
         return ("__internal__", obj_module, type(obj).__qualname__)
 
     try:
@@ -102,6 +132,8 @@ def normalize_token(obj: Any) -> Any:
     try:
         pickled = cloudpickle.dumps(obj)
     except Exception as exc:
+        if _module_in(obj_module, _NAME_ONLY_UNPICKLABLE_MODULES):
+            return ("__internal__", obj_module, type(obj).__qualname__)
         raise TypeError(f"Cannot tokenize object of type {type(obj).__qualname__}. Register a normalize_token handler for this type.") from exc
     return ("__cloudpickle__", hashlib.sha256(pickled).hexdigest())
 
