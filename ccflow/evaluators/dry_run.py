@@ -65,7 +65,10 @@ class DryRunEvaluator(EvaluatorBase):
                     evaluation_context = graph.ids[key]
                     flattened, fn, _ = _flatten_cache_key_context(evaluation_context)
                     model = flattened.model
-                    logical_key = cache_key(ModelEvaluationContext(model=model, context=flattened.context, fn=fn, options=flattened.options))
+                    logical_key = cache_key(
+                        ModelEvaluationContext(model=model, context=flattened.context, fn=fn, options=flattened.options),
+                        effective=True,
+                    )
                     report_context = ReportContext(
                         model_name=model.meta.name or model.__class__.__name__,
                         model_type=_model_type(model),
