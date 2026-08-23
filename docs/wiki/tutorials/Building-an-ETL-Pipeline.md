@@ -38,7 +38,7 @@ The extract step queries a site over HTTP and returns its HTML:
 
 ```python
 from typing import Optional
-from httpx import Client
+from httpx2 import Client
 from ccflow import CallableModel, Flow, GenericResult
 
 

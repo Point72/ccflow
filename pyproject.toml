@@ -101,7 +101,7 @@ develop = [
     "opentelemetry-api",
     # Test deps
     "beautifulsoup4",
-    "httpx",
+    "httpx2",
     "pytest",
     "pytest-asyncio",
     "pytest-cov",
@@ -110,7 +110,7 @@ develop = [
 ]
 test = [
     "beautifulsoup4",
-    "httpx",
+    "httpx2",
     "opentelemetry-api",
     "pytest",
     "pytest-asyncio",
