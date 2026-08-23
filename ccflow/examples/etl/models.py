@@ -3,7 +3,7 @@ from csv import DictReader, DictWriter
 from io import StringIO
 
 from bs4 import BeautifulSoup
-from httpx import Client
+from httpx2 import Client
 from pydantic import Field
 
 from ccflow import CallableModel, ContextBase, Flow, GenericResult, NullContext

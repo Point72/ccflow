@@ -27,7 +27,7 @@ with FlowOptionsOverride(options={"evaluator": retry}):
 `max_delay` caps the *cumulative* sleep time between retries (not total runtime): once the next backoff would push accumulated waiting over the budget, no further retries happen. Use `retry_exceptions` / `no_retry_exceptions` to choose which exceptions are retried.
 
 > [!NOTE]
-> `retry_exceptions` and `no_retry_exceptions` accept either a bare exception class (as above) or an importable path string (e.g. `"httpx.ConnectError"`, the form for YAML/Hydra configs). Paths are imported eagerly, so a third-party exception requires that package installed.
+> `retry_exceptions` and `no_retry_exceptions` accept either a bare exception class (as above) or an importable path string (e.g. `"httpx2.ConnectError"`, the form for YAML/Hydra configs). Paths are imported eagerly, so a third-party exception requires that package installed.
 
 The evaluator is transparent (a successful result is identical to a direct call, so caching and dependency graphs are unaffected) and holds no per-call state, so one instance is safe to share across threads and combine with parallel evaluators. Place it *inside* a parallel evaluator to retry each task independently, or *outside* to retry the whole dispatch as a unit.
 
