@@ -72,7 +72,7 @@ class Enum(BaseEnum):
             try:
                 return cls[v]
             except KeyError as e:
-                raise ValueError(f"Cannot convert value to enum: {v}") from e
+                raise ValueError(f"Cannot convert value to {cls.__name__}: {v}") from e
         elif isinstance(v, int):
             return cls(v)
         raise ValueError(f"Cannot convert value to enum: {v}")
