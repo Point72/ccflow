@@ -131,6 +131,30 @@ with FlowOptionsOverride(options={"cacheable": True, "evaluator": MyEvaluator()}
 
 Custom evaluators can run models on other platforms (Dask, Ray, Spark), implement other caching backends (Redis, S3), or add batching and custom logging.
 
+### Non-transparent wrappers under a `GraphEvaluator`
+
+The example above is *transparent* — it returns `context()` unchanged. If instead your evaluator **reshapes, replaces, or publishes** the result (so `is_transparent` returns `False`), be careful when it runs alongside a `GraphEvaluator`. The graph re-drives the **same** evaluator stack for two extra kinds of invocation, and a wrapper that fires on every call misbehaves on both:
+
+- **`__deps__` resolution.** To discover the graph, the model's `__deps__` is evaluated through the same stack. Its result is a `GraphDepList`, not a model result — reshaping logic (e.g. touching `.df`) crashes on it.
+- **Dependency (child) evaluations.** Each child node is evaluated through the stack too. A wrapper that side-effects there will run on results it should not own, publishing more than once and changing cache identity so it no longer matches the true compute.
+
+Gate on the function being evaluated so the wrapper only acts on a model's own `__call__`, never on `__deps__`:
+
+```python
+class PublishingEvaluator(EvaluatorBase):
+    def is_transparent(self, context: ModelEvaluationContext) -> bool:
+        return False
+
+    def __call__(self, context: ModelEvaluationContext) -> ResultType:
+        if context.fn != "__call__":
+            return context()  # e.g. __deps__ resolution — pass straight through
+        result = context()
+        publish(result)       # reshape / publish only the real model result
+        return result
+```
+
+The `fn` guard stops the `__deps__` crash. To also stop the wrapper from firing on **dependencies**, scope the override to the models it should act on rather than applying it globally — `FlowOptionsOverride(options=..., models=(root_model,))` (or `model_types=(...)`), exactly as in [Choose which models are retried](Retry-on-Failure#choose-which-models-are-retried). Scope alone is not enough: a model still re-drives *its own* `__deps__`, so the `fn == "__call__"` guard is always required. The built-in `DryRunEvaluator` (`ccflow/evaluators/dry_run.py`) is a worked example — it passes through on `__deps__` and uses a re-entry guard so it does not re-act on child drives during traversal.
+
 ## See also
 
 - [Retry on Failure](Retry-on-Failure) — the retry evaluator and `RetryModel`.
