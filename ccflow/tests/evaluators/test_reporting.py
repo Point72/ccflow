@@ -257,6 +257,37 @@ class TestDryRunEvaluator(TestCase):
         # And the emitted key equals the real cache_key() of the logical node.
         self.assertEqual(other_key, cache_key(other_context).decode("utf-8"))
 
+    def test_node_key_uses_effective_identity(self):
+        # node_key must honor the opt-in effective-identity hook (as memory/graph dedup already do),
+        # not the raw structural cache_key(). For a generated @Flow.model that ignores unused ambient
+        # context fields, the emitted key must equal cache_key(..., effective=True) and must merge two
+        # contexts that differ only in an ignored field -- even though their structural keys differ.
+        from ccflow import Flow, FlowContext, FromContext
+        from ccflow.evaluators.common import cache_key
+
+        @Flow.model
+        def add(a: int, b: FromContext[int]) -> int:
+            return a + b
+
+        model = add(a=1)
+        clean_context = FlowContext(b=2)
+        noisy_context = FlowContext(b=2, unused="ignored")
+        clean_eval = ModelEvaluationContext(model=model, context=clean_context)
+        noisy_eval = ModelEvaluationContext(model=model, context=noisy_context)
+
+        clean_reporter = InMemoryReporter()
+        DryRunEvaluator(reporting={"reporter": clean_reporter})(clean_eval)
+        clean_key = next(e.extra["node_key"] for e in clean_reporter.events if e.phase == ReportPhase.QUEUED)
+
+        noisy_reporter = InMemoryReporter()
+        DryRunEvaluator(reporting={"reporter": noisy_reporter})(noisy_eval)
+        noisy_key = next(e.extra["node_key"] for e in noisy_reporter.events if e.phase == ReportPhase.QUEUED)
+
+        # The unused ambient field splits the structural key but not the effective one.
+        self.assertNotEqual(cache_key(clean_eval), cache_key(noisy_eval))
+        self.assertEqual(clean_key, noisy_key)
+        self.assertEqual(clean_key, cache_key(clean_eval, effective=True).decode("utf-8"))
+
     def test_concurrent_dry_runs_share_instance_without_running_bodies(self):
         # The planning guard is context-local, so a single shared instance used by two concurrent
         # evaluations must never let one run's planning state leak into the other (which would make
