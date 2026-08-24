@@ -53,8 +53,12 @@ class PublisherModel(
         else:
             pub_data = data
         publisher.data = pub_data
-        out = publisher()
         if self.return_data:
+            out = publisher()
             return data
-        else:
-            return self.result_type(value=out)
+        # Release the driver-side references before invoking the publisher so the
+        # publisher can own the sole reference to the frame and free it during the
+        # terminal write, keeping peak memory close to the size of a single frame.
+        del data, pub_data
+        out = publisher()
+        return self.result_type(value=out)
