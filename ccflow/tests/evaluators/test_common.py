@@ -26,6 +26,7 @@ from ccflow.evaluators import (
     MultiEvaluator,
     cache_key,
     combine_evaluators,
+    effective_cache_key,
     get_dependency_graph,
 )
 
@@ -739,3 +740,51 @@ class TestGraphEvaluator(TestCase):
         evaluator = GraphEvaluator()
         with FlowOptionsOverride(options={"evaluator": evaluator}):
             self.assertRaises(Exception, root, context)  # noqa: B017
+
+
+class _OffsetIdentityCallable(MyDateCallable):
+    """Opt-in model whose effective identity depends only on ``offset``, not on the context date."""
+
+    def _evaluation_identity_payload(self, context):
+        return {"offset": self.offset}
+
+
+class TestEffectiveCacheKey(TestCase):
+    def test_opt_out_matches_structural_cache_key(self):
+        """Models that do not opt in fall back byte-for-byte to cache_key(model)."""
+        model = MyDateCallable(offset=1)
+        context = DateContext(date=date(2022, 1, 1))
+        self.assertEqual(effective_cache_key(model, context), cache_key(model))
+
+    def test_opt_out_is_context_independent(self):
+        model = MyDateCallable(offset=1)
+        c1 = DateContext(date=date(2022, 1, 1))
+        c2 = DateContext(date=date(2022, 1, 2))
+        self.assertEqual(effective_cache_key(model, c1), effective_cache_key(model, c2))
+
+    def test_opt_in_uses_identity_payload(self):
+        """An opt-in model is keyed by its identity payload, not the structural key."""
+        model = _OffsetIdentityCallable(offset=1)
+        c1 = DateContext(date=date(2022, 1, 1))
+        c2 = DateContext(date=date(2022, 1, 2))
+        # The payload ignores the date, so the two contexts collapse to one key ...
+        self.assertEqual(effective_cache_key(model, c1), effective_cache_key(model, c2))
+        # ... and that key differs from the structural cache_key(model).
+        self.assertNotEqual(effective_cache_key(model, c1), cache_key(model))
+
+    def test_opt_in_distinguishes_payload_relevant_change(self):
+        context = DateContext(date=date(2022, 1, 1))
+        self.assertNotEqual(
+            effective_cache_key(_OffsetIdentityCallable(offset=1), context),
+            effective_cache_key(_OffsetIdentityCallable(offset=2), context),
+        )
+
+    def test_identity_payload_errors_propagate(self):
+        """A failing identity payload surfaces rather than being hidden by the structural fallback."""
+
+        class _BadIdentityCallable(MyDateCallable):
+            def _evaluation_identity_payload(self, context):
+                raise ValueError("identity broke")
+
+        with self.assertRaisesRegex(ValueError, "identity broke"):
+            effective_cache_key(_BadIdentityCallable(offset=1), DateContext(date=date(2022, 1, 1)))
