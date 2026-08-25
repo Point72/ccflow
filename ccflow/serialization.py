@@ -3,10 +3,10 @@ from typing import Any
 import numpy as np
 import orjson
 
-from .enums import Enum
+from .enums import _CSP_ENUM, Enum
 
 
-def _remove_dict_enums(obj: Any) -> dict:
+def _remove_dict_enums(obj: Any) -> Any:
     if isinstance(obj, Enum):
         return obj.name
     elif isinstance(obj, dict):
@@ -21,21 +21,14 @@ def orjson_dumps(v, default=None, *arga, **kwargs) -> str:
     # with the json_encoders as the first argument. We try to perform the
     # conversion
     options = orjson.OPT_NON_STR_KEYS | orjson.OPT_NAIVE_UTC | orjson.OPT_SERIALIZE_NUMPY
-    try:
-        return orjson.dumps(
-            v,
-            default=default,
-            option=options,
-        ).decode()
-    except orjson.JSONEncodeError:
-        # if we fail, we try to remove the enums because
-        # orjson serialization fails when csp enums are
-        # used as dict keys. See https://github.com/ijl/orjson/issues/445
-        return orjson.dumps(
-            _remove_dict_enums(v),
-            default=default,
-            option=options,
-        ).decode()
+    # orjson serialization fails when legacy csp enums are used as dict keys, while IntEnum-based csp enums
+    # serialize as integers. Convert both representations to names first. See https://github.com/ijl/orjson/issues/445
+    value = _remove_dict_enums(v) if _CSP_ENUM else v
+    return orjson.dumps(
+        value,
+        default=default,
+        option=options,
+    ).decode()
 
 
 def make_ndarray_orjson_valid(arr: np.ndarray) -> list[Any] | np.ndarray:

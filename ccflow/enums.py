@@ -69,7 +69,10 @@ class Enum(BaseEnum):
         if isinstance(v, cls):
             return v
         elif isinstance(v, str):
-            return cls[v]
+            try:
+                return cls[v]
+            except KeyError as e:
+                raise ValueError(f"Cannot convert value to {cls.__name__}: {v}") from e
         elif isinstance(v, int):
             return cls(v)
         raise ValueError(f"Cannot convert value to enum: {v}")

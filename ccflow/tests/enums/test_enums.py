@@ -96,6 +96,8 @@ class TestEnum(TestCase):
         self.assertTrue(issubclass(MyEnum, Enum))
         self.assertTrue(isinstance(MyEnum.A.name, str))
         self.assertEqual(MyEnum[MyEnum.A.name], MyEnum.A)
+        with self.assertRaises(ValueError):
+            MyEnum.validate("missing")
 
         class MyAutoEnum(Enum):
             A = auto()
