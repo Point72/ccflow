@@ -32,6 +32,7 @@ __all__ = [
     "MultiEvaluator",
     "cache_key",
     "combine_evaluators",
+    "effective_cache_key",
     "get_dependency_graph",
 ]
 
@@ -334,6 +335,31 @@ def cache_key(flow_obj: ModelEvaluationContext | ContextBase | CallableModel, *,
         ).encode("utf-8")
     else:
         raise TypeError(f"object of type {type(flow_obj)} cannot be serialized by this function!")
+
+
+def effective_cache_key(model: CallableModel, context: ContextBase) -> bytes:
+    """Returns the effective identity key for evaluating ``model`` on ``context``.
+
+    This is the ``(model, context)`` counterpart to ``cache_key(mec, effective=True)``, for callers
+    that hold a model and a context directly rather than a ``ModelEvaluationContext``. Models that
+    declare an effective identity (by returning a non-``None`` identity payload) are keyed by it;
+    models that do not fall back to the structural ``cache_key(model)``, so the result is byte-for-byte
+    identical to ``cache_key(model)`` for such models.
+
+    Unlike ``cache_key(mec, effective=True)``, this returns the model-level effective key without the
+    surrounding evaluation-context envelope (``fn`` and ``options``), and it uses the structural
+    ``cache_key(model)`` (rather than a context-dependent key) for models that do not opt in.
+
+    Args:
+        model: The model whose identity is being tokenized.
+        context: The context the model would be evaluated on; it is passed to the model's identity
+            payload. Models that do not opt into effective identity ignore it.
+    """
+    try:
+        key = _effective_model_key(model, context, {}, set())
+    except _EffectiveEvaluationKeyUnavailable:
+        key = None
+    return key if key is not None else cache_key(model)
 
 
 class MemoryCacheEvaluator(EvaluatorBase):
