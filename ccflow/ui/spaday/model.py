@@ -108,8 +108,11 @@ def model_config_view(model, path: str = "") -> Component:
     return Column(*children, gap="0.75rem")
 
 
-def model_view(model, path: str = "") -> Component:
-    """A card with tabs inspecting a single ccflow model instance."""
+def model_view(model, path: str = "", dependency_view: Component | None = None) -> Component:
+    """A card with tabs inspecting a single ccflow model instance.
+
+    ``dependency_view`` is this model's dependency graph, added as a tab when it has one.
+    """
     type_name = display_as_type(type(model))
 
     tabs = Tabs(active="summary")
@@ -118,6 +121,8 @@ def model_view(model, path: str = "") -> Component:
     if isinstance(model, ccflow.CallableModel):
         tabs.tab("Context Type", model_type_view(model.context_type), name="context-type")
         tabs.tab("Result Type", model_type_view(model.result_type), name="result-type")
+    if dependency_view is not None:
+        tabs.tab("Dependencies", dependency_view, name="dependencies")
 
     params = model.__pydantic_serializer__.to_python(model, fallback=str, mode="json")
     tabs.tab("Parameters", _pre(json.dumps(params, indent=2, default=str)), name="parameters")

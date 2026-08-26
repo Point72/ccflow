@@ -6,7 +6,7 @@ from ccflow import BaseModel, LazyRegistry, ModelRegistry
 from ccflow.ui.spaday.registry import (
     DARK_FIELD,
     SELECTED_FIELD,
-    VIEW_FIELD,
+    SELECTED_PATHS_FIELD,
     registry_leaves,
     registry_store,
     registry_tree,
@@ -29,6 +29,12 @@ class AnotherModel(BaseModel):
     data: str = ""
 
 
+class HolderModel(BaseModel):
+    """A test model that contains another registered model."""
+
+    child: SimpleModel
+
+
 def _registry():
     root = ModelRegistry(name="root")
     sub = ModelRegistry(name="sub")
@@ -42,8 +48,14 @@ class TestRegistryStore:
     def test_default_store(self):
         store = registry_store()
         assert store[SELECTED_FIELD] == ""
-        assert store[VIEW_FIELD] == "details"
+        assert store[SELECTED_PATHS_FIELD] == []
         assert store[DARK_FIELD] is False
+
+    def test_store_seeded_with_selection(self):
+        # The materialize redirect reloads with ?sel=, and the tree expands to reveal that path.
+        store = registry_store("sub/alpha")
+        assert store[SELECTED_FIELD] == "sub/alpha"
+        assert store[SELECTED_PATHS_FIELD] == ["sub/alpha"]
 
 
 class TestRegistryLeaves:
@@ -95,6 +107,10 @@ class TestRegistryTree:
         node = registry_tree(ModelRegistry(name="empty")).to_node()
         assert prop_value(node, "paths") == []
 
+    def test_selected_paths_bound_so_the_tree_reveals_the_selection(self):
+        node = registry_tree(_registry()).to_node()
+        assert node["bindings"]["selected_paths"]["field"] == SELECTED_PATHS_FIELD
+
 
 class TestRegistryViewer:
     def test_returns_app(self):
@@ -116,9 +132,16 @@ class TestRegistryViewer:
         assert "zeta" in show_targets
         assert len(nodes_with_tag(node, "spa-show")) == 3
 
-    def test_dependency_graph_tab_present(self):
-        node = registry_viewer(_registry()).to_node()
-        assert nodes_with_tag(node, "spaday-dagre")
+    def test_dependency_graph_is_model_local(self):
+        # Models without dependencies get no graph; the one that has them gets exactly one.
+        assert not nodes_with_tag(registry_viewer(_registry()).to_node(), "spaday-dagre")
+
+        root = ModelRegistry.root()
+        root.clear()
+        leaf = SimpleModel(name="leaf")
+        root.add("leaf", leaf)
+        root.add("holder", HolderModel(child=leaf))
+        assert len(nodes_with_tag(registry_viewer(root).to_node(), "spaday-dagre")) == 1
 
     def test_browser_width_sets_gutter(self):
         node = registry_viewer(_registry(), browser_width=500).to_node()
