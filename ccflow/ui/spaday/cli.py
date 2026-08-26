@@ -13,6 +13,8 @@ from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import parse_qs, quote
 
+from spaday_dagre import package as dagre_package
+from spaday_trees import package as trees_package
 from spaday_webawesome import package as webawesome_package
 
 from ccflow import ModelRegistry
@@ -24,6 +26,20 @@ from .registry import SELECTED_FIELD, registry_store, registry_viewer
 __all__ = ("main", "registry_viewer_cli", "serve_registry")
 
 log = logging.getLogger(__name__)
+
+#: Component packages whose assets the page needs (webawesome controls, the tree, the dependency graph).
+_PACKAGES = (webawesome_package, trees_package, dagre_package)
+
+#: The tree colours itself with CSS ``light-dark()``, which follows ``color-scheme`` rather than
+#: webawesome's ``wa-dark`` class, so bridge the two to keep the sidebar in step with the page theme.
+#: The inner ``file-tree-container`` sets ``color-scheme`` on its own ``:host``, so it must be targeted
+#: directly for the document rule to win.
+_STYLES = (
+    (
+        "spaday-tree, spaday-tree file-tree-container { color-scheme: light; }"
+        " .wa-dark spaday-tree, .wa-dark spaday-tree file-tree-container { color-scheme: dark; }"
+    ),
+)
 
 
 def _asset_layout() -> str:
@@ -99,11 +115,13 @@ def serve_registry(
     def homepage(request):
         """Serve the page with the ``?sel=`` model preselected (used by the materialize redirect)."""
         selected = request.query_params.get("sel", "")
-        return HTMLResponse(bootstrap(packages=webawesome_package, store={SELECTED_FIELD: selected}, title=title, layout=layout))
+        store = {**registry_store(), SELECTED_FIELD: selected}
+        return HTMLResponse(bootstrap(packages=_PACKAGES, styles=_STYLES, store=store, title=title, layout=layout))
 
     app = serve(
         page,
-        packages=webawesome_package,
+        packages=_PACKAGES,
+        styles=_STYLES,
         store=registry_store(),
         title=title,
         layout=layout,

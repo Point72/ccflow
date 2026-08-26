@@ -4,14 +4,16 @@ from spaday.validate import validate
 
 from ccflow import BaseModel, LazyRegistry, ModelRegistry
 from ccflow.ui.spaday.registry import (
+    DARK_FIELD,
     SELECTED_FIELD,
+    VIEW_FIELD,
     registry_leaves,
     registry_store,
     registry_tree,
     registry_viewer,
 )
 
-from .utils import click_set_field, nodes_with_tag, prop_str, show_when_value
+from .utils import all_text, event_action, nodes_with_tag, prop_str, prop_value, show_when_value
 
 
 class SimpleModel(BaseModel):
@@ -38,7 +40,10 @@ def _registry():
 
 class TestRegistryStore:
     def test_default_store(self):
-        assert registry_store() == {SELECTED_FIELD: ""}
+        store = registry_store()
+        assert store[SELECTED_FIELD] == ""
+        assert store[VIEW_FIELD] == "details"
+        assert store[DARK_FIELD] is False
 
 
 class TestRegistryLeaves:
@@ -73,28 +78,22 @@ class TestRegistryLeaves:
 
 
 class TestRegistryTree:
-    def test_leaf_items_carry_selection_action(self):
-        nodes = registry_tree(_registry())
-        # Serialize the whole set of tree items and collect leaf selection targets.
-        selected = set()
-        for item in nodes:
-            for node in nodes_with_tag(item.to_node(), "wa-tree-item"):
-                value = click_set_field(node)
-                if value is not None:
-                    selected.add(value)
-        assert selected == {"sub/alpha", "zeta"}
+    def test_paths_cover_all_leaves(self):
+        node = registry_tree(_registry()).to_node()
+        assert node["tag"] == "spaday-tree"
+        assert prop_value(node, "paths") == ["sub/alpha", "zeta"]
 
-    def test_branch_items_have_no_selection_action(self):
-        nodes = registry_tree(_registry())
-        # The top-level "sub" node is a branch; it must not carry a click action.
-        sub_item = next(n for n in nodes if any(t == "sub" for t in _labels(n.to_node())))
-        assert click_set_field(sub_item.to_node()) is None
+    def test_selection_change_sets_selected_field(self):
+        node = registry_tree(_registry()).to_node()
+        action = event_action(node, "selection-change")
+        assert action["kind"] == "set-field"
+        assert action["field"] == SELECTED_FIELD
+        # The event detail is {paths: [...]}; the first entry is the newly selected model.
+        assert action["value"] == {"expr": "event", "path": "paths.0"}
 
-
-def _labels(node):
-    from .utils import text_of
-
-    return [text_of(n) for n in node.get("slots", {}).get("default", [])]
+    def test_empty_registry_has_no_paths(self):
+        node = registry_tree(ModelRegistry(name="empty")).to_node()
+        assert prop_value(node, "paths") == []
 
 
 class TestRegistryViewer:
@@ -106,25 +105,20 @@ class TestRegistryViewer:
         validate(registry_viewer(_registry()).to_node())
 
     def test_title_in_header(self):
-        from .utils import all_text
-
         node = registry_viewer(_registry(), title="My Registry").to_node()
         assert "My Registry" in all_text(node)
 
     def test_show_panel_per_leaf(self):
         node = registry_viewer(_registry()).to_node()
         show_targets = {show_when_value(n) for n in nodes_with_tag(node, "spa-show")}
-        # A panel per leaf plus the empty-selection placeholder.
+        # A panel per leaf, plus the placeholder (whose condition is falsy-selection, not an equality).
         assert "sub/alpha" in show_targets
         assert "zeta" in show_targets
-        assert "" in show_targets
+        assert len(nodes_with_tag(node, "spa-show")) == 3
 
-    def test_search_options_cover_all_leaves(self):
+    def test_dependency_graph_tab_present(self):
         node = registry_viewer(_registry()).to_node()
-        options = [prop_str(n, "value") for n in nodes_with_tag(node, "wa-option")]
-        # First option is the empty placeholder; the rest are sorted leaf paths.
-        assert options[0] == ""
-        assert options[1:] == sorted(["sub/alpha", "zeta"])
+        assert nodes_with_tag(node, "spaday-dagre")
 
     def test_browser_width_sets_gutter(self):
         node = registry_viewer(_registry(), browser_width=500).to_node()
@@ -133,8 +127,9 @@ class TestRegistryViewer:
 
     def test_empty_registry_renders(self):
         node = registry_viewer(ModelRegistry(name="empty")).to_node()
-        # Only the placeholder show panel, no model panels.
-        assert [show_when_value(n) for n in nodes_with_tag(node, "spa-show")] == [""]
+        # Only the placeholder panel, and no graph to draw.
+        assert len(nodes_with_tag(node, "spa-show")) == 1
+        assert not nodes_with_tag(node, "spaday-dagre")
 
     def test_lazy_registry_renders_without_materializing_models(self):
         lazy = LazyRegistry(
