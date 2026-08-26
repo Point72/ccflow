@@ -26,7 +26,7 @@ class TestGetUIArgsParser:
         assert hasattr(args, "config_name")
 
         # Server + viewer-specific
-        assert hasattr(args, "address")
+        assert hasattr(args, "host")
         assert hasattr(args, "port")
         assert hasattr(args, "browser_width")
         assert hasattr(args, "title")
@@ -34,15 +34,15 @@ class TestGetUIArgsParser:
 
     def test_defaults(self):
         args = _get_ui_args_parser().parse_args([])
-        assert args.address == "127.0.0.1"
+        assert args.host == "127.0.0.1"
         assert args.port == 8080
         assert args.browser_width == 400
         assert args.title == "ccflow Model Registry"
         assert args.sort_children is True
 
     def test_custom_values(self):
-        args = _get_ui_args_parser().parse_args(["--address", "0.0.0.0", "--port", "9000", "--browser-width", "500", "--title", "Mine"])
-        assert args.address == "0.0.0.0"
+        args = _get_ui_args_parser().parse_args(["--host", "0.0.0.0", "--port", "9000", "--browser-width", "500", "--title", "Mine"])
+        assert args.host == "0.0.0.0"
         assert args.port == 9000
         assert args.browser_width == 500
         assert args.title == "Mine"

@@ -21,7 +21,7 @@ from ccflow import ModelRegistry
 from ccflow.utils.hydra import add_hydra_config_args, load_config, resolve_config_paths
 
 from .model import MATERIALIZE_ENDPOINT
-from .registry import SELECTED_FIELD, registry_store, registry_viewer
+from .registry import registry_store, registry_viewer
 
 __all__ = ("main", "registry_viewer_cli", "serve_registry")
 
@@ -62,7 +62,7 @@ def serve_registry(
     title: str = "ccflow Model Registry",
     browser_width: int = 400,
     sort_children: bool = True,
-    address: str = "127.0.0.1",
+    host: str = "127.0.0.1",
     port: int = 8080,
     run: bool = True,
 ):
@@ -74,7 +74,7 @@ def serve_registry(
         title: Title shown in the page header.
         browser_width: Initial width of the registry sidebar, in pixels.
         sort_children: Sort registry entries alphabetically at every level (subregistries first).
-        address, port: Interface and port uvicorn binds to (only used when ``run`` is True).
+        host, port: Interface and port uvicorn binds to (only used when ``run`` is True).
         run: When True, start a blocking uvicorn server. When False, return the app without serving.
 
     Returns:
@@ -115,8 +115,7 @@ def serve_registry(
     def homepage(request):
         """Serve the page with the ``?sel=`` model preselected (used by the materialize redirect)."""
         selected = request.query_params.get("sel", "")
-        store = {**registry_store(), SELECTED_FIELD: selected}
-        return HTMLResponse(bootstrap(packages=_PACKAGES, styles=_STYLES, store=store, title=title, layout=layout))
+        return HTMLResponse(bootstrap(packages=_PACKAGES, styles=_STYLES, store=registry_store(selected), title=title, layout=layout))
 
     app = serve(
         page,
@@ -132,7 +131,7 @@ def serve_registry(
     app.routes.insert(0, Route("/", homepage, methods=["GET"]))
 
     if run:
-        uvicorn.run(app, host=address, port=port)
+        uvicorn.run(app, host=host, port=port)
     return app
 
 
@@ -145,7 +144,7 @@ def _get_ui_args_parser() -> argparse.ArgumentParser:
 
     add_hydra_config_args(parser)
 
-    parser.add_argument("--address", type=str, default="127.0.0.1", help="Address to bind the server to (default: 127.0.0.1).")
+    parser.add_argument("--host", type=str, default="127.0.0.1", help="Host interface to bind the server to (default: 127.0.0.1).")
     parser.add_argument("--port", type=int, default=8080, help="Port to bind the server to (default: 8080).")
     parser.add_argument(
         "--browser-width",
@@ -207,7 +206,7 @@ def registry_viewer_cli(
         title=args.title,
         browser_width=args.browser_width,
         sort_children=args.sort_children,
-        address=args.address,
+        host=args.host,
         port=args.port,
     )
 
