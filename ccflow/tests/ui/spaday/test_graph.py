@@ -9,6 +9,10 @@ from ccflow.ui.spaday.registry import registry_leaves
 from .utils import event_action, nodes_with_tag, prop_value
 
 
+def _view(path, adjacency):
+    return model_dependency_view(path, adjacency, selected_field="selected", selected_paths_field="selected_paths")
+
+
 class Leaf(BaseModel):
     """A model with no registry dependencies."""
 
@@ -86,7 +90,8 @@ class TestModelDependencyGraph:
         graph = model_dependency_graph("holder", adjacency)
         # "unrelated" is in the registry but not reachable from "holder", so it is not drawn.
         assert [node["id"] for node in graph["nodes"]] == ["holder", "sub/alpha"]
-        assert graph["edges"] == [{"source": "holder", "target": "sub/alpha"}]
+        # The edge points from the dependency into the model that uses it.
+        assert graph["edges"] == [{"source": "sub/alpha", "target": "holder"}]
 
     def test_focus_node_is_marked(self):
         graph = model_dependency_graph("holder", {"holder": ["sub/alpha"], "sub/alpha": []})
@@ -97,9 +102,10 @@ class TestModelDependencyGraph:
         adjacency = {"outer": ["holder"], "holder": ["leaf"], "leaf": []}
         graph = model_dependency_graph("outer", adjacency)
         assert [node["id"] for node in graph["nodes"]] == ["outer", "holder", "leaf"]
+        # leaf -> holder -> outer: the chain reads towards the model being inspected.
         assert graph["edges"] == [
-            {"source": "outer", "target": "holder"},
-            {"source": "holder", "target": "leaf"},
+            {"source": "holder", "target": "outer"},
+            {"source": "leaf", "target": "holder"},
         ]
 
     def test_cycles_terminate(self):
@@ -107,33 +113,60 @@ class TestModelDependencyGraph:
         assert [node["id"] for node in graph["nodes"]] == ["a", "b"]
         assert len(graph["edges"]) == 2
 
+    def test_labels_show_the_full_registry_path(self):
+        graph = model_dependency_graph("holder", {"holder": ["sub/alpha"], "sub/alpha": []})
+        assert [node["label"] for node in graph["nodes"]] == ["holder", "sub/alpha"]
+
 
 class TestModelDependencyView:
     def test_none_without_dependencies(self):
         adjacency = dependency_edges(registry_leaves(_registry_with_dependency()))
-        assert model_dependency_view("sub/alpha", adjacency, selected_field="selected") is None
+        assert _view("sub/alpha", adjacency) is None
 
     def test_renders_dagre_component(self):
         adjacency = dependency_edges(registry_leaves(_registry_with_dependency()))
-        node = model_dependency_view("holder", adjacency, selected_field="selected").to_node()
+        node = _view("holder", adjacency).to_node()
         dagre = nodes_with_tag(node, "spaday-dagre")
         assert len(dagre) == 1
-        assert prop_value(dagre[0], "graph")["edges"] == [{"source": "holder", "target": "sub/alpha"}]
+        assert prop_value(dagre[0], "graph")["edges"] == [{"source": "sub/alpha", "target": "holder"}]
 
-    def test_node_click_sets_selection(self):
+    def test_node_click_opens_the_menu_instead_of_navigating(self):
         adjacency = dependency_edges(registry_leaves(_registry_with_dependency()))
-        dagre = model_dependency_view("holder", adjacency, selected_field="selected").to_node()
-        action = event_action(dagre, "dagre-node-click")
-        assert action["kind"] == "set-field"
-        assert action["field"] == "selected"
-        # The node-click detail is the node id, i.e. the registry path.
-        assert action["value"] == {"expr": "event"}
+        node = _view("holder", adjacency).to_node()
+        dagre = nodes_with_tag(node, "spaday-dagre")[0]
+        for event in ("click", "contextmenu"):
+            action = event_action(dagre, event)
+            # Guarded on the node id, so a click on blank canvas opens nothing.
+            assert action["kind"] == "if"
+            assert action["cond"] == {"expr": "event-prop", "path": "target.parentElement.dataset.nodeId"}
+            assert action["then"]["kind"] == "seq"
+
+    def test_menu_has_a_body_per_node(self):
+        adjacency = dependency_edges(registry_leaves(_registry_with_dependency()))
+        node = _view("holder", adjacency).to_node()
+        assert nodes_with_tag(node, "spa-popup")
+        shows = nodes_with_tag(node, "spa-show")
+        assert len(shows) == 2  # one per node in the graph
+
+    def test_open_model_sets_selection_and_reveals_in_tree(self):
+        adjacency = dependency_edges(registry_leaves(_registry_with_dependency()))
+        node = _view("holder", adjacency).to_node()
+        buttons = [n for n in nodes_with_tag(node, "wa-button") if "click" in n.get("events", {})]
+        writes = {}
+        for button in buttons:
+            for action in button["events"]["click"]["actions"]:
+                if action["kind"] == "set-field":
+                    writes.setdefault(action["field"], []).append(action["value"]["value"])
+        # Literal per node, because the DSL cannot build the tree's single-element path list.
+        assert set(writes["selected"]) == {"holder", "sub/alpha"}
+        assert ["holder"] in writes["selected_paths"]
+        assert ["sub/alpha"] in writes["selected_paths"]
 
     def test_layout_is_left_to_right(self):
         adjacency = dependency_edges(registry_leaves(_registry_with_dependency()))
-        dagre = model_dependency_view("holder", adjacency, selected_field="selected").to_node()
+        dagre = nodes_with_tag(_view("holder", adjacency).to_node(), "spaday-dagre")[0]
         assert prop_value(dagre, "layout") == {"rankdir": "LR"}
 
     def test_validates(self):
         adjacency = dependency_edges(registry_leaves(_registry_with_dependency()))
-        validate(model_dependency_view("holder", adjacency, selected_field="selected").to_node())
+        validate(_view("holder", adjacency).to_node())

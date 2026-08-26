@@ -16,7 +16,7 @@ from spaday_webawesome import WaSwitch
 
 import ccflow
 
-from .graph import dependency_edges, model_dependency_view
+from .graph import MENU_PATH_FIELD, dependency_edges, model_dependency_view
 from .model import model_view, pending_model_view
 
 __all__ = (
@@ -45,6 +45,7 @@ def registry_store(selected: str = "") -> dict:
     return {
         SELECTED_FIELD: selected,
         SELECTED_PATHS_FIELD: [selected] if selected else [],
+        MENU_PATH_FIELD: "",
         DARK_FIELD: False,
     }
 
@@ -109,7 +110,7 @@ def _details_view(leaves: list[tuple[str, object]]) -> Component:
         if isinstance(model, Mapping) and "_target_" in model:
             pending_paths.append(path)
         else:
-            dependency_view = model_dependency_view(path, adjacency, selected_field=SELECTED_FIELD)
+            dependency_view = model_dependency_view(path, adjacency, selected_field=SELECTED_FIELD, selected_paths_field=SELECTED_PATHS_FIELD)
             panels.append(Show(model_view(model, path, dependency_view), when=eq(field(SELECTED_FIELD), lit(path))))
     if pending_paths:
         pending_selected = any_(*(eq(field(SELECTED_FIELD), lit(path)) for path in pending_paths))
