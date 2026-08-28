@@ -9,17 +9,27 @@ import json
 
 from pydantic._internal._repr import display_as_type
 from spaday import Component, Strong, Text, element
-from spaday.actions import Expr
+from spaday.actions import CallEndpoint, Expr, RefreshTree, Sequence, obj
 from spaday.components import Column, Row
 from spaday_webawesome import Tabs, WaBadge, WaButton, WaCard, WaDivider
 
 import ccflow
 
 #: Path of the endpoint (served by :func:`ccflow.ui.spaday.cli.serve_registry`) that materializes a
-#: pending model server-side and redirects back with it selected.
+#: pending model server-side.
 MATERIALIZE_ENDPOINT = "/materialize"
 
-__all__ = ("MATERIALIZE_ENDPOINT", "model_config_view", "model_type_view", "model_view", "pending_model_view")
+#: Signal-store field holding the materialize call's ``{status, ok, body}`` outcome.
+MATERIALIZE_RESULT_FIELD = "materialize_result"
+
+__all__ = (
+    "MATERIALIZE_ENDPOINT",
+    "MATERIALIZE_RESULT_FIELD",
+    "model_config_view",
+    "model_type_view",
+    "model_view",
+    "pending_model_view",
+)
 
 _PRE_STYLE = {
     "white_space": "pre-wrap",
@@ -131,17 +141,21 @@ def model_view(model, path: str = "", dependency_view: Component | None = None) 
     return WaCard(appearance="outlined").child(Column(header, WaDivider(), tabs, gap="0.75rem"))
 
 
-def _materialize_button() -> Component:
-    """A form that asks the server to instantiate the pending model and reselect it once loaded."""
-    path = element("input", type="hidden", name="path").bind("value", "selected")
-    return element("form", path, WaButton(variant="brand", type="submit").text("Materialize"), method="post", action=MATERIALIZE_ENDPOINT)
+def _materialize_button(path: str | Expr) -> Component:
+    """Instantiate the pending model server-side, then diff the refreshed tree into the page."""
+    materialize = Sequence(
+        CallEndpoint("POST", MATERIALIZE_ENDPOINT, obj({"path": path}), result=MATERIALIZE_RESULT_FIELD),
+        RefreshTree(),
+    )
+    return WaButton(variant="brand").text("Materialize").on("click", materialize)
 
 
 def pending_model_view(path: str | Expr) -> Component:
-    """A shared card for the currently selected model that has not been instantiated.
+    """A card for a selected model that has not been instantiated.
 
-    The ``Materialize`` action instantiates it on the server and reloads the page with the now-loaded
-    model selected, so its full :func:`model_view` detail is shown.
+    ``Materialize`` instantiates it on the server and refreshes the tree in place, so the card becomes
+    the full :func:`model_view` detail without a reload. Failures are reported from
+    :data:`MATERIALIZE_RESULT_FIELD`.
     """
     tabs = Tabs(active="summary")
     tabs.tab(
@@ -149,7 +163,7 @@ def pending_model_view(path: str | Expr) -> Component:
         Column(
             _labeled("Registry Path", _code(path)),
             Text("This model has not been instantiated. Materialize it to inspect its type, context, result, and parameters."),
-            _materialize_button(),
+            _materialize_button(path),
             gap="0.75rem",
         ),
         name="summary",

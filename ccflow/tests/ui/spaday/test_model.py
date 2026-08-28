@@ -5,9 +5,16 @@ from spaday.actions import field
 from spaday.validate import validate
 
 from ccflow import BaseModel, CallableModel, ContextBase, Flow, GenericResult, ModelRegistry
-from ccflow.ui.spaday.model import MATERIALIZE_ENDPOINT, model_config_view, model_type_view, model_view, pending_model_view
+from ccflow.ui.spaday.model import (
+    MATERIALIZE_ENDPOINT,
+    MATERIALIZE_RESULT_FIELD,
+    model_config_view,
+    model_type_view,
+    model_view,
+    pending_model_view,
+)
 
-from .utils import all_text, nodes_with_tag, prop_str, text_of
+from .utils import all_text, nodes_with_tag, text_of
 
 
 class SimpleModel(BaseModel):
@@ -123,13 +130,18 @@ class TestPendingModelView:
         assert "Pending" in text
         assert "group/model" in text
 
-    def test_materialize_button_links_to_endpoint_with_path(self):
+    def test_materialize_button_calls_endpoint_then_refreshes(self):
         node = pending_model_view(field("selected")).to_node()
-        forms = nodes_with_tag(node, "form")
-        assert prop_str(forms[0], "method") == "post"
-        assert prop_str(forms[0], "action") == MATERIALIZE_ENDPOINT
-        inputs = nodes_with_tag(node, "input")
-        assert prop_str(inputs[0], "name") == "path"
+        button = next(n for n in nodes_with_tag(node, "wa-button") if "click" in n.get("events", {}))
+        steps = button["events"]["click"]["actions"]
+        call, refresh = steps[0], steps[1]
+        assert call["kind"] == "call"
+        assert call["method"] == "POST"
+        assert call["url"] == MATERIALIZE_ENDPOINT
+        assert call["result"] == MATERIALIZE_RESULT_FIELD
+        assert call["body"]["fields"]["path"] == {"expr": "field", "name": "selected"}
+        # The refreshed tree replaces the pending card in place, so there is no page reload.
+        assert refresh["kind"] == "refresh"
 
     def test_validates(self):
         validate(pending_model_view(field("selected")).to_node())

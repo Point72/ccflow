@@ -3,14 +3,14 @@
 ccflow models declare which other registered models they contain via
 :meth:`ccflow.BaseModel.get_registry_dependencies`. That relation is a DAG over registry paths; each
 model's detail card shows only the part reachable from that model, so the graph stays about the model
-in front of you. Clicking a node selects it, so the graph doubles as a navigator.
+in front of you. A node opens a context menu, from which the model can be selected.
 """
 
 from collections.abc import Mapping
 
-from spaday import Component, Strong, element
-from spaday.actions import If, Sequence, SetField, by_id, close_popup, eq, event_prop, field, lit, open_popup
-from spaday.components import Column, Popup, Show
+from spaday import Component, element
+from spaday.actions import Sequence, SetField, by_id, close_popup, event_value, field, open_popup
+from spaday.components import Column, Popup
 from spaday_dagre import Dagre
 from spaday_webawesome import WaButton, WaCard, WaDivider
 
@@ -19,14 +19,13 @@ __all__ = ("MENU_PATH_FIELD", "dependency_edges", "model_dependency_graph", "mod
 #: Dependencies flow left to right into the model.
 _LAYOUT = {"rankdir": "LR"}
 
+#: Full registry paths make good labels but poor node widths; wider ones ellipsise.
+_MAX_LABEL_WIDTH = 220
+
 #: The signal-store field holding the node a context menu was opened on.
 MENU_PATH_FIELD = "menu_path"
 
 _MENU_ID = "dependency-node-menu"
-
-#: dagre draws each node as ``<g data-node-id>`` wrapping a ``<rect>`` and a ``<text>``, so a pointer
-#: event lands on a child and the node is one level up.
-_EVENT_NODE_ID = "target.parentElement.dataset.nodeId"
 
 
 def _is_pending(model) -> bool:
@@ -80,64 +79,52 @@ def model_dependency_graph(path: str, adjacency: dict[str, list[str]]) -> dict:
                 seen.add(target)
                 queue.append(target)
 
-    nodes = [{"id": node, "label": node, **({"class": "focus"} if node == path else {})} for node in order]
+    nodes = [{"id": node, "label": node} for node in order]
     edges = [{"source": dependency, "target": node} for node in order for dependency in adjacency.get(node, ())]
     return {"nodes": nodes, "edges": edges}
 
 
-def _node_menu(paths: list[str], *, selected_field: str, selected_paths_field: str) -> Popup:
-    """The context menu shown for a graph node.
-
-    One body per node, gated on which node was clicked, so each carries literal actions: the action DSL
-    has no way to build the single-element list the tree's ``selected_paths`` needs from a store value.
-    """
-    entries = []
-    for path in paths:
-        open_model = Sequence(
-            SetField(selected_field, lit(path)),
-            SetField(selected_paths_field, lit([path])),
-            close_popup(by_id(_MENU_ID)),
-        )
-        entries.append(
-            Show(
-                Column(
-                    Strong(path.rsplit("/", 1)[-1]),
-                    element("code").text(path).style(font_size="0.8em", overflow_wrap="anywhere"),
-                    WaDivider(),
-                    WaButton(appearance="filled", size="s").text("Open model").on("click", open_model),
-                    gap="0.4rem",
-                ),
-                when=eq(field(MENU_PATH_FIELD), lit(path)),
-            )
-        )
-
-    card = WaCard(appearance="outlined").child(Column(*entries, gap="0.4rem")).style(min_width="14rem")
-    return Popup(card, id=_MENU_ID)
+def _node_menu(*, selected_field: str) -> Popup:
+    """The context menu shown for a graph node, bound to whichever node opened it."""
+    open_model = Sequence(
+        SetField(selected_field, field(MENU_PATH_FIELD)),
+        close_popup(by_id(_MENU_ID)),
+    )
+    body = Column(
+        element("code").bind("textContent", MENU_PATH_FIELD).style(font_size="0.85em", overflow_wrap="anywhere"),
+        WaDivider(),
+        WaButton(appearance="filled", size="s").text("Open model").on("click", open_model),
+        gap="0.4rem",
+    )
+    return Popup(WaCard(appearance="outlined").child(body).style(min_width="14rem"), id=_MENU_ID)
 
 
-def model_dependency_view(path: str, adjacency: dict[str, list[str]], *, selected_field: str, selected_paths_field: str) -> Component | None:
+def model_dependency_view(path: str, adjacency: dict[str, list[str]], *, selected_field: str) -> Component | None:
     """The model's dependency graph, or ``None`` when it depends on nothing worth drawing.
 
     A node opens a context menu rather than navigating on the spot; choosing "Open model" from it sets
-    ``selected_field`` and reveals the model in the sidebar tree via ``selected_paths_field``.
+    ``selected_field``, which routes the page and reveals the model in the sidebar tree.
     """
     graph = model_dependency_graph(path, adjacency)
     if len(graph["nodes"]) < 2:
         return None
 
-    # The node id lives on the group above the clicked shape, and is absent when the pointer misses a
-    # node, which is what keeps the menu from opening over blank canvas.
-    node_id = event_prop(_EVENT_NODE_ID)
-    show_menu = If(node_id, open_popup(by_id(_MENU_ID), context_field=MENU_PATH_FIELD, context=node_id))
+    show_menu = open_popup(
+        by_id(_MENU_ID),
+        x=event_value("x"),
+        y=event_value("y"),
+        context_field=MENU_PATH_FIELD,
+        context=event_value("id"),
+    )
 
     dagre = (
-        Dagre(zoomable=True)
+        Dagre(zoomable=True, controls=True, max_label_width=_MAX_LABEL_WIDTH, emphasis=path)
         .prop("graph", graph)
         .prop("layout", _LAYOUT)
-        .on("click", show_menu)
-        .on("contextmenu", show_menu)
+        .on("dagre-node-click", show_menu)
+        .on("dagre-node-contextmenu", show_menu)
         .style(display="block", height="22rem")
     )
 
-    paths = [node["id"] for node in graph["nodes"]]
-    return Column(dagre, _node_menu(paths, selected_field=selected_field, selected_paths_field=selected_paths_field), gap="0")
+    menu = _node_menu(selected_field=selected_field)
+    return Column(dagre, menu, gap="0")

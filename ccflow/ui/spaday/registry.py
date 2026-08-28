@@ -1,51 +1,53 @@
 """Registry browser and top-level viewer as a spaday component tree.
 
-Selection is driven entirely client-side through the runtime's signal store: picking a leaf in the
-``spaday-tree`` writes the model's path to the ``selected`` field, and each model's detail card is
-wrapped in a :class:`~spaday.components.shell.Show` that mounts only when ``selected`` equals its path.
-No round-trip to Python is needed to change the selection.
+Selection is driven client-side through the runtime's signal store: picking a leaf in the
+``spaday-tree`` writes the model's path to the ``selected`` field, and a :class:`Switch` routes to that
+model's detail card. ``selected`` is bound to a URL query parameter by the server, so a model is
+linkable and back/forward navigate between models.
 """
 
 from collections.abc import Mapping
+from urllib.parse import quote
 
-from spaday import Component, Strong, Text
-from spaday.actions import SetField, any_, eq, event_value, field, lit, not_
-from spaday.components import App, Body, Column, Gutter, Main, Nav, Row, Show
+from spaday import Component, Strong, Text, element
+from spaday.actions import SetField, arr, cond, event_value, field, lit
+from spaday.components import App, Body, Column, Gutter, Lazy, Main, Nav, Row, Switch, Toast
 from spaday_trees import Tree
 from spaday_webawesome import WaSwitch
 
 import ccflow
 
 from .graph import MENU_PATH_FIELD, dependency_edges, model_dependency_view
-from .model import model_view, pending_model_view
+from .model import MATERIALIZE_RESULT_FIELD, model_view, pending_model_view
 
 __all__ = (
+    "CARD_ENDPOINT",
     "DARK_FIELD",
     "SELECTED_FIELD",
-    "SELECTED_PATHS_FIELD",
+    "model_card",
     "registry_leaves",
     "registry_store",
     "registry_tree",
     "registry_viewer",
 )
 
+#: Path of the endpoint (served by :func:`ccflow.ui.spaday.cli.serve_registry`) returning one model's
+#: card, so the initial page carries a placeholder per model rather than every card.
+CARD_ENDPOINT = "/card"
+
 #: The signal-store field holding the selected model's registry path ("" when nothing is selected).
 SELECTED_FIELD = "selected"
-
-#: The tree's own selection, as the list of paths it takes. Seeding it makes the tree expand to reveal
-#: that model, which is what keeps the tree open across the reload a materialize triggers.
-SELECTED_PATHS_FIELD = "selected_paths"
 
 #: The signal-store field driving the ``wa-dark`` page theme.
 DARK_FIELD = "dark"
 
 
-def registry_store(selected: str = "") -> dict:
+def registry_store() -> dict:
     """The initial signal-store state the viewer is mounted with."""
     return {
-        SELECTED_FIELD: selected,
-        SELECTED_PATHS_FIELD: [selected] if selected else [],
+        SELECTED_FIELD: "",
         MENU_PATH_FIELD: "",
+        MATERIALIZE_RESULT_FIELD: {},
         DARK_FIELD: False,
     }
 
@@ -76,17 +78,26 @@ def registry_leaves(registry, *, sort_children: bool = True, _prefix: str = "") 
     return leaves
 
 
+def _is_pending(model) -> bool:
+    """Whether the entry is an un-instantiated (lazy) registry config rather than a model."""
+    return isinstance(model, Mapping) and "_target_" in model
+
+
 def registry_tree(registry, *, sort_children: bool = True) -> Tree:
     """Build the registry browser: a path-driven tree whose leaf selection sets ``selected``.
 
     ``spaday-tree`` derives the hierarchy from the ``/``-separated paths itself and provides its own
     search box, so the whole registry is described by the flat leaf-path list.
     """
-    paths = [path for path, _ in registry_leaves(registry, sort_children=sort_children)]
+    leaves = registry_leaves(registry, sort_children=sort_children)
+    decorations = {
+        path: {"badge": "lazy", "tone": "warning", "tooltip": "Configured but not yet instantiated"} for path, model in leaves if _is_pending(model)
+    }
     # The tree virtualizes its rows, so it renders nothing unless it is given a height to fill.
     return (
-        Tree(paths=paths, id="registry-tree")
-        .bind("selected_paths", SELECTED_PATHS_FIELD)
+        Tree(paths=[path for path, _ in leaves], decorations=decorations, id="registry-tree")
+        # Revealing the selection is what expands the tree to a deep-linked model.
+        .compute("selected_paths", cond(field(SELECTED_FIELD), arr(field(SELECTED_FIELD)), lit([])))
         .on("selection-change", SetField(SELECTED_FIELD, event_value("paths.0")))
         .style(display="block", flex="1", min_height="70vh")
     )
@@ -101,21 +112,35 @@ def _placeholder() -> Component:
     )
 
 
+def _loading() -> Component:
+    """Shown while a card is being fetched."""
+    return Text("Loading…")
+
+
+def _code(text: str) -> Component:
+    return element("code").text(text).style(overflow_wrap="anywhere")
+
+
+def model_card(registry, path: str, *, sort_children: bool = True) -> Component:
+    """The detail card for one model, built on demand for :data:`CARD_ENDPOINT`.
+
+    Dependencies are resolved against the whole registry, so the graph is the same as it would be if
+    the card had been inlined.
+    """
+    leaves = registry_leaves(registry, sort_children=sort_children)
+    model = next((candidate for leaf_path, candidate in leaves if leaf_path == path), None)
+    if model is None:
+        return Column(Strong("Unknown model"), _code(path), gap="0.5rem")
+    if _is_pending(model):
+        return pending_model_view(path)
+    dependency_view = model_dependency_view(path, dependency_edges(leaves), selected_field=SELECTED_FIELD)
+    return model_view(model, path, dependency_view)
+
+
 def _details_view(leaves: list[tuple[str, object]]) -> Component:
-    """The per-model detail cards, one mounted at a time based on ``selected``."""
-    adjacency = dependency_edges(leaves)
-    panels: list[Component] = [Show(_placeholder(), when=not_(field(SELECTED_FIELD)))]
-    pending_paths = []
-    for path, model in leaves:
-        if isinstance(model, Mapping) and "_target_" in model:
-            pending_paths.append(path)
-        else:
-            dependency_view = model_dependency_view(path, adjacency, selected_field=SELECTED_FIELD, selected_paths_field=SELECTED_PATHS_FIELD)
-            panels.append(Show(model_view(model, path, dependency_view), when=eq(field(SELECTED_FIELD), lit(path))))
-    if pending_paths:
-        pending_selected = any_(*(eq(field(SELECTED_FIELD), lit(path)) for path in pending_paths))
-        panels.append(Show(pending_model_view(field(SELECTED_FIELD)), when=pending_selected))
-    return Column(*panels, gap="1rem")
+    """Route to the selected model's card, each deferred so only the visible one is ever fetched."""
+    cases = {path: Lazy(_loading(), src=f"{CARD_ENDPOINT}?model={quote(path)}") for path, _ in leaves}
+    return Switch(SELECTED_FIELD, cases, default=_placeholder())
 
 
 def registry_viewer(registry, *, title: str = "ccflow Model Registry", browser_width: int = 400, sort_children: bool = True) -> App:
@@ -130,7 +155,14 @@ def registry_viewer(registry, *, title: str = "ccflow Model Registry", browser_w
 
     theme = Row(WaSwitch().text("Dark").bind("checked", DARK_FIELD, mode="two-way"), gap="0.5rem", align="center")
 
+    # A materialize that fails server-side (a bad _target_, a missing dependency) reports here.
+    toasts = Toast(tone="danger", timeout=0, id="materialize-toasts").compute(
+        "message",
+        cond(field(f"{MATERIALIZE_RESULT_FIELD}.ok"), lit(""), field(f"{MATERIALIZE_RESULT_FIELD}.body.message")),
+    )
+
     return App(
         Nav(Row(Strong(title), theme, gap="1rem", align="center", justify="space-between")),
         Body(sidebar, Main(_details_view(leaves))),
+        toasts,
     ).bind_root_class("wa-dark", DARK_FIELD)
