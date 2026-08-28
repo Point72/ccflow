@@ -10,8 +10,6 @@ import asyncio
 import logging
 import os
 from collections.abc import Callable
-from pathlib import Path
-from urllib.parse import parse_qs, quote
 
 from spaday_dagre import package as dagre_package
 from spaday_trees import package as trees_package
@@ -21,7 +19,7 @@ from ccflow import ModelRegistry
 from ccflow.utils.hydra import add_hydra_config_args, load_config, resolve_config_paths
 
 from .model import MATERIALIZE_ENDPOINT
-from .registry import registry_store, registry_viewer
+from .registry import CARD_ENDPOINT, DARK_FIELD, SELECTED_FIELD, model_card, registry_store, registry_viewer
 
 __all__ = ("main", "registry_viewer_cli", "serve_registry")
 
@@ -30,30 +28,13 @@ log = logging.getLogger(__name__)
 #: Component packages whose assets the page needs (webawesome controls, the tree, the dependency graph).
 _PACKAGES = (webawesome_package, trees_package, dagre_package)
 
-#: The tree colours itself with CSS ``light-dark()``, which follows ``color-scheme`` rather than
-#: webawesome's ``wa-dark`` class, so bridge the two to keep the sidebar in step with the page theme.
-#: The inner ``file-tree-container`` sets ``color-scheme`` on its own ``:host``, so it must be targeted
-#: directly for the document rule to win.
+#: spaday-trees follows ``wa-dark``/``wa-light`` itself; the page only ever sets ``wa-dark``, so pin the
+#: unset case to light at zero specificity, letting the package's own dark rule win when it applies.
 _STYLES = (
-    (
-        "spaday-tree, spaday-tree file-tree-container { color-scheme: light; }"
-        " .wa-dark spaday-tree, .wa-dark spaday-tree file-tree-container { color-scheme: dark; }"
-    ),
+    ":where(spaday-tree), :where(spaday-tree file-tree-container) { color-scheme: light; }",
+    # Un-materialized models are drawn as outlines so they read as configuration, not instances.
+    "spaday-dagre .spaday-dagre-node.pending :is(rect, ellipse, polygon) { stroke-dasharray: 4 3; }",
 )
-
-
-def _asset_layout() -> str:
-    """Select spaday's asset layout ("source" vs "installed").
-
-    spaday auto-detects this from whether ``<spaday>/../js`` is a directory, but an unrelated
-    top-level ``js`` package on ``sys.path`` (common in site-packages) makes it wrongly choose the
-    "source" layout, whose bundle URLs then 404. Only a real spaday source checkout ships ``js/dist``,
-    so require that before trusting the source layout; otherwise use the packaged extension assets.
-    """
-    import spaday
-
-    source_js = Path(spaday.__file__).resolve().parent.parent / "js"
-    return "source" if (source_js / "dist").is_dir() else "installed"
 
 
 def serve_registry(
@@ -83,52 +64,53 @@ def serve_registry(
     try:
         import uvicorn
         from spaday.backends.starlette import serve
-        from spaday.bootstrap import bootstrap
-        from starlette.responses import HTMLResponse, RedirectResponse
+        from spaday.bootstrap import tree_json
+        from starlette.responses import JSONResponse, Response
         from starlette.routing import Route
     except ImportError:
         raise ImportError(
             "spaday, starlette and uvicorn must be installed to serve the spaday UI. Pip install ccflow[full] to install all optional dependencies."
         ) from None
 
-    layout = _asset_layout()
-
     def page():
         return registry_viewer(registry, title=title, browser_width=browser_width, sort_children=sort_children)
 
     async def materialize(request):
-        """Instantiate a pending (lazily-loaded) model, then redirect back with it selected.
+        """Instantiate a pending (lazily-loaded) model.
 
-        Materialization is best-effort: if the model cannot be constructed (e.g. it needs live data
-        or an unavailable dependency) the failure is logged and the page still reloads, leaving the
-        entry pending so it can be retried.
+        The client refreshes the tree afterwards, so the response only has to report the outcome: a
+        model that cannot be constructed (a bad ``_target_``, an unavailable dependency) stays pending
+        and its error is returned for the page to surface.
         """
-        body = parse_qs((await request.body()).decode())
-        path = request.query_params.get("path", "") or body.get("path", [""])[0]
-        if path:
-            try:
-                await asyncio.to_thread(registry.__getitem__, path)
-            except Exception:
-                log.exception("Failed to materialize lazy registry model %r", path)
-        return RedirectResponse(url=f"/?sel={quote(path)}", status_code=303)
+        path = (await request.json()).get("path", "")
+        if not path:
+            return JSONResponse({"message": "No model selected."}, status_code=400)
+        try:
+            await asyncio.to_thread(registry.__getitem__, path)
+        except Exception as error:
+            log.exception("Failed to materialize lazy registry model %r", path)
+            return JSONResponse({"message": f"Could not materialize {path}: {error}"}, status_code=500)
+        return JSONResponse({"message": f"Materialized {path}."})
 
-    def homepage(request):
-        """Serve the page with the ``?sel=`` model preselected (used by the materialize redirect)."""
-        selected = request.query_params.get("sel", "")
-        return HTMLResponse(bootstrap(packages=_PACKAGES, styles=_STYLES, store=registry_store(selected), title=title, layout=layout))
+    def card(request):
+        """Return one model's detail card, fetched by the page when that model is first shown."""
+        path = request.query_params.get("model", "")
+        component = model_card(registry, path, sort_children=sort_children)
+        return Response(tree_json(component), media_type="application/json")
 
     app = serve(
         page,
         packages=_PACKAGES,
         styles=_STYLES,
         store=registry_store(),
+        url={SELECTED_FIELD: "model"},
+        persist={DARK_FIELD: "ccflow-ui-dark"},
         title=title,
-        layout=layout,
-        routes=[Route(MATERIALIZE_ENDPOINT, materialize, methods=["POST"])],
+        routes=[
+            Route(MATERIALIZE_ENDPOINT, materialize, methods=["POST"]),
+            Route(CARD_ENDPOINT, card),
+        ],
     )
-    # Prepend a homepage that seeds the selection from ?sel= so the freshly materialized model's detail
-    # card is shown immediately after the materialize redirect (Starlette matches routes in order).
-    app.routes.insert(0, Route("/", homepage, methods=["GET"]))
 
     if run:
         uvicorn.run(app, host=host, port=port)

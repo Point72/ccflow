@@ -10,7 +10,7 @@ from .utils import event_action, nodes_with_tag, prop_value
 
 
 def _view(path, adjacency):
-    return model_dependency_view(path, adjacency, selected_field="selected", selected_paths_field="selected_paths")
+    return model_dependency_view(path, adjacency, selected_field="selected")
 
 
 class Leaf(BaseModel):
@@ -93,10 +93,10 @@ class TestModelDependencyGraph:
         # The edge points from the dependency into the model that uses it.
         assert graph["edges"] == [{"source": "sub/alpha", "target": "holder"}]
 
-    def test_focus_node_is_marked(self):
+    def test_nodes_carry_no_styling_classes(self):
         graph = model_dependency_graph("holder", {"holder": ["sub/alpha"], "sub/alpha": []})
-        assert graph["nodes"][0]["class"] == "focus"
-        assert "class" not in graph["nodes"][1]
+        # Emphasis is a bindable prop on the component, so the graph stays pure structure.
+        assert all("class" not in node for node in graph["nodes"])
 
     def test_transitive_dependencies_are_included(self):
         adjacency = {"outer": ["holder"], "holder": ["leaf"], "leaf": []}
@@ -130,37 +130,44 @@ class TestModelDependencyView:
         assert len(dagre) == 1
         assert prop_value(dagre[0], "graph")["edges"] == [{"source": "sub/alpha", "target": "holder"}]
 
-    def test_node_click_opens_the_menu_instead_of_navigating(self):
+    def test_node_events_open_the_menu_instead_of_navigating(self):
         adjacency = dependency_edges(registry_leaves(_registry_with_dependency()))
         node = _view("holder", adjacency).to_node()
         dagre = nodes_with_tag(node, "spaday-dagre")[0]
-        for event in ("click", "contextmenu"):
+        for event in ("dagre-node-click", "dagre-node-contextmenu"):
             action = event_action(dagre, event)
-            # Guarded on the node id, so a click on blank canvas opens nothing.
-            assert action["kind"] == "if"
-            assert action["cond"] == {"expr": "event-prop", "path": "target.parentElement.dataset.nodeId"}
-            assert action["then"]["kind"] == "seq"
+            # open_popup is a Sequence that captures the node, then positions and opens the popup.
+            assert action["kind"] == "seq"
+            writes = [step for step in action["actions"] if step["kind"] == "set-field"]
+            assert writes[0]["field"] == "menu_path"
+            assert writes[0]["value"] == {"expr": "event", "path": "id"}
 
-    def test_menu_has_a_body_per_node(self):
+    def test_menu_is_shared_and_bound_to_the_clicked_node(self):
         adjacency = dependency_edges(registry_leaves(_registry_with_dependency()))
         node = _view("holder", adjacency).to_node()
-        assert nodes_with_tag(node, "spa-popup")
-        shows = nodes_with_tag(node, "spa-show")
-        assert len(shows) == 2  # one per node in the graph
+        assert len(nodes_with_tag(node, "spa-popup")) == 1
+        # One body for every node, bound to the store rather than one gated copy per node.
+        assert not nodes_with_tag(node, "spa-show")
+        code = [n for n in nodes_with_tag(node, "code") if "textContent" in n.get("bindings", {})]
+        assert code[0]["bindings"]["textContent"]["field"] == "menu_path"
 
     def test_open_model_sets_selection_and_reveals_in_tree(self):
         adjacency = dependency_edges(registry_leaves(_registry_with_dependency()))
         node = _view("holder", adjacency).to_node()
-        buttons = [n for n in nodes_with_tag(node, "wa-button") if "click" in n.get("events", {})]
-        writes = {}
-        for button in buttons:
-            for action in button["events"]["click"]["actions"]:
-                if action["kind"] == "set-field":
-                    writes.setdefault(action["field"], []).append(action["value"]["value"])
-        # Literal per node, because the DSL cannot build the tree's single-element path list.
-        assert set(writes["selected"]) == {"holder", "sub/alpha"}
-        assert ["holder"] in writes["selected_paths"]
-        assert ["sub/alpha"] in writes["selected_paths"]
+        button = next(n for n in nodes_with_tag(node, "wa-button") if "click" in n.get("events", {}))
+        writes = {step["field"]: step["value"] for step in button["events"]["click"]["actions"] if step["kind"] == "set-field"}
+        # Setting the selection is enough: the tree derives its reveal from it.
+        assert writes["selected"] == {"expr": "field", "name": "menu_path"}
+
+    def test_long_labels_are_capped(self):
+        adjacency = dependency_edges(registry_leaves(_registry_with_dependency()))
+        dagre = nodes_with_tag(_view("holder", adjacency).to_node(), "spaday-dagre")[0]
+        assert prop_value(dagre, "maxLabelWidth") == 220
+
+    def test_inspected_model_is_emphasised(self):
+        adjacency = dependency_edges(registry_leaves(_registry_with_dependency()))
+        dagre = nodes_with_tag(_view("holder", adjacency).to_node(), "spaday-dagre")[0]
+        assert prop_value(dagre, "emphasis") == "holder"
 
     def test_layout_is_left_to_right(self):
         adjacency = dependency_edges(registry_leaves(_registry_with_dependency()))

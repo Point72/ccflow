@@ -6,14 +6,14 @@ from ccflow import BaseModel, LazyRegistry, ModelRegistry
 from ccflow.ui.spaday.registry import (
     DARK_FIELD,
     SELECTED_FIELD,
-    SELECTED_PATHS_FIELD,
+    model_card,
     registry_leaves,
     registry_store,
     registry_tree,
     registry_viewer,
 )
 
-from .utils import all_text, event_action, nodes_with_tag, prop_str, prop_value, show_when_value
+from .utils import all_text, event_action, nodes_with_tag, prop_str, prop_value
 
 
 class SimpleModel(BaseModel):
@@ -48,14 +48,7 @@ class TestRegistryStore:
     def test_default_store(self):
         store = registry_store()
         assert store[SELECTED_FIELD] == ""
-        assert store[SELECTED_PATHS_FIELD] == []
         assert store[DARK_FIELD] is False
-
-    def test_store_seeded_with_selection(self):
-        # The materialize redirect reloads with ?sel=, and the tree expands to reveal that path.
-        store = registry_store("sub/alpha")
-        assert store[SELECTED_FIELD] == "sub/alpha"
-        assert store[SELECTED_PATHS_FIELD] == ["sub/alpha"]
 
 
 class TestRegistryLeaves:
@@ -107,9 +100,12 @@ class TestRegistryTree:
         node = registry_tree(ModelRegistry(name="empty")).to_node()
         assert prop_value(node, "paths") == []
 
-    def test_selected_paths_bound_so_the_tree_reveals_the_selection(self):
+    def test_selected_paths_derived_so_the_tree_reveals_the_selection(self):
         node = registry_tree(_registry()).to_node()
-        assert node["bindings"]["selected_paths"]["field"] == SELECTED_PATHS_FIELD
+        # A URL-seeded selection has to expand the tree to it, so the reveal is computed, not seeded.
+        computed = node["bindings"]["selected_paths"]["compute"]
+        assert computed["expr"] == "cond"
+        assert computed["then"] == {"expr": "arr", "of": [{"expr": "field", "name": SELECTED_FIELD}]}
 
 
 class TestRegistryViewer:
@@ -126,22 +122,39 @@ class TestRegistryViewer:
 
     def test_show_panel_per_leaf(self):
         node = registry_viewer(_registry()).to_node()
-        show_targets = {show_when_value(n) for n in nodes_with_tag(node, "spa-show")}
-        # A panel per leaf, plus the placeholder (whose condition is falsy-selection, not an equality).
-        assert "sub/alpha" in show_targets
-        assert "zeta" in show_targets
-        assert len(nodes_with_tag(node, "spa-show")) == 3
+        switch = nodes_with_tag(node, "spa-switch")[0]
+        # One routed case per leaf plus the no-selection default, keyed by registry path.
+        assert switch["bindings"]["on"]["field"] == SELECTED_FIELD
+        assert set(switch["slots"]) == {"sub/alpha", "zeta", "default"}
+
+    def test_cards_are_deferred_not_inlined(self):
+        node = registry_viewer(_registry()).to_node()
+        # Each case is a placeholder that fetches its card, so the page does not carry every model.
+        lazies = nodes_with_tag(node, "spa-lazy")
+        assert {prop_str(n, "src") for n in lazies} == {"/card?model=sub/alpha", "/card?model=zeta"}
+        assert not nodes_with_tag(node, "wa-card")
 
     def test_dependency_graph_is_model_local(self):
-        # Models without dependencies get no graph; the one that has them gets exactly one.
-        assert not nodes_with_tag(registry_viewer(_registry()).to_node(), "spaday-dagre")
-
         root = ModelRegistry.root()
         root.clear()
         leaf = SimpleModel(name="leaf")
         root.add("leaf", leaf)
         root.add("holder", HolderModel(child=leaf))
-        assert len(nodes_with_tag(registry_viewer(root).to_node(), "spaday-dagre")) == 1
+        # The graph lives in the card, and only for the model that has dependencies.
+        assert len(nodes_with_tag(model_card(root, "holder").to_node(), "spaday-dagre")) == 1
+        assert not nodes_with_tag(model_card(root, "leaf").to_node(), "spaday-dagre")
+
+    def test_card_for_unknown_model(self):
+        node = model_card(_registry(), "nope").to_node()
+        assert "Unknown model" in all_text(node)
+
+    def test_card_for_pending_model_does_not_materialize(self):
+        lazy = LazyRegistry(
+            name="lazy",
+            group={"model": {"_target_": "ccflow.tests.ui.spaday.test_registry.SimpleModel", "name": "pending"}},
+        )
+        assert "Materialize" in all_text(model_card(lazy, "group/model").to_node())
+        assert not lazy["group"].is_loaded("model")
 
     def test_browser_width_sets_gutter(self):
         node = registry_viewer(_registry(), browser_width=500).to_node()
@@ -150,8 +163,8 @@ class TestRegistryViewer:
 
     def test_empty_registry_renders(self):
         node = registry_viewer(ModelRegistry(name="empty")).to_node()
-        # Only the placeholder panel, and no graph to draw.
-        assert len(nodes_with_tag(node, "spa-show")) == 1
+        # Only the placeholder case, and no graph to draw.
+        assert set(nodes_with_tag(node, "spa-switch")[0]["slots"]) == {"default"}
         assert not nodes_with_tag(node, "spaday-dagre")
 
     def test_lazy_registry_renders_without_materializing_models(self):
@@ -173,5 +186,14 @@ class TestRegistryViewer:
 
         assert not lazy["group"].is_loaded("model")
         assert not lazy["group"].is_loaded("other")
-        # Placeholder plus one shared pending-model panel, not one detail card per pending leaf.
-        assert len(nodes_with_tag(node, "spa-show")) == 2
+        assert set(nodes_with_tag(node, "spa-switch")[0]["slots"]) == {"group/model", "group/other", "default"}
+
+    def test_pending_models_are_flagged_in_the_tree(self):
+        lazy = LazyRegistry(
+            name="lazy",
+            group={"model": {"_target_": "ccflow.tests.ui.spaday.test_registry.SimpleModel", "name": "pending"}},
+        )
+        decorations = prop_value(registry_tree(lazy).to_node(), "decorations")
+        assert set(decorations) == {"group/model"}
+        assert decorations["group/model"]["badge"] == "lazy"
+        assert not lazy["group"].is_loaded("model")

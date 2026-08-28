@@ -4,10 +4,10 @@ import importlib
 from pathlib import Path
 
 import pytest
-from spaday.bootstrap import _ASSETS, bundles_dir
+from spaday.bootstrap import _ASSETS, _layout, bundles_dir
 
 from ccflow import BaseModel, LazyRegistry, ModelRegistry
-from ccflow.ui.spaday.cli import _asset_layout, _get_ui_args_parser, serve_registry
+from ccflow.ui.spaday.cli import _get_ui_args_parser, serve_registry
 
 
 class SimpleModel(BaseModel):
@@ -65,6 +65,43 @@ class TestServeRegistry:
         assert "/" in paths
         assert "/tree.json" in paths
 
+    def test_selection_is_url_bound_and_theme_persists(self):
+        starlette_testclient = pytest.importorskip("starlette.testclient")
+        registry = ModelRegistry(name="test")
+        registry.add("widget", SimpleModel(name="widget"))
+        app = serve_registry(registry, run=False)
+
+        page = starlette_testclient.TestClient(app).get("/").text
+
+        # The selection rides a query parameter, so a model is linkable and back/forward navigate.
+        assert '"selected"' in page and '"model"' in page
+        assert "ccflow-ui-dark" in page
+
+    def test_card_endpoint_serves_one_model(self):
+        starlette_testclient = pytest.importorskip("starlette.testclient")
+        registry = ModelRegistry(name="test")
+        registry.add("widget", SimpleModel(name="widget", value=7))
+        registry.add("other", SimpleModel(name="other"))
+        client = starlette_testclient.TestClient(serve_registry(registry, run=False))
+
+        response = client.get("/card", params={"model": "widget"})
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["tag"]
+        # Only the requested model's card, so the page can defer the rest.
+        assert "widget" in response.text
+        assert "other" not in response.text
+
+    def test_card_endpoint_handles_unknown_model(self):
+        starlette_testclient = pytest.importorskip("starlette.testclient")
+        client = starlette_testclient.TestClient(serve_registry(ModelRegistry(name="test"), run=False))
+
+        response = client.get("/card", params={"model": "nope"})
+
+        assert response.status_code == 200
+        assert "Unknown model" in response.text
+
     def test_tree_route_reflects_registry(self):
         registry = ModelRegistry(name="test")
         registry.add("widget", SimpleModel(name="widget"))
@@ -102,22 +139,36 @@ class TestMaterializeEndpoint:
         assert not registry["group"].is_loaded("model")
 
         client = starlette_testclient.TestClient(app)
-        response = client.post("/materialize", data={"path": "group/model"}, follow_redirects=False)
+        response = client.post("/materialize", json={"path": "group/model"})
 
-        assert response.status_code == 303
-        assert "sel=group/model" in response.headers["location"]
+        assert response.status_code == 200
+        assert "group/model" in response.json()["message"]
         assert registry["group"].is_loaded("model")
         to_thread.assert_awaited_once()
 
-    def test_materialize_missing_path_redirects_without_error(self):
+    def test_materialize_missing_path_is_rejected(self):
         starlette_testclient = pytest.importorskip("starlette.testclient")
         registry = self._lazy_registry()
         app = serve_registry(registry, run=False)
 
         client = starlette_testclient.TestClient(app)
-        response = client.post("/materialize", follow_redirects=False)
+        response = client.post("/materialize", json={})
 
-        assert response.status_code == 303
+        assert response.status_code == 400
+        assert response.json()["message"]
+
+    def test_materialize_reports_failure(self):
+        starlette_testclient = pytest.importorskip("starlette.testclient")
+        registry = LazyRegistry(name="lazy", group={"broken": {"_target_": "not_a_module.Nope"}})
+        app = serve_registry(registry, run=False)
+
+        client = starlette_testclient.TestClient(app)
+        response = client.post("/materialize", json={"path": "group/broken"})
+
+        # The page surfaces this message in a toast, so it has to name the model and the cause.
+        assert response.status_code == 500
+        assert "group/broken" in response.json()["message"]
+        assert not registry["group"].is_loaded("broken")
 
     def test_materialize_rejects_get(self):
         starlette_testclient = pytest.importorskip("starlette.testclient")
@@ -127,20 +178,11 @@ class TestMaterializeEndpoint:
 
         assert response.status_code == 405
 
-    def test_homepage_seeds_selected_model(self):
-        starlette_testclient = pytest.importorskip("starlette.testclient")
-        registry = self._lazy_registry()
-        app = serve_registry(registry, run=False)
-
-        client = starlette_testclient.TestClient(app)
-        assert "group/model" in client.get("/", params={"sel": "group/model"}).text
-        assert "group/model" not in client.get("/").text
-
 
 class TestAssetLayout:
-    def test_selected_layout_has_runtime_asset(self):
-        # Guards the 404 regression: an unrelated top-level ``js`` package must not push us to the
-        # "source" layout, whose bundle directory would then lack spaday's runtime asset.
-        layout = _asset_layout()
+    def test_resolved_layout_has_runtime_asset(self):
+        # Guards the 404 regression: an unrelated top-level ``js`` package must not push spaday to the
+        # "source" layout, whose bundle directory would then lack the runtime asset.
+        layout = _layout(None)
         runtime = _ASSETS[layout]["runtime"].lstrip("/")
         assert (Path(bundles_dir(layout)) / runtime).is_file()
