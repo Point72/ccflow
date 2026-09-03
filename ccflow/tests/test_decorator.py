@@ -1,6 +1,9 @@
 import logging
+import threading
 from datetime import date, datetime
 from unittest import TestCase
+
+import cloudpickle
 
 from ccflow import CallableModel, DateContext, EvaluatorBase, Flow, FlowOptions, FlowOptionsOverride, GenericResult, ModelEvaluationContext
 
@@ -218,6 +221,13 @@ class TestMetaData(TestCase):
 
 
 class TestFlowOptionsOverride(TestCase):
+    def setUp(self):
+        # A leaked override would silently change the options seen by unrelated tests.
+        FlowOptionsOverride._OPEN_OVERRIDES.clear()
+
+    def tearDown(self):
+        FlowOptionsOverride._OPEN_OVERRIDES.clear()
+
     def test_global(self):
         model = DefaultModel()
         get_options = DefaultModel.__call__.get_options
@@ -317,3 +327,141 @@ class TestFlowOptionsOverride(TestCase):
             self.assertEqual(get_options(model), new_options)
             self.assertEqual(MyModel.bar.get_options(model), new_options)
             self.assertEqual(MyModel.baz.get_options(model), new_baz_options)
+
+    def test_reentrant_instancecheck(self):
+        """get_options must tolerate a user __instancecheck__ that opens another override.
+
+        get_options calls isinstance(model, override.model_types) from inside its own
+        iteration over _OPEN_OVERRIDES, so a user-defined __instancecheck__ runs
+        mid-iteration and may legitimately enter a further override. Iterating the
+        dict directly raised RuntimeError: dictionary changed size during iteration.
+        """
+        opened = []
+
+        class ReentrantMeta(type(CallableModel)):
+            def __instancecheck__(cls, instance):
+                if not opened:
+                    nested = FlowOptionsOverride(options=FlowOptions(log_level=logging.ERROR))
+                    nested.__enter__()
+                    opened.append(nested)
+                return super().__instancecheck__(instance)
+
+        class ReentrantModel(DefaultModel, metaclass=ReentrantMeta):
+            pass
+
+        model = DefaultModel()
+        get_options = DefaultModel.__call__.get_options
+        new_options = FlowOptions(log_level=logging.INFO)
+        try:
+            with FlowOptionsOverride(options=new_options, model_types=(ReentrantModel,)):
+                options = get_options(model)
+        finally:
+            for nested in opened:
+                nested.__exit__(None, None, None)
+
+        self.assertTrue(opened, "the __instancecheck__ hook never ran, so the test is not exercising the bug")
+        self.assertIsInstance(options, FlowOptions)
+
+    def test_concurrent_override_entry(self):
+        """Entering an override on another thread must not break an in-flight get_options.
+
+        The interleaving is pinned with a barrier rather than left to chance: the reader
+        is parked inside its iteration over _OPEN_OVERRIDES until the writer has entered
+        a new override.
+        """
+        barrier = threading.Barrier(2, timeout=30)
+
+        class BlockingMeta(type(CallableModel)):
+            def __instancecheck__(cls, instance):
+                barrier.wait()  # let the writer mutate the dict
+                barrier.wait()  # resume only once it has
+                return super().__instancecheck__(instance)
+
+        class BlockingModel(DefaultModel, metaclass=BlockingMeta):
+            pass
+
+        model = DefaultModel()
+        get_options = DefaultModel.__call__.get_options
+        reader_error = []
+        writer_override = FlowOptionsOverride(options=FlowOptions(log_level=logging.ERROR))
+
+        def reader():
+            try:
+                get_options(model)
+            except BaseException as exc:  # noqa: BLE001 - surfaced on the main thread below
+                reader_error.append(exc)
+
+        def writer():
+            try:
+                barrier.wait()
+                writer_override.__enter__()
+            finally:
+                barrier.wait()
+
+        with FlowOptionsOverride(options=FlowOptions(log_level=logging.INFO), model_types=(BlockingModel,)):
+            threads = [threading.Thread(target=reader), threading.Thread(target=writer)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=30)
+            if id(writer_override) in FlowOptionsOverride._OPEN_OVERRIDES:
+                writer_override.__exit__(None, None, None)
+
+        self.assertEqual(reader_error, [], "get_options raised while another thread entered an override")
+
+    def test_lock_is_a_module_global(self):
+        """The lock guarding _OPEN_OVERRIDES must not live on the class.
+
+        cloudpickle serialises a class by value when it cannot reference it by module
+        path, copying its __dict__ wholesale. A lock held as a ClassVar would then be
+        dragged into the payload and fail with "cannot pickle '_thread.RLock' object".
+        Keeping it as a module global makes that impossible: there is no class attribute
+        for a subclass to inherit or redefine.
+        """
+        import ccflow.callable as callable_module
+
+        self.assertIsInstance(callable_module._OPEN_OVERRIDES_LOCK, type(threading.RLock()))
+        for klass in FlowOptionsOverride.__mro__:
+            self.assertNotIn("_OPEN_OVERRIDES_LOCK", vars(klass))
+
+    def test_cloudpickle_instance(self):
+        """An override instance must survive a cloudpickle round trip."""
+        override = FlowOptionsOverride(options=FlowOptions(log_level=logging.INFO))
+        restored = cloudpickle.loads(cloudpickle.dumps(override))
+        self.assertEqual(restored.options.log_level, override.options.log_level)
+
+    def test_cloudpickle_class(self):
+        """The FlowOptionsOverride class itself must survive a round trip, by reference."""
+        self.assertIs(cloudpickle.loads(cloudpickle.dumps(FlowOptionsOverride)), FlowOptionsOverride)
+
+    def test_cloudpickle_subclass_by_value(self):
+        """A subclass that cloudpickle must serialise by value must still round trip.
+
+        A class defined inside a function cannot be referenced by module path, so
+        cloudpickle copies its __dict__ wholesale. This is the case that fails if the
+        lock is stored on the class, and it is the one that matters under ray.
+        """
+
+        class LocalOverride(FlowOptionsOverride):
+            pass
+
+        self.assertIn("<locals>", LocalOverride.__qualname__)
+        restored = cloudpickle.loads(cloudpickle.dumps(LocalOverride))
+        self.assertEqual(restored.__name__, "LocalOverride")
+        self.assertTrue(issubclass(restored, FlowOptionsOverride))
+
+    def test_cloudpickle_closure_with_open_override(self):
+        """A closure capturing an entered override must survive a round trip.
+
+        This mirrors how work is shipped to a ray worker: a callable is captured while
+        an override is open on the submitting side.
+        """
+        with FlowOptionsOverride(options=FlowOptions(log_level=logging.INFO)) as override:
+
+            def use_override():
+                return override.options.log_level
+
+            expected = override.options.log_level
+            restored = cloudpickle.loads(cloudpickle.dumps(use_override))
+
+        self.assertEqual(restored(), expected)
