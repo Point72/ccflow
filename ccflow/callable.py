@@ -13,6 +13,7 @@ which all need to be defined together so that pydantic (especially V1) can resol
 
 import abc
 import logging
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache, wraps
@@ -380,6 +381,12 @@ class FlowOptionsDeps(FlowOptions):
     _deps: bool = PrivateAttr(True)
 
 
+# Guards FlowOptionsOverride._OPEN_OVERRIDES. Reentrant because get_options can be re-entered on the
+# same thread: its loop bodies call isinstance(), which may run a user __instancecheck__ that opens a
+# further override. Kept as a module global, not a ClassVar, so cloudpickle never copies it by value.
+_OPEN_OVERRIDES_LOCK = threading.RLock()
+
+
 class FlowOptionsOverride(BaseModel):
     """This python context helps the registry track dependencies of underlying calls to the registry.
 
@@ -413,7 +420,13 @@ class FlowOptionsOverride(BaseModel):
             model_options: Additional options to inject in the overrides
         """
         current_options = _FLOW_OPTIONS.model_copy()
-        for override in cls._OPEN_OVERRIDES.values():  # noqa: F402
+        # Take a single snapshot under the lock and use it for both loops below. The loop bodies
+        # call isinstance(), which can run arbitrary user code that re-enters FlowOptionsOverride,
+        # so the lock must not be held across them. A second snapshot would let the two loops
+        # disagree about which overrides are open.
+        with _OPEN_OVERRIDES_LOCK:
+            overrides = list(cls._OPEN_OVERRIDES.values())
+        for override in overrides:  # noqa: F402
             # Apply global options first
             if not override.models and not override.model_types:
                 current_options = cls._apply_options(current_options, override.options)
@@ -429,21 +442,23 @@ class FlowOptionsOverride(BaseModel):
         if model.meta.options:
             current_options = model.meta.options
         # Then apply all model-specific overrides
-        for override in cls._OPEN_OVERRIDES.values():
+        for override in overrides:
             if any(model is m for m in override.models) or isinstance(model, override.model_types):
                 current_options = cls._apply_options(current_options, override.options)
         return current_options
 
     def __enter__(self):
         override_id = id(self)
-        if override_id in FlowOptionsOverride._OPEN_OVERRIDES:
-            raise ValueError(f"{self} has already been entered.")
-        FlowOptionsOverride._OPEN_OVERRIDES[override_id] = self
+        with _OPEN_OVERRIDES_LOCK:
+            if override_id in FlowOptionsOverride._OPEN_OVERRIDES:
+                raise ValueError(f"{self} has already been entered.")
+            FlowOptionsOverride._OPEN_OVERRIDES[override_id] = self
         return self
 
     def __exit__(self, exc_type, exc_value, exc_tb):
         override_id = id(self)
-        del FlowOptionsOverride._OPEN_OVERRIDES[override_id]
+        with _OPEN_OVERRIDES_LOCK:
+            del FlowOptionsOverride._OPEN_OVERRIDES[override_id]
 
 
 class Flow(PydanticBaseModel):
