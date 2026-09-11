@@ -1,0 +1,16 @@
+# @package _global_
+# Tighter: two claims each, and the arbiter must decide. Forcing a decision on a near-tie is how a
+# harness manufactures a result, so this variant exists to be compared against `poem` rather than
+# used by default.
+critique_rubric:
+  criteria:
+    - imagery
+    - adherence to the requested form
+  max_claims: 2
+  require_evidence: true
+
+arbitration_rubric:
+  criteria:
+    - claims grounded in quoted evidence outweigh assertions
+    - internal consistency of the case
+  allow_no_decision: false

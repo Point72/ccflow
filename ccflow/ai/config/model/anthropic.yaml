@@ -1,0 +1,3 @@
+# @package _global_
+# Needs ANTHROPIC_API_KEY in the environment.
+llm: anthropic:claude-sonnet-4-0

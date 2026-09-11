@@ -1,0 +1,4 @@
+# @package _global_
+# For wiring smoke tests only. TestModel generates placeholder strings that cannot satisfy a
+# real-quotation check, so `model=test` needs this; a real model does not.
+enforce_checks: false

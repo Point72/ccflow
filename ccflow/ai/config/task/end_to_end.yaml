@@ -1,0 +1,47 @@
+# @package _global_
+#
+# The whole graph in one run, returning only the verdict. Nothing intermediate is written: the
+# verdict result carries the poem and both critiques, so the full record survives in one file.
+#
+#   python -m ccflow.ai
+#   python -m ccflow.ai model=openai publisher=print
+#
+# `produce` is defined once and referenced three times, so the advocates and the arbiter judge one
+# poem. The cache evaluator in base.yaml is what makes it run once.
+
+task_name: verdict
+
+produce:
+  _target_: ccflow.ai.ProduceModel
+  enforce_checks: ${enforce_checks}
+  spec: ${poem_spec}
+  session: ${producer_session}
+
+pro_advocate:
+  _target_: ccflow.ai.AdvocateModel
+  enforce_checks: ${enforce_checks}
+  position: pro
+  produce: ${produce}
+  rubric: ${critique_rubric}
+  session: ${pro_session}
+
+con_advocate:
+  _target_: ccflow.ai.AdvocateModel
+  enforce_checks: ${enforce_checks}
+  position: con
+  produce: ${produce}
+  rubric: ${critique_rubric}
+  session: ${con_session}
+
+task:
+  _target_: ccflow.ai.DebateModel
+  publisher: ${publisher}
+  arbiter:
+    _target_: ccflow.ai.ArbitrateModel
+    enforce_checks: ${enforce_checks}
+    rubric: ${arbitration_rubric}
+    artifact: ${produce}
+    session: ${arbiter_session}
+    advocates:
+      - ${pro_advocate}
+      - ${con_advocate}

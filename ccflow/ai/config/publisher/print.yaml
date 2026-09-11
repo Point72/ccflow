@@ -1,0 +1,5 @@
+# @package _global_
+# Prints the result instead of writing it, which is the quickest way to see a verdict.
+publisher:
+  _target_: ccflow.publishers.PrintPydanticJSONPublisher
+  name: ${task_name}

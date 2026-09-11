@@ -1,0 +1,61 @@
+# @package _global_
+#
+# The whole graph, arbitrated twice: once with the advocates in configured order, once reversed. A
+# winner is reported only when both orders agree; disagreement is recorded as undecided.
+#
+# This exists because order was measured to matter. Replaying fixed cases with only the presentation
+# order changed, most decisions followed whichever case was shown first.
+#
+#   python -m ccflow.ai task=counterbalanced
+#
+# Cost is one extra arbitration, not a second graph: both arbiters reference the same advocates, and
+# the cache evaluator generates each case once.
+
+task_name: verdict
+
+produce:
+  _target_: ccflow.ai.ProduceModel
+  enforce_checks: ${enforce_checks}
+  spec: ${poem_spec}
+  session: ${producer_session}
+
+pro_advocate:
+  _target_: ccflow.ai.AdvocateModel
+  enforce_checks: ${enforce_checks}
+  position: pro
+  produce: ${produce}
+  rubric: ${critique_rubric}
+  session: ${pro_session}
+
+con_advocate:
+  _target_: ccflow.ai.AdvocateModel
+  enforce_checks: ${enforce_checks}
+  position: con
+  produce: ${produce}
+  rubric: ${critique_rubric}
+  session: ${con_session}
+
+task:
+  _target_: ccflow.ai.DebateModel
+  publisher: ${publisher}
+  arbiter:
+    _target_: ccflow.ai.CounterbalancedArbitrateModel
+    enforce_checks: ${enforce_checks}
+    forward:
+      _target_: ccflow.ai.ArbitrateModel
+      enforce_checks: ${enforce_checks}
+      rubric: ${arbitration_rubric}
+      artifact: ${produce}
+      session: ${arbiter_session}
+      advocates:
+        - ${pro_advocate}
+        - ${con_advocate}
+    reverse:
+      _target_: ccflow.ai.ArbitrateModel
+      enforce_checks: ${enforce_checks}
+      rubric: ${arbitration_rubric}
+      artifact: ${produce}
+      session: ${arbiter_session}
+      advocates:
+        - ${con_advocate}
+        - ${pro_advocate}

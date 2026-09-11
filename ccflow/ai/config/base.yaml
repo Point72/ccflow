@@ -1,0 +1,54 @@
+# @package _global_
+
+# Base configuration for the poem review example: one agent writes a poem, two argue opposing
+# positions about it, and a fourth decides which argued better.
+#
+# Run the whole graph offline (TestModel, no credentials, checks off because generated placeholder
+# text cannot satisfy a real-quotation check):
+#   python -m ccflow.ai checks=off
+# Run it against a real model, with the mechanical constraints enforced:
+#   python -m ccflow.ai model=openai
+# Swap one axis at a time:
+#   python -m ccflow.ai spec=haiku rubrics=strict profile=steelman
+# Judge both presentation orders and report only what survives both:
+#   python -m ccflow.ai task=counterbalanced
+# Write each stage to disk and chain the single-node tasks:
+#   python -m ccflow.ai task=produce publisher=json
+#   python -m ccflow.ai task=advocate publisher=json position=pro
+#   python -m ccflow.ai task=advocate publisher=json position=con
+#   python -m ccflow.ai task=arbitrate publisher=json
+
+defaults:
+  - _self_
+  - model: test
+  - profile: default
+  - agents: poem
+  - rubrics: poem
+  - lessons: none
+  - spec: sea
+  - checks: enforced
+  - publisher: none
+  - task: end_to_end
+
+callable: /task
+context: {}
+
+# Where published results are written. Each task sets its own `task_name`, so the single-node tasks
+# write distinct files and chain by pointing a downstream file source at an upstream output.
+run_dir: ./runs
+
+# Re-prompts allowed when a node's output fails its contract schema or a mechanical check.
+max_repair_attempts: 2
+
+# The graph evaluator schedules the DAG; the cache evaluator is what makes the shared `produce` node
+# run once rather than once per advocate. Without it the advocates would argue about different poems
+# while the arbiter judged a third, and nothing would look wrong.
+cli:
+  model:
+    _target_: ccflow.FlowOptions
+    evaluator:
+      _target_: ccflow.evaluators.MultiEvaluator
+      evaluators:
+        - _target_: ccflow.evaluators.GraphEvaluator
+        - _target_: ccflow.evaluators.MemoryCacheEvaluator
+    cacheable: true

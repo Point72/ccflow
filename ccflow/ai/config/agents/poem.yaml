@@ -1,0 +1,94 @@
+# @package _global_
+#
+# The agent sessions, defined once and referenced by every task. A task picks which of these it
+# needs; none is redefined per task, so changing a command or a contract changes it everywhere.
+#
+# `advocate_session` is the parameterised form used by the standalone advocate task, where the
+# position is chosen on the command line. `pro_session` and `con_session` are the fixed pair the
+# whole-graph tasks need, because a graph requires both at once and a config group selects one
+# option.
+
+advocate_command: >
+  Argue the assigned position about the poem, regardless of your own view. Ground every claim in a
+  direct quotation from the poem.
+
+rebuttal_command: >
+  You have now read the opposing case. Revise yours: drop any claim it has answered and you cannot
+  defend, strengthen the claims that still stand, and add one only if the exchange revealed it. Stay
+  within the claim limit and keep arguing your assigned position -- revising is not conceding.
+
+# `advocate_session` interpolates this, and every top-level node is instantiated regardless of which
+# task is selected, so the group must carry a default or unrelated tasks fail to resolve.
+position: pro
+
+producer_session:
+  _target_: ccflow.ai.AgentSession
+  model: ${llm}
+  role: producer
+  profile_name: ${producer_profile}
+  lessons: ${lessons}
+  command: Write a poem meeting every requirement in the specification.
+  output_contract: ccflow.ai.contracts.Poem
+  max_repair_attempts: ${max_repair_attempts}
+
+advocate_session:
+  _target_: ccflow.ai.AgentSession
+  model: ${llm}
+  role: ${position}
+  profile_name: ${position}
+  lessons: ${lessons}
+  command: ${advocate_command}
+  output_contract: ccflow.ai.contracts.Critique
+  max_repair_attempts: ${max_repair_attempts}
+
+pro_session:
+  _target_: ccflow.ai.AgentSession
+  model: ${llm}
+  role: pro
+  profile_name: ${pro_profile}
+  lessons: ${lessons}
+  command: ${advocate_command}
+  output_contract: ccflow.ai.contracts.Critique
+  max_repair_attempts: ${max_repair_attempts}
+
+pro_rebuttal_session:
+  _target_: ccflow.ai.AgentSession
+  model: ${llm}
+  role: pro
+  profile_name: ${pro_profile}
+  lessons: ${lessons}
+  command: ${rebuttal_command}
+  output_contract: ccflow.ai.contracts.Critique
+  max_repair_attempts: ${max_repair_attempts}
+
+con_session:
+  _target_: ccflow.ai.AgentSession
+  model: ${llm}
+  role: con
+  profile_name: ${con_profile}
+  lessons: ${lessons}
+  command: ${advocate_command}
+  output_contract: ccflow.ai.contracts.Critique
+  max_repair_attempts: ${max_repair_attempts}
+
+con_rebuttal_session:
+  _target_: ccflow.ai.AgentSession
+  model: ${llm}
+  role: con
+  profile_name: ${con_profile}
+  lessons: ${lessons}
+  command: ${rebuttal_command}
+  output_contract: ccflow.ai.contracts.Critique
+  max_repair_attempts: ${max_repair_attempts}
+
+arbiter_session:
+  _target_: ccflow.ai.AgentSession
+  model: ${llm}
+  role: arbiter
+  profile_name: ${arbiter_profile}
+  lessons: ${lessons}
+  command: >
+    Weigh the advocates' cases against the rubric and decide which position is better argued.
+    Judge the arguments, not your own opinion of the poem.
+  output_contract: ccflow.ai.contracts.Verdict
+  max_repair_attempts: ${max_repair_attempts}
