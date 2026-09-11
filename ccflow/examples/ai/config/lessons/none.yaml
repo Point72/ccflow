@@ -1,0 +1,6 @@
+# @package _global_
+# No standing corrections. This is the default: a lesson earns its place by a run having gone wrong,
+# not by seeming like good advice.
+lessons:
+  general: []
+  by_role: {}

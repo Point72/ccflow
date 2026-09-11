@@ -1,0 +1,8 @@
+# @package _global_
+# A sharper pairing: both advocates are told to make the strongest honest case rather than the most
+# rhetorically complete one. Useful as a control -- if the verdict flips between this and `default`,
+# the result was sensitive to advocacy style rather than to the poem.
+producer_profile: producer
+pro_profile: steelman
+con_profile: skeptic
+arbiter_profile: arbiter

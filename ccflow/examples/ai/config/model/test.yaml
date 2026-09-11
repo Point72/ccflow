@@ -1,0 +1,4 @@
+# @package _global_
+# pydantic-ai's TestModel: fills each output contract with generated data and needs no credentials.
+# The generated text cannot satisfy a real-quotation check, so pair it with `checks=off`.
+llm: test

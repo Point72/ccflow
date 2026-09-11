@@ -1,0 +1,3 @@
+# @package _global_
+# Needs OPENAI_API_KEY in the environment. Any identifier pydantic-ai accepts works here.
+llm: openai:gpt-4o-mini
