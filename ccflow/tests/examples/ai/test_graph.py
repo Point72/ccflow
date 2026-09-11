@@ -10,7 +10,7 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase
 
 from ccflow import NullContext
-from ccflow.ai import (
+from ccflow.examples.ai import (
     AdvocateModel,
     AgentSession,
     ArbitrateModel,
@@ -40,7 +40,7 @@ def _session(role, profile=None, contract=None):
         role=role,
         profile_name=profile or role,
         command="do the thing",
-        output_contract=contract or ("ccflow.ai.contracts.Poem" if role == "producer" else "ccflow.ai.contracts.Critique"),
+        output_contract=contract or ("ccflow.examples.ai.contracts.Poem" if role == "producer" else "ccflow.examples.ai.contracts.Critique"),
     )
 
 
@@ -52,7 +52,7 @@ def _graph():
         for position in ("pro", "con")
     ]
     return ArbitrateModel(
-        session=_session("arbiter", contract="ccflow.ai.contracts.Verdict"),
+        session=_session("arbiter", contract="ccflow.examples.ai.contracts.Verdict"),
         advocates=advocates,
         artifact=produce,
         rubric=ArbitrationRubric(criteria=["evidence"]),
@@ -280,7 +280,7 @@ class TestLessonScoping(TestCase):
             role="producer",
             profile_name="producer",
             command="do the thing",
-            output_contract="ccflow.ai.contracts.Poem",
+            output_contract="ccflow.examples.ai.contracts.Poem",
             lessons=Lessons(general=["be plain"], by_role={"producer": ["avoid 'seam'"]}),
         )
         self.assertIn("be plain", session.instructions)
@@ -291,7 +291,7 @@ class TestLessonScoping(TestCase):
             role="producer",
             profile_name="producer",
             command="do the thing",
-            output_contract="ccflow.ai.contracts.Poem",
+            output_contract="ccflow.examples.ai.contracts.Poem",
             lessons=Lessons(by_role={"arbiter": ["fluency is not argument"]}),
         )
         self.assertNotIn("fluency is not argument", session.instructions)
@@ -302,14 +302,14 @@ class TestLessonScoping(TestCase):
             role="pro",
             profile_name="steelman",
             command="argue",
-            output_contract="ccflow.ai.contracts.Critique",
+            output_contract="ccflow.examples.ai.contracts.Critique",
             lessons=Lessons(by_role={"pro": ["quote what you praise"]}),
         )
         self.assertIn("quote what you praise", session.instructions)
         self.assertIn("Steelman", session.instructions)
 
     def test_no_lessons_leaves_the_instructions_unchanged(self):
-        common = {"role": "producer", "profile_name": "producer", "command": "go", "output_contract": "ccflow.ai.contracts.Poem"}
+        common = {"role": "producer", "profile_name": "producer", "command": "go", "output_contract": "ccflow.examples.ai.contracts.Poem"}
         self.assertEqual(AgentSession(**common).instructions, AgentSession(**common, lessons=Lessons()).instructions)
 
 

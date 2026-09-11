@@ -11,14 +11,14 @@ Requires the optional ``ai`` extra::
 
 Run it from the command line, which is where the config groups are steered::
 
-    python -m ccflow.ai checks=off              # offline, needs no credentials
-    python -m ccflow.ai model=openai            # against a real model
-    python -m ccflow.ai task=counterbalanced    # judge both presentation orders
+    python -m ccflow.examples.ai checks=off              # offline, needs no credentials
+    python -m ccflow.examples.ai model=openai            # against a real model
+    python -m ccflow.examples.ai task=counterbalanced    # judge both presentation orders
 
 Or load it into the registry, as the other bundled examples do::
 
     from ccflow import ModelRegistry
-    from ccflow.ai import load_config
+    from ccflow.examples.ai import load_config
 
     load_config(overrides=["checks=off"])
     result = ModelRegistry.root()["/task"]()

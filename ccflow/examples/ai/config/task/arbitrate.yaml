@@ -3,22 +3,22 @@
 # Judge two previously published cases about a previously published poem. Running arbitration alone
 # is what makes it meaningful to re-judge the *same* two cases under a different model or rubric.
 #
-#   python -m ccflow.ai task=arbitrate publisher=json
-#   python -m ccflow.ai task=arbitrate publisher=json model=anthropic
+#   python -m ccflow.examples.ai task=arbitrate publisher=json
+#   python -m ccflow.examples.ai task=arbitrate publisher=json model=anthropic
 
 task_name: verdict
 
 task:
-  _target_: ccflow.ai.ArbitrateModel
+  _target_: ccflow.examples.ai.ArbitrateModel
   publisher: ${publisher}
   enforce_checks: ${enforce_checks}
   rubric: ${arbitration_rubric}
   session: ${arbiter_session}
   artifact:
-    _target_: ccflow.ai.PoemFileSource
+    _target_: ccflow.examples.ai.PoemFileSource
     path: ${run_dir}/poem.json
   advocates:
-    - _target_: ccflow.ai.CritiqueFileSource
+    - _target_: ccflow.examples.ai.CritiqueFileSource
       path: ${run_dir}/critique_pro.json
-    - _target_: ccflow.ai.CritiqueFileSource
+    - _target_: ccflow.examples.ai.CritiqueFileSource
       path: ${run_dir}/critique_con.json

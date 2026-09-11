@@ -7,8 +7,9 @@ moment it is added.
 from pathlib import Path
 from unittest import TestCase
 
-from ccflow import ai
-from ccflow.ai import (
+from ccflow import ModelRegistry
+from ccflow.examples import ai
+from ccflow.examples.ai import (
     AdvocateModel,
     ArbitrateModel,
     ArbitrationRubric,
@@ -40,7 +41,22 @@ def _registry(*overrides):
     return load_config(overrides=["checks=off", *overrides])
 
 
-class TestGroupLayout(TestCase):
+class RegistryTestCase(TestCase):
+    """The root registry is global, so start and finish with a clean one.
+
+    Without this these tests pass alone and fail in a suite, in both directions: entries left by
+    another module change what `/task` resolves to here, and entries left here leak into everything
+    that runs afterwards.
+    """
+
+    def setUp(self):
+        ModelRegistry.root().clear()
+
+    def tearDown(self):
+        ModelRegistry.root().clear()
+
+
+class TestGroupLayout(RegistryTestCase):
     def test_every_group_exists(self):
         for group in GROUPS:
             with self.subTest(group=group):
@@ -57,7 +73,7 @@ class TestGroupLayout(TestCase):
                 self.assertIsNotNone(_registry(f"{group}={option}")["/task"])
 
 
-class TestTasks(TestCase):
+class TestTasks(RegistryTestCase):
     def test_the_default_task_runs_the_whole_graph(self):
         task = _registry()["/task"]
         self.assertIsInstance(task, DebateModel)
@@ -117,7 +133,7 @@ class TestTasks(TestCase):
         self.assertTrue(all(isinstance(a, RebuttalModel) for a in arbiter.forward.advocates))
 
 
-class TestGroupsReachEveryNode(TestCase):
+class TestGroupsReachEveryNode(RegistryTestCase):
     def test_the_model_group_reaches_every_session(self):
         task = _registry("model=anthropic")["/task"]
         advocates = task.arbiter.advocates
@@ -192,7 +208,7 @@ class TestGroupsReachEveryNode(TestCase):
             self.assertIsInstance(advocate.rubric, CritiqueRubric)
 
 
-class TestTasksRun(TestCase):
+class TestTasksRun(RegistryTestCase):
     def test_each_whole_graph_task_returns_a_verdict_over_two_cases(self):
         for task_name in ("end_to_end", "counterbalanced", "rebuttal", "rebuttal_counterbalanced"):
             with self.subTest(task=task_name):

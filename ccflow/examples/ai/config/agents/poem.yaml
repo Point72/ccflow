@@ -22,67 +22,67 @@ rebuttal_command: >
 position: pro
 
 producer_session:
-  _target_: ccflow.ai.AgentSession
+  _target_: ccflow.examples.ai.AgentSession
   model: ${llm}
   role: producer
   profile_name: ${producer_profile}
   lessons: ${lessons}
   command: Write a poem meeting every requirement in the specification.
-  output_contract: ccflow.ai.contracts.Poem
+  output_contract: ccflow.examples.ai.contracts.Poem
   max_repair_attempts: ${max_repair_attempts}
 
 advocate_session:
-  _target_: ccflow.ai.AgentSession
+  _target_: ccflow.examples.ai.AgentSession
   model: ${llm}
   role: ${position}
   profile_name: ${position}
   lessons: ${lessons}
   command: ${advocate_command}
-  output_contract: ccflow.ai.contracts.Critique
+  output_contract: ccflow.examples.ai.contracts.Critique
   max_repair_attempts: ${max_repair_attempts}
 
 pro_session:
-  _target_: ccflow.ai.AgentSession
+  _target_: ccflow.examples.ai.AgentSession
   model: ${llm}
   role: pro
   profile_name: ${pro_profile}
   lessons: ${lessons}
   command: ${advocate_command}
-  output_contract: ccflow.ai.contracts.Critique
+  output_contract: ccflow.examples.ai.contracts.Critique
   max_repair_attempts: ${max_repair_attempts}
 
 pro_rebuttal_session:
-  _target_: ccflow.ai.AgentSession
+  _target_: ccflow.examples.ai.AgentSession
   model: ${llm}
   role: pro
   profile_name: ${pro_profile}
   lessons: ${lessons}
   command: ${rebuttal_command}
-  output_contract: ccflow.ai.contracts.Critique
+  output_contract: ccflow.examples.ai.contracts.Critique
   max_repair_attempts: ${max_repair_attempts}
 
 con_session:
-  _target_: ccflow.ai.AgentSession
+  _target_: ccflow.examples.ai.AgentSession
   model: ${llm}
   role: con
   profile_name: ${con_profile}
   lessons: ${lessons}
   command: ${advocate_command}
-  output_contract: ccflow.ai.contracts.Critique
+  output_contract: ccflow.examples.ai.contracts.Critique
   max_repair_attempts: ${max_repair_attempts}
 
 con_rebuttal_session:
-  _target_: ccflow.ai.AgentSession
+  _target_: ccflow.examples.ai.AgentSession
   model: ${llm}
   role: con
   profile_name: ${con_profile}
   lessons: ${lessons}
   command: ${rebuttal_command}
-  output_contract: ccflow.ai.contracts.Critique
+  output_contract: ccflow.examples.ai.contracts.Critique
   max_repair_attempts: ${max_repair_attempts}
 
 arbiter_session:
-  _target_: ccflow.ai.AgentSession
+  _target_: ccflow.examples.ai.AgentSession
   model: ${llm}
   role: arbiter
   profile_name: ${arbiter_profile}
@@ -90,5 +90,5 @@ arbiter_session:
   command: >
     Weigh the advocates' cases against the rubric and decide which position is better argued.
     Judge the arguments, not your own opinion of the poem.
-  output_contract: ccflow.ai.contracts.Verdict
+  output_contract: ccflow.examples.ai.contracts.Verdict
   max_repair_attempts: ${max_repair_attempts}

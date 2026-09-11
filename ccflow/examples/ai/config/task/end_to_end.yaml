@@ -3,8 +3,8 @@
 # The whole graph in one run, returning only the verdict. Nothing intermediate is written: the
 # verdict result carries the poem and both critiques, so the full record survives in one file.
 #
-#   python -m ccflow.ai
-#   python -m ccflow.ai model=openai publisher=print
+#   python -m ccflow.examples.ai
+#   python -m ccflow.examples.ai model=openai publisher=print
 #
 # `produce` is defined once and referenced three times, so the advocates and the arbiter judge one
 # poem. The cache evaluator in base.yaml is what makes it run once.
@@ -12,13 +12,13 @@
 task_name: verdict
 
 produce:
-  _target_: ccflow.ai.ProduceModel
+  _target_: ccflow.examples.ai.ProduceModel
   enforce_checks: ${enforce_checks}
   spec: ${poem_spec}
   session: ${producer_session}
 
 pro_advocate:
-  _target_: ccflow.ai.AdvocateModel
+  _target_: ccflow.examples.ai.AdvocateModel
   enforce_checks: ${enforce_checks}
   position: pro
   produce: ${produce}
@@ -26,7 +26,7 @@ pro_advocate:
   session: ${pro_session}
 
 con_advocate:
-  _target_: ccflow.ai.AdvocateModel
+  _target_: ccflow.examples.ai.AdvocateModel
   enforce_checks: ${enforce_checks}
   position: con
   produce: ${produce}
@@ -34,10 +34,10 @@ con_advocate:
   session: ${con_session}
 
 task:
-  _target_: ccflow.ai.DebateModel
+  _target_: ccflow.examples.ai.DebateModel
   publisher: ${publisher}
   arbiter:
-    _target_: ccflow.ai.ArbitrateModel
+    _target_: ccflow.examples.ai.ArbitrateModel
     enforce_checks: ${enforce_checks}
     rubric: ${arbitration_rubric}
     artifact: ${produce}

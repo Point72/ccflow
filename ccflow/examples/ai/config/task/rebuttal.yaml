@@ -7,20 +7,20 @@
 # on points the other has already met. A rebuttal round makes a case pay for claims it cannot
 # defend, which is what the arbiter is being asked to reward.
 #
-#   python -m ccflow.ai task=rebuttal
+#   python -m ccflow.examples.ai task=rebuttal
 #
 # Six model calls: one poem, two opening cases, two rebuttals, one arbitration.
 
 task_name: verdict
 
 produce:
-  _target_: ccflow.ai.ProduceModel
+  _target_: ccflow.examples.ai.ProduceModel
   enforce_checks: ${enforce_checks}
   spec: ${poem_spec}
   session: ${producer_session}
 
 pro_opening:
-  _target_: ccflow.ai.AdvocateModel
+  _target_: ccflow.examples.ai.AdvocateModel
   enforce_checks: ${enforce_checks}
   position: pro
   produce: ${produce}
@@ -28,7 +28,7 @@ pro_opening:
   session: ${pro_session}
 
 con_opening:
-  _target_: ccflow.ai.AdvocateModel
+  _target_: ccflow.examples.ai.AdvocateModel
   enforce_checks: ${enforce_checks}
   position: con
   produce: ${produce}
@@ -36,16 +36,16 @@ con_opening:
   session: ${con_session}
 
 task:
-  _target_: ccflow.ai.DebateModel
+  _target_: ccflow.examples.ai.DebateModel
   publisher: ${publisher}
   arbiter:
-    _target_: ccflow.ai.ArbitrateModel
+    _target_: ccflow.examples.ai.ArbitrateModel
     enforce_checks: ${enforce_checks}
     rubric: ${arbitration_rubric}
     artifact: ${produce}
     session: ${arbiter_session}
     advocates:
-      - _target_: ccflow.ai.RebuttalModel
+      - _target_: ccflow.examples.ai.RebuttalModel
         enforce_checks: ${enforce_checks}
         position: pro
         own: ${pro_opening}
@@ -53,7 +53,7 @@ task:
         artifact: ${produce}
         rubric: ${critique_rubric}
         session: ${pro_rebuttal_session}
-      - _target_: ccflow.ai.RebuttalModel
+      - _target_: ccflow.examples.ai.RebuttalModel
         enforce_checks: ${enforce_checks}
         position: con
         own: ${con_opening}

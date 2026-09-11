@@ -4,12 +4,12 @@
 # model output is not reproducible, so re-running the producer would hand the advocates a different
 # poem.
 #
-#   python -m ccflow.ai task=produce publisher=json
+#   python -m ccflow.examples.ai task=produce publisher=json
 
 task_name: poem
 
 task:
-  _target_: ccflow.ai.ProduceModel
+  _target_: ccflow.examples.ai.ProduceModel
   publisher: ${publisher}
   enforce_checks: ${enforce_checks}
   spec: ${poem_spec}

@@ -62,7 +62,7 @@ def _resolve_contract(path: str) -> type[BaseModel]:
     """Import a dotted path and check it really is a pydantic model."""
     module_name, _, attr = path.rpartition(".")
     if not module_name:
-        raise ValueError(f"Output contract {path!r} must be a full dotted path, e.g. 'ccflow.ai.contracts.Poem'.")
+        raise ValueError(f"Output contract {path!r} must be a full dotted path, e.g. 'ccflow.examples.ai.contracts.Poem'.")
     obj = getattr(importlib.import_module(module_name), attr)
     if not (isinstance(obj, type) and issubclass(obj, BaseModel)):
         raise TypeError(f"Output contract {path!r} resolved to {obj!r}, which is not a pydantic BaseModel.")

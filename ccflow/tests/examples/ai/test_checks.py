@@ -1,11 +1,11 @@
-"""Tests for the mechanical constraints in ``ccflow.ai.checks``.
+"""Tests for the mechanical constraints in ``ccflow.examples.ai.checks``.
 
 These are pure functions over already-built contract instances, so nothing here calls a model.
 """
 
 from unittest import TestCase
 
-from ccflow.ai import (
+from ccflow.examples.ai import (
     Claim,
     ClaimsWithinLimit,
     Critique,

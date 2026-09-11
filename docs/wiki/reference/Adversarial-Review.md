@@ -1,6 +1,6 @@
 # Adversarial Review
 
-`ccflow.ai` is a worked example that uses agents as graph nodes: one writes a poem, two argue
+`ccflow.examples.ai` is a worked example that uses agents as graph nodes: one writes a poem, two argue
 opposing positions about it, and a fourth decides which argued better. It is a complete, runnable
 illustration of typed hand-offs, interface-typed upstreams, config groups, and fan-in through the
 cache evaluator.
@@ -16,17 +16,17 @@ pip install ccflow[ai]
 Everything is steered from the command line, one config group at a time:
 
 ```bash
-python -m ccflow.ai checks=off              # offline, no credentials
-python -m ccflow.ai model=openai            # against a real model
-python -m ccflow.ai task=counterbalanced    # judge both presentation orders
-python -m ccflow.ai spec=haiku rubrics=strict profile=steelman
+python -m ccflow.examples.ai checks=off              # offline, no credentials
+python -m ccflow.examples.ai model=openai            # against a real model
+python -m ccflow.examples.ai task=counterbalanced    # judge both presentation orders
+python -m ccflow.examples.ai spec=haiku rubrics=strict profile=steelman
 ```
 
 Or load it into the registry, as the other bundled examples do:
 
 ```python
 from ccflow import ModelRegistry
-from ccflow.ai import load_config
+from ccflow.examples.ai import load_config
 
 load_config(overrides=["checks=off"])
 result = ModelRegistry.root()["/task"]()
@@ -67,10 +67,10 @@ covered the moment it is added.
 The single-node tasks chain through the publisher:
 
 ```bash
-python -m ccflow.ai task=produce   publisher=json
-python -m ccflow.ai task=advocate  publisher=json position=pro
-python -m ccflow.ai task=advocate  publisher=json position=con
-python -m ccflow.ai task=arbitrate publisher=json model=anthropic
+python -m ccflow.examples.ai task=produce   publisher=json
+python -m ccflow.examples.ai task=advocate  publisher=json position=pro
+python -m ccflow.examples.ai task=advocate  publisher=json position=con
+python -m ccflow.examples.ai task=arbitrate publisher=json model=anthropic
 ```
 
 This is not only convenience. Model output is not reproducible, so re-running the producer hands the
@@ -114,7 +114,7 @@ the validation error attached — repair, not a blind retry.
 
 ## Two kinds of constraint
 
-Mechanical constraints are decided in code, in `ccflow.ai.checks`, never by asking a model. An
+Mechanical constraints are decided in code, in `ccflow.examples.ai.checks`, never by asking a model. An
 arbiter asked whether a poem respected a line budget has to *count*, and a model that miscounts
 produces a confident verdict resting on a false premise.
 
@@ -161,7 +161,7 @@ than trusting it.
 
 ## Personas and lessons
 
-Personas are markdown files in `ccflow/ai/personas`, selected by the `profile` group. Set
+Personas are markdown files in `ccflow/examples/ai/personas`, selected by the `profile` group. Set
 `CCFLOW_AI_AGENTS_PATH` to prepend your own directories without forking the package.
 
 `Lessons` carries standing corrections between runs, scoped by role and injected into a session's

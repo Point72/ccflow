@@ -6,7 +6,7 @@
 # This exists because order was measured to matter. Replaying fixed cases with only the presentation
 # order changed, most decisions followed whichever case was shown first.
 #
-#   python -m ccflow.ai task=counterbalanced
+#   python -m ccflow.examples.ai task=counterbalanced
 #
 # Cost is one extra arbitration, not a second graph: both arbiters reference the same advocates, and
 # the cache evaluator generates each case once.
@@ -14,13 +14,13 @@
 task_name: verdict
 
 produce:
-  _target_: ccflow.ai.ProduceModel
+  _target_: ccflow.examples.ai.ProduceModel
   enforce_checks: ${enforce_checks}
   spec: ${poem_spec}
   session: ${producer_session}
 
 pro_advocate:
-  _target_: ccflow.ai.AdvocateModel
+  _target_: ccflow.examples.ai.AdvocateModel
   enforce_checks: ${enforce_checks}
   position: pro
   produce: ${produce}
@@ -28,7 +28,7 @@ pro_advocate:
   session: ${pro_session}
 
 con_advocate:
-  _target_: ccflow.ai.AdvocateModel
+  _target_: ccflow.examples.ai.AdvocateModel
   enforce_checks: ${enforce_checks}
   position: con
   produce: ${produce}
@@ -36,13 +36,13 @@ con_advocate:
   session: ${con_session}
 
 task:
-  _target_: ccflow.ai.DebateModel
+  _target_: ccflow.examples.ai.DebateModel
   publisher: ${publisher}
   arbiter:
-    _target_: ccflow.ai.CounterbalancedArbitrateModel
+    _target_: ccflow.examples.ai.CounterbalancedArbitrateModel
     enforce_checks: ${enforce_checks}
     forward:
-      _target_: ccflow.ai.ArbitrateModel
+      _target_: ccflow.examples.ai.ArbitrateModel
       enforce_checks: ${enforce_checks}
       rubric: ${arbitration_rubric}
       artifact: ${produce}
@@ -51,7 +51,7 @@ task:
         - ${pro_advocate}
         - ${con_advocate}
     reverse:
-      _target_: ccflow.ai.ArbitrateModel
+      _target_: ccflow.examples.ai.ArbitrateModel
       enforce_checks: ${enforce_checks}
       rubric: ${arbitration_rubric}
       artifact: ${produce}
