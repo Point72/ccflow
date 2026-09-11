@@ -1,6 +1,6 @@
-"""Unit tests for ccflow.ui.cli module."""
+"""Unit tests for ccflow.ui.panel.cli module."""
 
-from ccflow.ui.cli import _get_ui_args_parser
+from ccflow.ui.panel.cli import _get_ui_args_parser
 
 
 class TestGetUIArgsParser:

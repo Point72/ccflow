@@ -1,11 +1,11 @@
-"""Unit tests for ccflow.ui.registry module."""
+"""Unit tests for ccflow.ui.panel.registry module."""
 
 from unittest import mock
 
 import panel as pn
 
 from ccflow import BaseModel, ModelRegistry
-from ccflow.ui.registry import ModelRegistryViewer, RegistryBrowser
+from ccflow.ui.panel.registry import ModelRegistryViewer, RegistryBrowser
 
 from .utils import find_components_by_type
 
