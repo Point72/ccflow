@@ -362,6 +362,10 @@ def _register_numpy() -> None:
         # element-wise instead. Cycle detection is keyed on the array because tolist() returns a fresh list.
         if obj.dtype.hasobject:
             return _with_cycle_check(obj, lambda: ("ndarray", str(obj.dtype), obj.shape, normalize_token(obj.tolist())))
+        # Structured dtypes may carry padding between fields. Those bytes are never written, so hashing the
+        # raw buffer gives arrays with identical field values different tokens. Recurse per field to skip them.
+        if obj.dtype.names is not None:
+            return ("ndarray", str(obj.dtype), obj.shape, tuple((name, normalize_token(obj[name])) for name in obj.dtype.names))
         return ("ndarray", str(obj.dtype), obj.shape, hashlib.sha256(np.ascontiguousarray(obj).tobytes()).hexdigest())
 
     @normalize_token.register(np.ma.MaskedArray)
