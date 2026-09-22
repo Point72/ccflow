@@ -39,8 +39,8 @@ dependencies = [
     "cloudpathlib",
     "cloudpickle",
     "deprecated",
-    "hydra-core",
     "jinja2",
+    "lerna>=2.1.0",
     "narwhals",
     "numpy<3",
     "orjson",
@@ -89,6 +89,7 @@ develop = [
     "csp>=0.8.0,<1; python_version < '3.14'",  # TODO: remove when when 3.14 wheels disted
     "duckdb",
     "IPython",
+    "hydra-core",
     "panel",
     "panel_material_ui",
     "plotly",
