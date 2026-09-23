@@ -1,0 +1,23 @@
+# @package _global_
+#
+# Same graph, terser instructions. Useful for cheaper runs and as a control: if a verdict flips
+# between this and `poem`, the result was sensitive to prompt verbosity rather than to the poem.
+#
+# Inherits every session from `poem` and overrides only the wording, so a session added there cannot
+# leave this variant silently missing one.
+defaults:
+  - poem
+  - _self_
+
+advocate_command: >
+  Argue your assigned position. Quote the poem for every claim. Be brief.
+
+rebuttal_command: >
+  You have read the opposing case. Drop what it answered, keep what stands, stay in the claim limit,
+  and keep arguing your position. Be brief.
+
+producer_session:
+  command: Write a poem meeting the specification.
+
+arbiter_session:
+  command: Decide which position is better argued. Judge the arguments, not the poem.

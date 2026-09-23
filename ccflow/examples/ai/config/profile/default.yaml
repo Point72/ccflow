@@ -1,0 +1,7 @@
+# @package _global_
+# Which persona file plays each role. Swapping this group swaps the debating style without touching
+# the graph, which is how a different pairing is introduced.
+producer_profile: producer
+pro_profile: pro
+con_profile: con
+arbiter_profile: arbiter

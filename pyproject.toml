@@ -51,6 +51,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+ai = [
+    "pydantic-ai>=1,<3",
+]
 full = [
     "bleach",
     "cexprtk",
@@ -83,6 +86,8 @@ develop = [
     "ty",
     "uv",
     "wheel",
+    # AI deps
+    "pydantic-ai>=1,<3",
     # Full deps
     "bleach",
     "cexprtk",
