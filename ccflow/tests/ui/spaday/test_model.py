@@ -30,6 +30,12 @@ class Ctx(ContextBase):
     a: int = 1
 
 
+class Holder(BaseModel):
+    """A model that depends on another registered model."""
+
+    child: SimpleModel
+
+
 class MyCallable(CallableModel):
     """A callable test model."""
 
@@ -81,14 +87,22 @@ class TestModelConfigView:
         assert "No additional metadata." in text
 
     def test_dependencies_rendered(self):
-        registry = ModelRegistry(name="test")
+        # Dependencies resolve to names registered in the root registry.
+        registry = ModelRegistry.root()
+        registry.clear()
         dep = SimpleModel(name="dep")
         registry.add("dep", dep)
-        holder = MyCallable()
-        registry.add("holder", holder)
-        # A model that depends on another shows its registry dependencies (if any).
-        node = model_config_view(holder, "holder").to_node()
-        assert node["tag"] == "spa-stack"
+        registry.add("holder", Holder(child=dep))
+
+        text = " ".join(all_text(model_config_view(registry["holder"], "holder").to_node()))
+
+        # The dependency is listed by its registered name, not just rendered as a nested blob.
+        assert "Registry Dependencies" in text
+        assert "dep" in text.replace("Registry Dependencies", "")
+
+    def test_no_dependencies_section_without_dependencies(self):
+        text = " ".join(all_text(model_config_view(SimpleModel(name="m"), "m").to_node()))
+        assert "Registry Dependencies" not in text
 
 
 class TestModelView:

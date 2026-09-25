@@ -19,7 +19,7 @@ from ccflow import ModelRegistry
 from ccflow.utils.hydra import add_hydra_config_args, load_config, resolve_config_paths
 
 from .model import MATERIALIZE_ENDPOINT
-from .registry import CARD_ENDPOINT, DARK_FIELD, SELECTED_FIELD, model_card, registry_store, registry_viewer
+from .registry import CARD_ENDPOINT, DARK_FIELD, SELECTED_FIELD, model_card, registry_leaves, registry_store, registry_viewer
 
 __all__ = ("main", "registry_viewer_cli", "serve_registry")
 
@@ -82,9 +82,21 @@ def serve_registry(
         model that cannot be constructed (a bad ``_target_``, an unavailable dependency) stays pending
         and its error is returned for the page to surface.
         """
-        path = (await request.json()).get("path", "")
-        if not path:
+        if request.headers.get("content-type", "").partition(";")[0].strip() != "application/json":
+            return JSONResponse({"message": "Expected a JSON request body."}, status_code=415)
+        try:
+            payload = await request.json()
+        except ValueError:
+            payload = None
+        if not isinstance(payload, dict):
+            return JSONResponse({"message": "Expected a JSON object body."}, status_code=400)
+        path = payload.get("path") or ""
+        if not isinstance(path, str) or not path:
             return JSONResponse({"message": "No model selected."}, status_code=400)
+        # A leading slash makes a registry lookup root-relative, which would reach outside the registry
+        # being served, so only the paths the page itself lists are materializable.
+        if path not in {leaf for leaf, _ in registry_leaves(registry, sort_children=sort_children)}:
+            return JSONResponse({"message": f"Unknown model {path}."}, status_code=404)
         try:
             await asyncio.to_thread(registry.__getitem__, path)
         except Exception as error:

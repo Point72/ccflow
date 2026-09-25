@@ -51,9 +51,9 @@ def dependency_edges(leaves: list[tuple[str, object]]) -> dict[str, list[str]]:
         targets: list[str] = []
         if not _is_pending(model):
             for group in model.get_registry_dependencies():
-                # A group holds equivalent names for one dependency; the first is the canonical path.
-                target = _normalize(group[0])
-                if target in known and target != path and target not in targets:
+                # A group holds equivalent names for one dependency; use whichever one is registered here.
+                target = next((name for name in map(_normalize, group) if name in known), None)
+                if target is not None and target != path and target not in targets:
                     targets.append(target)
         adjacency[path] = targets
     return adjacency

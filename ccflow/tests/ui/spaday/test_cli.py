@@ -103,12 +103,15 @@ class TestServeRegistry:
         assert "Unknown model" in response.text
 
     def test_tree_route_reflects_registry(self):
+        starlette_testclient = pytest.importorskip("starlette.testclient")
         registry = ModelRegistry(name="test")
         registry.add("widget", SimpleModel(name="widget"))
-        app = serve_registry(registry, title="T", run=False)
-        # The tree route serializes the viewer; the model path should appear in it.
-        tree_route = next(r for r in app.routes if getattr(r, "path", None) == "/tree.json")
-        assert tree_route is not None
+        client = starlette_testclient.TestClient(serve_registry(registry, title="T", run=False))
+
+        response = client.get("/tree.json")
+
+        assert response.status_code == 200
+        assert "widget" in response.text
 
     def test_materialize_route_present(self):
         registry = ModelRegistry(name="test")
@@ -156,6 +159,40 @@ class TestMaterializeEndpoint:
 
         assert response.status_code == 400
         assert response.json()["message"]
+
+    def test_materialize_rejects_path_escaping_served_registry(self):
+        starlette_testclient = pytest.importorskip("starlette.testclient")
+        # A leading slash resolves against the process-global root rather than the served registry.
+        root = ModelRegistry.root()
+        root.clear()
+        served = self._lazy_registry()
+        root.add("served", served)
+
+        client = starlette_testclient.TestClient(serve_registry(served, run=False))
+        response = client.post("/materialize", json={"path": "/served/group/model"})
+
+        assert response.status_code == 404
+        assert not served["group"].is_loaded("model")
+
+    def test_materialize_requires_json_content_type(self):
+        starlette_testclient = pytest.importorskip("starlette.testclient")
+        registry = self._lazy_registry()
+        client = starlette_testclient.TestClient(serve_registry(registry, run=False))
+
+        # A form post is a CSRF-able "simple request", so it never reaches the registry.
+        response = client.post("/materialize", data={"path": "group/model"})
+
+        assert response.status_code == 415
+        assert not registry["group"].is_loaded("model")
+
+    @pytest.mark.parametrize("body", ["not json", "null", "[]"])
+    def test_materialize_rejects_malformed_body(self, body):
+        starlette_testclient = pytest.importorskip("starlette.testclient")
+        client = starlette_testclient.TestClient(serve_registry(self._lazy_registry(), run=False))
+
+        response = client.post("/materialize", content=body, headers={"content-type": "application/json"})
+
+        assert response.status_code == 400
 
     def test_materialize_reports_failure(self):
         starlette_testclient = pytest.importorskip("starlette.testclient")

@@ -57,8 +57,13 @@ def _sorted_items(registry, sort_children: bool):
     if isinstance(registry, ccflow.LazyRegistry):
         items = []
         for name in registry.models:
-            loaded = registry.get_loaded(name)
-            items.append((name, loaded if loaded is not None else registry.get_pending_config(name)))
+            model = registry.get_loaded(name)
+            if model is None:
+                model = registry.get_pending_config(name)
+            if model is None:
+                # Materialized between the two lookups, so it is no longer pending.
+                model = registry.get_loaded(name)
+            items.append((name, model))
     else:
         items = list(registry.models.items())
     if sort_children:
