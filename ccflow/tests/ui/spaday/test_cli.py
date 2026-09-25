@@ -230,6 +230,17 @@ class TestMaterializeEndpoint:
         assert response.status_code == 415
         assert not registry["group"].is_loaded("model")
 
+    @pytest.mark.parametrize("content_type", ["application/json", "Application/JSON", "application/json; charset=utf-8"])
+    def test_materialize_accepts_content_type_case_insensitively(self, content_type):
+        starlette_testclient = pytest.importorskip("starlette.testclient")
+        registry = self._lazy_registry()
+        client = starlette_testclient.TestClient(serve_registry(registry, run=False))
+
+        response = client.post("/materialize", content='{"path": "group/model"}', headers={"content-type": content_type})
+
+        assert response.status_code == 200
+        assert registry["group"].is_loaded("model")
+
     @pytest.mark.parametrize("body", ["not json", "null", "[]"])
     def test_materialize_rejects_malformed_body(self, body):
         starlette_testclient = pytest.importorskip("starlette.testclient")

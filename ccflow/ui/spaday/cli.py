@@ -82,7 +82,7 @@ def serve_registry(
         model that cannot be constructed (a bad ``_target_``, an unavailable dependency) stays pending
         and its error is returned for the page to surface.
         """
-        if request.headers.get("content-type", "").partition(";")[0].strip() != "application/json":
+        if request.headers.get("content-type", "").partition(";")[0].strip().lower() != "application/json":
             return JSONResponse({"message": "Expected a JSON request body."}, status_code=415)
         try:
             payload = await request.json()

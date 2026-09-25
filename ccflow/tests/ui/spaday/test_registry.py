@@ -66,6 +66,15 @@ class TestRegistryLeaves:
         paths = [path for path, _ in leaves]
         assert paths == ["sub/alpha", "zeta"]
 
+    def test_entry_removed_between_lookups_is_skipped(self, mocker):
+        lazy = LazyRegistry(name="lazy", group={"model": {"_target_": "ccflow.tests.ui.spaday.test_registry.SimpleModel", "name": "m"}})
+        group = lazy["group"]
+        # Neither loaded nor pending: the entry went away mid-traversal.
+        mocker.patch.object(LazyRegistry, "get_loaded", return_value=None)
+        mocker.patch.object(LazyRegistry, "get_pending_config", return_value=None)
+
+        assert registry_leaves(group) == []
+
     def test_sort_children_orders_subregistries_first(self):
         root = ModelRegistry(name="root")
         root.add("zzz_leaf", SimpleModel(name="leaf"))

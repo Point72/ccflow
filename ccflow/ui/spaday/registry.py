@@ -63,6 +63,9 @@ def _sorted_items(registry, sort_children: bool):
             if model is None:
                 # Materialized between the two lookups, so it is no longer pending.
                 model = registry.get_loaded(name)
+            if model is None:
+                # Removed between the lookups; there is nothing left to show.
+                continue
             items.append((name, model))
     else:
         items = list(registry.models.items())
