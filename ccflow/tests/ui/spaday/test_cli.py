@@ -75,6 +75,31 @@ class TestGetUIArgsParser:
         assert args.config_dir is None
         assert args.config_dir_config_name is None
 
+    def test_config_dir_and_name_load_without_config_path(self, monkeypatch):
+        from ccflow.ui.spaday import cli
+
+        example = Path(cli.__file__).parents[2] / "examples" / "calculator"
+        monkeypatch.setattr(sys, "argv", ["ccflow-ui-spaday", "-cd", "config", "-cn", "base", "--basepath", str(example)])
+        monkeypatch.chdir(example)
+        served = {}
+        monkeypatch.setattr(cli, "serve_registry", lambda registry, **kwargs: served.update(registry=registry))
+        ModelRegistry.root().clear()
+
+        cli.registry_viewer_cli()
+
+        # The config dir stood in for the root config, so the registry actually got populated.
+        assert served["registry"] is ModelRegistry.root()
+        assert served["registry"].models
+
+    def test_config_dir_without_config_name_reports_usage(self, monkeypatch, capsys):
+        monkeypatch.setattr(sys, "argv", ["ccflow-ui-spaday", "-cd", "config"])
+
+        with pytest.raises(SystemExit) as excinfo:
+            registry_viewer_cli()
+
+        assert excinfo.value.code == 2
+        assert "--config-name" in capsys.readouterr().err
+
 
 class TestServeRegistry:
     def test_builds_app_without_running(self):

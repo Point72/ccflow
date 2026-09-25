@@ -16,7 +16,7 @@ from spaday_trees import package as trees_package
 from spaday_webawesome import package as webawesome_package
 
 from ccflow import ModelRegistry
-from ccflow.utils.hydra import add_hydra_config_args, load_config, resolve_config_paths
+from ccflow.utils.hydra import _find_parent_config_folder, add_hydra_config_args, load_config, resolve_config_paths
 
 from .model import MATERIALIZE_ENDPOINT
 from .registry import CARD_ENDPOINT, DARK_FIELD, SELECTED_FIELD, model_card, registry_leaves, registry_store, registry_viewer
@@ -178,11 +178,18 @@ def registry_viewer_cli(
     parser = _get_ui_args_parser()
     args = parser.parse_args()
 
+    config_dir = args.config_dir
     try:
         root_config_dir, root_config_name = resolve_config_paths(args, config_path, config_name, hydra_main)
     except ValueError as error:
-        # The console script supplies no hydra.main() defaults, so report this as a usage error.
-        parser.error(str(error))
+        if not config_dir:
+            # The console script supplies no hydra.main() defaults, so report this as a usage error.
+            parser.error(str(error))
+        if not args.config_name:
+            parser.error("Must provide --config-name when using --config-dir without --config-path.")
+        # Without a root config to extend, the config dir is itself the root rather than a search path.
+        folder, found, _ = _find_parent_config_folder(config_dir=config_dir, config_name="", basepath=args.basepath or os.getcwd())
+        root_config_dir, root_config_name, config_dir = str(folder / found), args.config_name, None
     # hydra's initialize_config_dir requires an absolute directory; resolve a relative --config-path
     # against the current working directory.
     root_config_dir = os.path.abspath(root_config_dir)
@@ -190,7 +197,7 @@ def registry_viewer_cli(
     result = load_config(
         root_config_dir=root_config_dir,
         root_config_name=root_config_name,
-        config_dir=args.config_dir,
+        config_dir=config_dir,
         config_name=args.config_dir_config_name,
         overrides=args.overrides,
         basepath=args.basepath,
