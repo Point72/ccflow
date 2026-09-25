@@ -1,10 +1,10 @@
-"""Unit tests for ccflow.ui.model module."""
+"""Unit tests for ccflow.ui.panel.model module."""
 
 import panel as pn
 from pydantic import Field
 
 from ccflow import BaseModel, CallableModel, ContextBase, Flow, GenericResult, MetaData, ModelRegistry
-from ccflow.ui.model import ModelConfigViewer, ModelTypeViewer, ModelViewer
+from ccflow.ui.panel.model import ModelConfigViewer, ModelTypeViewer, ModelViewer
 
 from .utils import find_components_by_type
 
