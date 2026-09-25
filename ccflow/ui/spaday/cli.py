@@ -178,7 +178,11 @@ def registry_viewer_cli(
     parser = _get_ui_args_parser()
     args = parser.parse_args()
 
-    root_config_dir, root_config_name = resolve_config_paths(args, config_path, config_name, hydra_main)
+    try:
+        root_config_dir, root_config_name = resolve_config_paths(args, config_path, config_name, hydra_main)
+    except ValueError as error:
+        # The console script supplies no hydra.main() defaults, so report this as a usage error.
+        parser.error(str(error))
     # hydra's initialize_config_dir requires an absolute directory; resolve a relative --config-path
     # against the current working directory.
     root_config_dir = os.path.abspath(root_config_dir)

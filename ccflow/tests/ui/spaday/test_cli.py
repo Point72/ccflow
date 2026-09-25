@@ -1,13 +1,14 @@
 """Unit tests for ccflow.ui.spaday.cli module."""
 
 import importlib
+import sys
 from pathlib import Path
 
 import pytest
 from spaday.bootstrap import _ASSETS, _layout, bundles_dir
 
 from ccflow import BaseModel, LazyRegistry, ModelRegistry
-from ccflow.ui.spaday.cli import _get_ui_args_parser, serve_registry
+from ccflow.ui.spaday.cli import _get_ui_args_parser, registry_viewer_cli, serve_registry
 
 
 class SimpleModel(BaseModel):
@@ -54,6 +55,25 @@ class TestGetUIArgsParser:
     def test_overrides_positional(self):
         args = _get_ui_args_parser().parse_args(["key1=value1", "key2=value2"])
         assert args.overrides == ["key1=value1", "key2=value2"]
+
+    @pytest.mark.parametrize(
+        ("argv", "expected"),
+        [([], "--config-path"), (["--config-path", "cfg"], "--config-name")],
+    )
+    def test_missing_config_args_report_usage(self, monkeypatch, capsys, argv, expected):
+        monkeypatch.setattr(sys, "argv", ["ccflow-ui-spaday", *argv])
+
+        with pytest.raises(SystemExit) as excinfo:
+            registry_viewer_cli()
+
+        # argparse usage error, not a traceback out of resolve_config_paths.
+        assert excinfo.value.code == 2
+        assert expected in capsys.readouterr().err
+
+    def test_config_dir_is_optional(self):
+        args = _get_ui_args_parser().parse_args(["--config-path", "cfg", "--config-name", "conf"])
+        assert args.config_dir is None
+        assert args.config_dir_config_name is None
 
 
 class TestServeRegistry:
