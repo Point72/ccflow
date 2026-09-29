@@ -1,11 +1,10 @@
-import hydra
-
+from ccflow import config
 from ccflow.utils.hydra import cfg_run
 
 __all__ = ("main",)
 
 
-@hydra.main(config_path="config", config_name="base", version_base=None)
+@config.main(config_path="config", config_name="base", version_base=None)
 def main(cfg):
     cfg_run(cfg)
 

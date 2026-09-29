@@ -699,14 +699,14 @@ class ModelRegistry(BaseModel, collections.abc.Mapping):
         Returns:
             The instance of the model registry, with the configs loaded.
         """
-        import hydra  # Heavy import, only import if used.
+        from .config import compose, initialize_config_dir
 
         overrides = overrides or []
         path = pathlib.Path(path).absolute()  # Hydra requires absolute paths
         if not path.parent.exists():
             raise OSError(f"Path does not exist: {path.parent}")
-        with hydra.initialize_config_dir(version_base=version_base, config_dir=str(path.parent)):
-            cfg = hydra.compose(config_name=path.name, overrides=overrides)
+        with initialize_config_dir(version_base=version_base, config_dir=str(path.parent)):
+            cfg = compose(config_name=path.name, overrides=overrides)
         return cfg
 
     def load_config_from_path(
@@ -882,7 +882,7 @@ class LazyRegistry(ModelRegistry):
         self._pending_lookup_registries[name] = list(lookup_registries)
 
     def _materialize(self, name: str) -> BaseModel:
-        from hydra.utils import instantiate
+        from .config import instantiate
 
         key = (id(self), name)
         stack = _LAZY_LOADING_STACK.get()
@@ -1112,9 +1112,9 @@ class _ModelRegistryLoader:
         # This also allows for nested attributes on the model itself to
         # be constructed, even if they are not themselves of BaseModel type,
         # or if they are of a specific subclass of the parent.
-        from hydra.errors import InstantiationException
-        from hydra.utils import instantiate
         from omegaconf import OmegaConf, UnsupportedValueType
+
+        from .config import InstantiationException, instantiate
 
         if resolve_from is not None and resolve_from is not registry:
             initial_chain = [resolve_from, registry]
