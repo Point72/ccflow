@@ -757,6 +757,26 @@ class TestGraphEvaluator(TestCase):
         # Node results are released after each graph evaluation, so the second evaluation runs every node again.
         self.assertEqual(len(NodeModel._calls), 8)
 
+    def test_graph_evaluator_recomputes_volatile_nodes_for_each_consumer(self):
+        n0 = NodeModel(meta={"name": "n0"})
+        n1 = NodeModel(meta={"name": "n1"}, deps_model=[n0], run_deps=True)
+        n2 = NodeModel(meta={"name": "n2"}, deps_model=[n0], run_deps=True)
+        root = NodeModel(meta={"name": "n3"}, deps_model=[n1, n2])
+        context = DateContext(date=date(2022, 1, 1))
+
+        NodeModel._calls = []
+        NodeModel._deps_calls = []
+        with (
+            FlowOptionsOverride(options={"evaluator": GraphEvaluator(), "cacheable": False}),
+            FlowOptionsOverride(options={"volatile": True}, models=(n0,)),
+        ):
+            root(context)
+
+        # Once in the graph pre-pass, then once more for each consumer that calls it.
+        self.assertEqual(NodeModel._calls.count(("n0", date(2022, 1, 1))), 3)
+        self.assertEqual(NodeModel._calls.count(("n1", date(2022, 1, 1))), 1)
+        self.assertEqual(NodeModel._calls.count(("n2", date(2022, 1, 1))), 1)
+
     def test_graph_evaluator_does_not_retain_calls_outside_the_graph(self):
         calls = []
 

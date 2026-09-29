@@ -488,7 +488,7 @@ class GraphEvaluator(EvaluatorBase):
 
     Each graph node is evaluated once per graph evaluation. When a node's ``__call__`` calls one of its declared
     dependencies again, the result already computed for that graph node is reused, whether or not results are
-    cacheable. Those results are released when the graph evaluation finishes. Calls that are not graph nodes are
+    cacheable. Volatile nodes are never reused and recompute on every call. Those results are released when the graph evaluation finishes. Calls that are not graph nodes are
     evaluated normally and not retained; combine with a caching evaluator to reuse them.
     """
 
@@ -518,7 +518,10 @@ class GraphEvaluator(EvaluatorBase):
             for key in ts.static_order():
                 evaluation_context = graph.ids[key]
                 result = evaluation_context()
-                self._node_results[key] = result
+                # Volatile nodes always recompute, so never share their result with nested calls.
+                inner, _, _ = _flatten_cache_key_context(evaluation_context)
+                if not inner.options.get("volatile"):
+                    self._node_results[key] = result
                 if key == graph.root_id:
                     root_result = result
         finally:

@@ -107,7 +107,7 @@ with FlowOptionsOverride(options={"cacheable": True, "evaluator": evaluator}):
 
 Note the topological order (0, 1, 2, 3, 4), and that each node runs once. This is also the foundation for distributed evaluation.
 
-Within one graph evaluation, when a node's `__call__` calls one of its declared dependencies again (as `FibonacciModel` does), the `GraphEvaluator` returns the result it already computed for that node instead of running it again, even when `cacheable` is off. Those results are released when the evaluation finishes. Add a caching evaluator to reuse results across evaluations, or for calls that are not declared as dependencies.
+Within one graph evaluation, when a node's `__call__` calls one of its declared dependencies again (as `FibonacciModel` does), the `GraphEvaluator` returns the result it already computed for that node instead of running it again, even when `cacheable` is off. Nodes marked `volatile` are never reused and recompute on every call. Those results are released when the evaluation finishes. Add a caching evaluator to reuse results across evaluations, or for calls that are not declared as dependencies.
 
 ## Write a custom evaluator
 
