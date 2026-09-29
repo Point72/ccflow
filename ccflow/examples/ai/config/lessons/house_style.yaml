@@ -1,0 +1,42 @@
+# @package _global_
+#
+# Corrections about how the prose reads, scoped so each role is told only what applies to it: the
+# poet is told which words to avoid, the advocates are told not to reward or dismiss them lazily,
+# and the arbiter is told not to mistake fluency for argument.
+#
+# These are guidance, not enforcement. A rule decidable mechanically -- a word blacklist, a line
+# count -- belongs in `checks.py`, where it is measured. Keep a lesson here only while applying it
+# still needs judgement.
+lessons:
+  general:
+    - Plain words beat ornamental ones. If a shorter word carries the meaning, use it.
+
+  by_role:
+    producer:
+      - >
+        Do not use these words. They are the reflexes of machine-written verse and their presence is
+        a tell, not a style: seam, stitch, weave, tapestry, whisper, echo, dance, symphony,
+        testament, tribute, delve, liminal, ethereal, cascade, shimmer, tendril, kaleidoscope.
+      - Do not open more than one line with a participle, as in "Standing at the shore, ...".
+      - >
+        A closing simile that reaches for profundity is worse than a plain ending. Do not finish on
+        "like a prayer", "like sleep", "like breath", or anything of that shape.
+
+    pro:
+      - >
+        Do not praise a passage for the words listed as overused. Finding one is evidence against
+        the poem, not for it, and crediting it will cost you the originality criterion.
+
+    con:
+      - >
+        Naming an overused word is only a claim if you say what it displaced. "This is a cliche" is
+        an assertion; "this reaches for a stock image where the specific detail two lines up was
+        already doing the work" is an argument.
+
+    arbiter:
+      - >
+        Fluency is not argument. A confidently written case with thin evidence loses to an awkward
+        one with a quotation that actually supports it.
+      - >
+        Do not reward a case for length or for the number of claims. Two supported claims beat four
+        where half are asserted.

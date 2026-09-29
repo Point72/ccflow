@@ -1,0 +1,63 @@
+# @package _global_
+#
+# Two rounds. Each advocate writes blind, then reads the opposing case and revises; the arbiter
+# judges the revised pair.
+#
+# A first-round case is written without knowing what it must answer, so both sides can spend claims
+# on points the other has already met. A rebuttal round makes a case pay for claims it cannot
+# defend, which is what the arbiter is being asked to reward.
+#
+#   python -m ccflow.examples.ai task=rebuttal
+#
+# Six model calls: one poem, two opening cases, two rebuttals, one arbitration.
+
+task_name: verdict
+
+produce:
+  _target_: ccflow.examples.ai.ProduceModel
+  enforce_checks: ${enforce_checks}
+  spec: ${poem_spec}
+  session: ${producer_session}
+
+pro_opening:
+  _target_: ccflow.examples.ai.AdvocateModel
+  enforce_checks: ${enforce_checks}
+  position: pro
+  produce: ${produce}
+  rubric: ${critique_rubric}
+  session: ${pro_session}
+
+con_opening:
+  _target_: ccflow.examples.ai.AdvocateModel
+  enforce_checks: ${enforce_checks}
+  position: con
+  produce: ${produce}
+  rubric: ${critique_rubric}
+  session: ${con_session}
+
+task:
+  _target_: ccflow.examples.ai.DebateModel
+  publisher: ${publisher}
+  arbiter:
+    _target_: ccflow.examples.ai.ArbitrateModel
+    enforce_checks: ${enforce_checks}
+    rubric: ${arbitration_rubric}
+    artifact: ${produce}
+    session: ${arbiter_session}
+    advocates:
+      - _target_: ccflow.examples.ai.RebuttalModel
+        enforce_checks: ${enforce_checks}
+        position: pro
+        own: ${pro_opening}
+        opponent: ${con_opening}
+        artifact: ${produce}
+        rubric: ${critique_rubric}
+        session: ${pro_rebuttal_session}
+      - _target_: ccflow.examples.ai.RebuttalModel
+        enforce_checks: ${enforce_checks}
+        position: con
+        own: ${con_opening}
+        opponent: ${pro_opening}
+        artifact: ${produce}
+        rubric: ${critique_rubric}
+        session: ${con_rebuttal_session}

@@ -1,0 +1,17 @@
+# @package _global_
+# Grading criteria are configuration, not prose buried in a prompt, so they are versioned with the
+# run and can be swapped without touching an agent.
+critique_rubric:
+  criteria:
+    - imagery
+    - adherence to the requested form
+    - originality
+  max_claims: 4
+  require_evidence: true
+
+arbitration_rubric:
+  criteria:
+    - claims grounded in quoted evidence outweigh assertions
+    - claims addressing the stated criteria outweigh incidental observations
+    - internal consistency of the case
+  allow_no_decision: true

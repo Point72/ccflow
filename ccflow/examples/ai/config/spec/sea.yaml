@@ -1,0 +1,8 @@
+# @package _global_
+poem_spec:
+  theme: first light on the sea
+  form: free verse
+  max_lines: 16
+  constraints:
+    - Use no end rhyme.
+    - Every stanza must contain at least one concrete image.

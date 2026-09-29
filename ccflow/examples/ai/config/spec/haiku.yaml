@@ -1,0 +1,10 @@
+# @package _global_
+# A three-line budget, which makes the line check easy to see working: ask for more and the producer
+# is re-prompted rather than quietly overrunning.
+poem_spec:
+  theme: a gull at low tide
+  form: haiku
+  max_lines: 3
+  constraints:
+    - Exactly three lines.
+    - Name one thing that can be seen and one that can be heard.
