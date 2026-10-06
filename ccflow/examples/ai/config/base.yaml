@@ -45,6 +45,21 @@ max_repair_attempts: 2
 # half the time. Raise it to report fewer, firmer decisions.
 decision_margin: 0.2
 
+# Two seams exist for extending this without forking it, and they are deliberately different kinds.
+#
+# Countable rules are code. Any `OutputCheck` subclass can be appended to a node, where it is
+# enforced alongside the built-in constraints and consumes the same repair budget:
+#
+#   python -m ccflow.examples.ai '+produce.extra_checks=[{_target_:my.pkg.BannedWords,words:[very]}]'
+#
+# Free-form direction is prose. A session takes a persona by name from the search path
+# (CCFLOW_AI_AGENTS_PATH prepends directories), or directly, which is what configuration reaches for:
+#
+#   python -m ccflow.examples.ai '+producer_session.profile={_target_:ccflow.examples.ai.agent_profile_from_file,path:/my/house.md}'
+#
+# The split is the same one that keeps a line count out of the rubric: if it can be decided by
+# counting, write a check, because a persona can only ask for it.
+
 # The graph evaluator schedules the DAG; the cache evaluator is what makes the shared `produce` node
 # run once rather than once per advocate. Without it the advocates would argue about different poems
 # while the arbiter judged a third, and nothing would look wrong.

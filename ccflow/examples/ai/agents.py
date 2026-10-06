@@ -5,7 +5,9 @@ as Python strings so they can be read, diffed and edited as prose. The body belo
 what the model is given.
 
 ``CCFLOW_AI_AGENTS_PATH`` (os.pathsep-separated) prepends extra directories to the search, which is
-how a caller supplies its own personas without forking this package.
+how a caller supplies its own personas without forking this package. A caller wiring its personas in
+configuration instead reaches for :func:`agent_profile_from_file`, or hands ``AgentSession`` an
+:class:`AgentProfile` built inline.
 """
 
 from functools import cache
@@ -15,7 +17,7 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, Field
 
-__all__ = ("AgentProfile", "load_agent_profile", "profile_search_roots")
+__all__ = ("AgentProfile", "agent_profile_from_file", "load_agent_profile", "profile_search_roots")
 
 _FRONTMATTER_DELIMITER = "---"
 _ENV_VAR = "CCFLOW_AI_AGENTS_PATH"
@@ -48,6 +50,23 @@ def _split_frontmatter(text: str) -> tuple[dict, str]:
     return yaml.safe_load(front) or {}, body
 
 
+def _parse_profile(path: Path, name: str) -> AgentProfile:
+    metadata, body = _split_frontmatter(path.read_text(encoding="utf-8"))
+    return AgentProfile(name=metadata.get("name", name), description=metadata.get("description", ""), instructions=body.strip())
+
+
+def agent_profile_from_file(path: str) -> AgentProfile:
+    """Read a persona from an explicit markdown file.
+
+    The configuration-facing counterpart to :func:`load_agent_profile`: a caller points a session at
+    its own persona by path rather than having to place the file on the search path first.
+    """
+    file = Path(path)
+    if not file.is_file():
+        raise FileNotFoundError(f"No persona file at {file}.")
+    return _parse_profile(file, file.stem)
+
+
 @cache
 def load_agent_profile(name: str) -> AgentProfile:
     """Read one persona by file stem, searching `profile_search_roots` in order."""
@@ -55,7 +74,6 @@ def load_agent_profile(name: str) -> AgentProfile:
     for root in roots:
         path = root / f"{name}.md"
         if path.is_file():
-            metadata, body = _split_frontmatter(path.read_text(encoding="utf-8"))
-            return AgentProfile(name=name, description=metadata.get("description", ""), instructions=body.strip())
+            return _parse_profile(path, name)
     searched = ", ".join(str(r) for r in roots)
     raise FileNotFoundError(f"No persona {name!r}.md found. Searched: {searched}. Set {_ENV_VAR} to add directories.")

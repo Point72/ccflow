@@ -21,7 +21,7 @@ import importlib
 from functools import cached_property
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ccflow import CallableModel, ContextBase, Flow, ResultBase
 
@@ -78,8 +78,15 @@ class AgentSession(CallableModel):
         "output contract with generated data and needs no credentials, so the graph runs offline.",
     )
     role: str = Field(description="Which node this session plays: producer, pro, con, arbiter. Selects role-scoped lessons.")
-    profile_name: str = Field(
-        description="Persona file stem supplying the instructions. Kept separate from `role` so swapping personas keeps lessons."
+    profile_name: str | None = Field(
+        default=None,
+        description="Persona file stem supplying the instructions. Kept separate from `role` so swapping personas keeps lessons. Ignored when "
+        "`profile` is supplied.",
+    )
+    profile: AgentProfile | None = Field(
+        default=None,
+        description="Persona supplied directly rather than looked up by name, so a caller can wire its own in configuration -- inline, or built "
+        "from its own file by `agent_profile_from_file`.",
     )
     command: str = Field(description="What this node is asked to do on this run.")
     output_contract: str = Field(description="Dotted path to the pydantic model the output must satisfy.")
@@ -87,9 +94,16 @@ class AgentSession(CallableModel):
     max_repair_attempts: int = Field(default=2, ge=0, description="Re-prompts allowed when output fails its contract schema or a check.")
     model_settings: dict[str, Any] = Field(default_factory=dict, description="Extra settings forwarded to the model.")
 
+    @model_validator(mode="after")
+    def _persona_is_resolvable(self):
+        if self.profile is None and not self.profile_name:
+            raise ValueError("A session needs a persona: set `profile_name` to search for one, or `profile` to supply it directly.")
+        return self
+
     @cached_property
-    def profile(self) -> AgentProfile:
-        return load_agent_profile(self.profile_name)
+    def resolved_profile(self) -> AgentProfile:
+        """The persona handed to the model: the one supplied, else the one named."""
+        return self.profile if self.profile is not None else load_agent_profile(self.profile_name)
 
     @cached_property
     def contract(self) -> type[BaseModel]:
@@ -98,7 +112,7 @@ class AgentSession(CallableModel):
     @cached_property
     def instructions(self) -> str:
         """Persona, this run's command, and any lessons scoped to this role."""
-        parts = [self.profile.instructions, f"# Your task\n\n{self.command}"]
+        parts = [self.resolved_profile.instructions, f"# Your task\n\n{self.command}"]
         if applicable := self.lessons.for_role(self.role):
             body = "\n".join(f"- {lesson}" for lesson in applicable)
             parts.append(f"# Lessons from earlier runs\n\nStanding corrections. Apply every one.\n\n{body}")
@@ -129,7 +143,7 @@ class AgentSession(CallableModel):
             output=run.output,
             model=self.model,
             role=self.role,
-            profile_name=self.profile_name,
+            profile_name=self.resolved_profile.name,
             input_tokens=getattr(usage, "input_tokens", None),
             output_tokens=getattr(usage, "output_tokens", None),
             requests=getattr(usage, "requests", None),

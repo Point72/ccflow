@@ -29,7 +29,7 @@ from pathlib import Path
 
 from ccflow import RootModelRegistry, load_config as _load_config_base
 
-from .agents import AgentProfile, load_agent_profile, profile_search_roots
+from .agents import AgentProfile, agent_profile_from_file, load_agent_profile, profile_search_roots
 from .checks import (
     ClaimsWithinLimit,
     EvidenceAppearsInArtifact,
@@ -94,10 +94,11 @@ __all__ = (
     "RebuttalBrief",
     "RebuttalModel",
     "Verdict",
+    "VerdictDistributionWellFormed",
     "VerdictProvider",
     "VerdictResult",
-    "VerdictDistributionWellFormed",
     "VerdictWellFormed",
+    "agent_profile_from_file",
     "load_agent_profile",
     "load_config",
     "profile_search_roots",

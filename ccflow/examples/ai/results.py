@@ -13,6 +13,7 @@ from pydantic import Field
 
 from ccflow import BasePublisher, CallableModel, Flow, NullContext, ResultBase
 
+from .checks import OutputCheck
 from .contracts import Critique, Poem, Verdict
 
 __all__ = (
@@ -57,6 +58,15 @@ class PublishingModel(CallableModel):
         description="Whether mechanical constraints are enforced in code. Turning this off leaves the judgement rubric in place but stops counting "
         "anything, which is only appropriate for wiring smoke tests.",
     )
+    extra_checks: list[OutputCheck] = Field(
+        default_factory=list,
+        description="Further mechanical constraints for this node, enforced alongside the built-in ones. This is the seam for a caller's own "
+        "countable rules: anything decidable belongs here rather than in a rubric, where it would be asked for instead of measured.",
+    )
+
+    def _checks(self, builtin: list[OutputCheck]) -> list[OutputCheck]:
+        """This node's built-in constraints plus any configured, or none at all when enforcement is off."""
+        return [*builtin, *self.extra_checks] if self.enforce_checks else []
 
     def _publish(self, result: ResultBase) -> ResultBase:
         if self.publisher is not None:

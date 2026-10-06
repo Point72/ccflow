@@ -86,7 +86,7 @@ class ProduceModel(PoemProvider):
 
     @Flow.call
     def __call__(self, context: NullContext = _NULL_CONTEXT) -> PoemResult:
-        checks = [LinesWithinLimit(limit=self.spec.max_lines)] if self.enforce_checks else []
+        checks = self._checks([LinesWithinLimit(limit=self.spec.max_lines)])
         result = self.session(AgentSessionContext(prompt=self.spec.model_dump_json(indent=2), checks=checks))
         return self._publish(PoemResult(poem=result.output))
 
@@ -111,7 +111,7 @@ class AdvocateModel(CritiqueProvider):
     def __call__(self, context: NullContext = _NULL_CONTEXT) -> CritiqueResult:
         poem = self.produce(NullContext()).poem
         brief = CritiqueBrief[Poem](artifact=poem, position=self.position, rubric=self.rubric)
-        checks = _advocate_checks(poem, self.position, self.rubric) if self.enforce_checks else []
+        checks = self._checks(_advocate_checks(poem, self.position, self.rubric))
         result = self.session(AgentSessionContext(prompt=brief.model_dump_json(indent=2), checks=checks))
         return self._publish(CritiqueResult(critique=result.output))
 
@@ -148,7 +148,7 @@ class RebuttalModel(CritiqueProvider):
             own_case=self.own(NullContext()).critique,
             opposing_case=self.opponent(NullContext()).critique,
         )
-        checks = _advocate_checks(poem, self.position, self.rubric) if self.enforce_checks else []
+        checks = self._checks(_advocate_checks(poem, self.position, self.rubric))
         # Withheld for the same reason the arbiter does not see it: a self-rating is a claim about a
         # case, not evidence for it, and anchoring a revision on one invites deference.
         prompt = brief.model_dump_json(indent=2, exclude={"own_case": {"confidence"}, "opposing_case": {"confidence"}})
@@ -208,13 +208,11 @@ class ArbitrateModel(VerdictProvider):
         poem = self.artifact(NullContext()).poem
         shown, real = self._blind(critiques)
         brief = ArbitrationBrief[Poem](artifact=poem, critiques=shown, rubric=self.rubric)
-        checks = (
+        checks = self._checks(
             [
                 VerdictWellFormed(positions=[c.position for c in shown], allow_no_decision=self.rubric.allow_no_decision),
                 VerdictDistributionWellFormed(),
             ]
-            if self.enforce_checks
-            else []
         )
         # An advocate's self-rated confidence is a claim about its case, not evidence for it, and an
         # arbiter was observed discounting the case that rated itself lower. Withhold it.

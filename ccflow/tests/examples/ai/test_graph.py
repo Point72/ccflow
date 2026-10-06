@@ -12,7 +12,9 @@ from unittest import TestCase
 from ccflow import NullContext
 from ccflow.examples.ai import (
     AdvocateModel,
+    AgentProfile,
     AgentSession,
+    AgentSessionContext,
     ArbitrateModel,
     ArbitrationRubric,
     Claim,
@@ -21,6 +23,8 @@ from ccflow.examples.ai import (
     CritiqueFileSource,
     CritiqueRubric,
     Lessons,
+    LinesWithinLimit,
+    OutputCheck,
     Poem,
     PoemFileSource,
     PoemSpec,
@@ -28,8 +32,10 @@ from ccflow.examples.ai import (
     ProduceModel,
     RebuttalModel,
     Verdict,
+    agent_profile_from_file,
     load_agent_profile,
     profile_search_roots,
+    run_checks,
 )
 
 POEM = Poem(title="First Light", stanzas=["the water turns\nfoam at the rocks"], notes="no end rhyme")
@@ -426,3 +432,92 @@ class TestGraphRunsOffline(TestCase):
     def test_the_arbiter_judged_the_artifact_that_was_produced(self):
         arbiter = _graph()
         self.assertEqual(arbiter(NullContext()).poem, arbiter.advocates[0].produce(NullContext()).poem)
+
+
+class _TitleIsShouted(OutputCheck):
+    """A caller's own countable rule, defined outside the example."""
+
+    def violations(self, output) -> list[str]:
+        return [] if output.title.isupper() else [f"the title {output.title!r} is not in capitals"]
+
+
+class TestCallerSuppliedChecks(TestCase):
+    """A caller's countable rules run beside the built-in ones and obey the same switch."""
+
+    def _producer(self, **kwargs):
+        return ProduceModel(session=_session("producer"), spec=PoemSpec(theme="the sea", max_lines=4), **kwargs)
+
+    def test_an_extra_check_joins_the_built_in_ones(self):
+        produce = self._producer(extra_checks=[_TitleIsShouted()])
+        checks = produce._checks([LinesWithinLimit(limit=4)])
+        self.assertEqual([type(c).__name__ for c in checks], ["LinesWithinLimit", "_TitleIsShouted"])
+
+    def test_an_extra_check_is_enforced(self):
+        produce = self._producer(extra_checks=[_TitleIsShouted()])
+        problems = run_checks(produce._checks([]), Poem(title="quiet", stanzas=["a"]))
+        self.assertEqual(len(problems), 1)
+        self.assertIn("not in capitals", problems[0])
+
+    def test_turning_enforcement_off_drops_caller_checks_too(self):
+        """A caller's check is as unsatisfiable against placeholder output as a built-in one."""
+        produce = self._producer(extra_checks=[_TitleIsShouted()], enforce_checks=False)
+        self.assertEqual(produce._checks([LinesWithinLimit(limit=4)]), [])
+
+    def test_no_extra_checks_leaves_the_built_ins_alone(self):
+        self.assertEqual([type(c).__name__ for c in self._producer()._checks([LinesWithinLimit(limit=4)])], ["LinesWithinLimit"])
+
+    def test_the_graph_still_runs_with_a_caller_check(self):
+        produce = self._producer(extra_checks=[_TitleIsShouted()], enforce_checks=False)
+        self.assertIsInstance(produce(NullContext()).poem, Poem)
+
+
+class TestCallerSuppliedPersonas(TestCase):
+    """Free-form direction is pluggable the way countable rules are, but as prose rather than code."""
+
+    def test_a_persona_can_be_supplied_directly(self):
+        session = AgentSession(
+            role="producer",
+            profile=AgentProfile(name="house", description="ours", instructions="Write only in lower case."),
+            command="go",
+            output_contract="ccflow.examples.ai.contracts.Poem",
+        )
+        self.assertIn("Write only in lower case.", session.instructions)
+        self.assertEqual(session.resolved_profile.name, "house")
+
+    def test_a_supplied_persona_wins_over_a_named_one(self):
+        session = AgentSession(
+            role="producer",
+            profile_name="producer",
+            profile=AgentProfile(name="house", instructions="Mine."),
+            command="go",
+            output_contract="ccflow.examples.ai.contracts.Poem",
+        )
+        self.assertEqual(session.resolved_profile.name, "house")
+
+    def test_a_named_persona_is_still_searched_for(self):
+        self.assertEqual(_session("producer").resolved_profile.name, "producer")
+
+    def test_a_session_without_any_persona_is_rejected(self):
+        with self.assertRaises(ValueError):
+            AgentSession(role="producer", command="go", output_contract="ccflow.examples.ai.contracts.Poem")
+
+    def test_a_persona_loads_from_an_explicit_file(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "house.md"
+            path.write_text("---\ndescription: ours\n---\n\nWrite only in lower case.\n", encoding="utf-8")
+            profile = agent_profile_from_file(str(path))
+        self.assertEqual((profile.name, profile.description), ("house", "ours"))
+        self.assertEqual(profile.instructions, "Write only in lower case.")
+
+    def test_a_missing_persona_file_says_so(self):
+        with self.assertRaises(FileNotFoundError):
+            agent_profile_from_file("/nonexistent/house.md")
+
+    def test_the_reported_persona_is_the_one_that_was_used(self):
+        session = AgentSession(
+            role="producer",
+            profile=AgentProfile(name="house", instructions="Mine."),
+            command="go",
+            output_contract="ccflow.examples.ai.contracts.Poem",
+        )
+        self.assertEqual(session(AgentSessionContext(prompt="go")).profile_name, "house")
