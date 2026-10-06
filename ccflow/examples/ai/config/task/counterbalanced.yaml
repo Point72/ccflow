@@ -41,6 +41,7 @@ task:
   arbiter:
     _target_: ccflow.examples.ai.CounterbalancedArbitrateModel
     enforce_checks: ${enforce_checks}
+    min_margin: ${decision_margin}
     forward:
       _target_: ccflow.examples.ai.ArbitrateModel
       enforce_checks: ${enforce_checks}

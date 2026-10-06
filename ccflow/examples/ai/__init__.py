@@ -30,7 +30,16 @@ from pathlib import Path
 from ccflow import RootModelRegistry, load_config as _load_config_base
 
 from .agents import AgentProfile, load_agent_profile, profile_search_roots
-from .checks import ClaimsWithinLimit, EvidenceAppearsInArtifact, LinesWithinLimit, OutputCheck, PositionAsAssigned, VerdictWellFormed, run_checks
+from .checks import (
+    ClaimsWithinLimit,
+    EvidenceAppearsInArtifact,
+    LinesWithinLimit,
+    OutputCheck,
+    PositionAsAssigned,
+    VerdictDistributionWellFormed,
+    VerdictWellFormed,
+    run_checks,
+)
 from .contracts import (
     ArbitrationBrief,
     ArbitrationRubric,
@@ -87,6 +96,7 @@ __all__ = (
     "Verdict",
     "VerdictProvider",
     "VerdictResult",
+    "VerdictDistributionWellFormed",
     "VerdictWellFormed",
     "load_agent_profile",
     "load_config",

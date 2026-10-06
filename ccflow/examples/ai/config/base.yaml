@@ -40,6 +40,11 @@ run_dir: ./runs
 # Re-prompts allowed when a node's output fails its contract schema or a mechanical check.
 max_repair_attempts: 2
 
+# Smallest pooled margin a counterbalanced decision must clear before a winner is reported. Agreement
+# across both presentation orders is necessary but not sufficient: two arbiters agree on a coin flip
+# half the time. Raise it to report fewer, firmer decisions.
+decision_margin: 0.2
+
 # The graph evaluator schedules the DAG; the cache evaluator is what makes the shared `produce` node
 # run once rather than once per advocate. Without it the advocates would argue about different poems
 # while the arbiter judged a third, and nothing would look wrong.

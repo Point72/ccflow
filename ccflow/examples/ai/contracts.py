@@ -13,7 +13,7 @@ model's context type by ``issubclass``, and postponed evaluation leaves the anno
 
 from typing import Generic, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 __all__ = (
     "ArbitrationBrief",
@@ -109,17 +109,52 @@ class PositionScore(BaseModel):
     """The arbiter's score for one position."""
 
     position: str = Field(description="Position being scored.")
-    score: float = Field(ge=0.0, le=1.0, description="Strength of this position's case, 0 to 1.")
+    score: float = Field(ge=0.0, le=1.0, description="Strength of this position's case on its own merits, 0 to 1.")
+    probability: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="Your belief that this position argued better, as a share of 1 across all positions. These must sum to 1. This is not the "
+        "same as score: two weak cases still divide the belief entirely between them, and two strong ones still only sum to 1.",
+    )
     reasoning: str = Field(description="Why this score.")
 
 
 class Verdict(BaseModel):
-    """The arbiter's decision."""
+    """The arbiter's decision, graded rather than bare.
+
+    A bare winner cannot tell a rout from a coin flip, and a caller that has to act on the decision
+    needs to know which one it got. So the decision carries a distribution over the positions and a
+    confidence in the selection, which are different quantities: a wide margin held with low
+    confidence is a clear call between two cases the arbiter barely followed.
+
+    ``margin`` is derived, not asked for. How far apart two numbers are is decidable, and decidable
+    things are computed here rather than left to a model -- the same split that keeps a line count
+    out of the rubric.
+    """
 
     winner: str | None = Field(description="Winning position, or null if genuinely undecided.")
     scores: list[PositionScore] = Field(description="One score per position considered.")
     rationale: str = Field(description="Why the winner won, referencing specific claims.")
     decisive: bool = Field(description="False when the positions were close enough that the decision could go either way.")
+    confidence: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="How confident you are in this selection, 0 to 1. Rate the selection, not the cases: if both were hard to follow, say so "
+        "here even when one clearly argued better.",
+    )
+
+    @computed_field
+    @property
+    def distribution(self) -> dict[str, float]:
+        """Belief share per position."""
+        return {score.position: score.probability for score in self.scores}
+
+    @computed_field
+    @property
+    def margin(self) -> float:
+        """Gap between the most and second-most probable positions; zero when fewer than two were argued."""
+        ranked = sorted((score.probability for score in self.scores), reverse=True)
+        return ranked[0] - ranked[1] if len(ranked) > 1 else 0.0
 
 
 class CritiqueBrief(BaseModel, Generic[ArtifactT]):

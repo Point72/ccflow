@@ -16,6 +16,7 @@ from ccflow.examples.ai import (
     PositionAsAssigned,
     PositionScore,
     Verdict,
+    VerdictDistributionWellFormed,
     VerdictWellFormed,
     run_checks,
 )
@@ -95,11 +96,13 @@ class TestPositionAsAssigned(TestCase):
 
 class TestVerdictWellFormed(TestCase):
     def _verdict(self, winner="pro", positions=("pro", "con")):
+        share = 1.0 / len(positions)
         return Verdict(
             winner=winner,
-            scores=[PositionScore(position=p, score=0.5, reasoning="r") for p in positions],
+            scores=[PositionScore(position=p, score=0.5, probability=share, reasoning="r") for p in positions],
             rationale="r",
             decisive=True,
+            confidence=0.5,
         )
 
     def test_a_well_formed_verdict_passes(self):
@@ -156,3 +159,42 @@ class TestBaseCheckIsAbstract(TestCase):
                 return ["nope"]
 
         self.assertEqual(run_checks([Always()], POEM), ["nope"])
+
+
+class TestVerdictDistributionWellFormed(TestCase):
+    """Summing to one and finding the largest are arithmetic, so they are checked, not asked."""
+
+    def _verdict(self, winner="pro", pro=0.7, con=0.3):
+        return Verdict(
+            winner=winner,
+            scores=[
+                PositionScore(position="pro", score=0.8, probability=pro, reasoning="r"),
+                PositionScore(position="con", score=0.4, probability=con, reasoning="r"),
+            ],
+            rationale="r",
+            decisive=True,
+            confidence=0.6,
+        )
+
+    def test_a_distribution_summing_to_one_passes(self):
+        self.assertEqual(VerdictDistributionWellFormed().violations(self._verdict()), [])
+
+    def test_probabilities_that_do_not_sum_to_one_are_caught(self):
+        problems = VerdictDistributionWellFormed().violations(self._verdict(pro=0.7, con=0.7))
+        self.assertEqual(len(problems), 1)
+        self.assertIn("1.400", problems[0])
+
+    def test_rounding_within_tolerance_is_accepted(self):
+        self.assertEqual(VerdictDistributionWellFormed().violations(self._verdict(pro=0.666, con=0.333)), [])
+
+    def test_a_winner_that_does_not_lead_the_distribution_is_caught(self):
+        problems = VerdictDistributionWellFormed().violations(self._verdict(winner="pro", pro=0.3, con=0.7))
+        self.assertEqual(len(problems), 1)
+        self.assertIn("higher probability", problems[0])
+
+    def test_an_undecided_verdict_needs_no_leader(self):
+        self.assertEqual(VerdictDistributionWellFormed().violations(self._verdict(winner=None, pro=0.5, con=0.5)), [])
+
+    def test_a_winner_nobody_argued_is_left_to_the_other_check(self):
+        # `VerdictWellFormed` reports it; reporting it twice would spend a repair attempt on one fault.
+        self.assertEqual(VerdictDistributionWellFormed().violations(self._verdict(winner="sideways")), [])

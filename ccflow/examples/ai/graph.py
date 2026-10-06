@@ -31,7 +31,14 @@ from pydantic import Field
 
 from ccflow import Flow, GraphDepList, NullContext
 
-from .checks import ClaimsWithinLimit, EvidenceAppearsInArtifact, LinesWithinLimit, PositionAsAssigned, VerdictWellFormed
+from .checks import (
+    ClaimsWithinLimit,
+    EvidenceAppearsInArtifact,
+    LinesWithinLimit,
+    PositionAsAssigned,
+    VerdictDistributionWellFormed,
+    VerdictWellFormed,
+)
 from .contracts import (
     ArbitrationBrief,
     ArbitrationRubric,
@@ -202,7 +209,12 @@ class ArbitrateModel(VerdictProvider):
         shown, real = self._blind(critiques)
         brief = ArbitrationBrief[Poem](artifact=poem, critiques=shown, rubric=self.rubric)
         checks = (
-            [VerdictWellFormed(positions=[c.position for c in shown], allow_no_decision=self.rubric.allow_no_decision)] if self.enforce_checks else []
+            [
+                VerdictWellFormed(positions=[c.position for c in shown], allow_no_decision=self.rubric.allow_no_decision),
+                VerdictDistributionWellFormed(),
+            ]
+            if self.enforce_checks
+            else []
         )
         # An advocate's self-rated confidence is a claim about its case, not evidence for it, and an
         # arbiter was observed discounting the case that rated itself lower. Withhold it.
@@ -225,22 +237,36 @@ class CounterbalancedArbitrateModel(VerdictProvider):
 
     forward: ArbitrateModel = Field(description="Arbiter seeing the advocates in configured order.")
     reverse: ArbitrateModel = Field(description="Arbiter seeing the same advocates reversed.")
+    min_margin: float = Field(
+        default=0.2,
+        ge=0.0,
+        le=1.0,
+        description="Smallest pooled margin that counts as a decision. Agreement says both orders leaned the same way, which two coin flips "
+        "manage half the time; a margin says they leaned far enough apart to be worth reporting.",
+    )
 
     @Flow.deps
     def __deps__(self, context: NullContext) -> GraphDepList:
         return [(self.forward, [NullContext()]), (self.reverse, [NullContext()])]
 
-    @staticmethod
-    def _reconcile(first: Verdict, second: Verdict) -> Verdict:
+    def _reconcile(self, first: Verdict, second: Verdict) -> Verdict:
         agreed = first.winner == second.winner
         by_position: dict[str, list[PositionScore]] = {}
         for verdict, label in ((first, "shown in configured order"), (second, "shown reversed")):
             for score in verdict.scores:
                 by_position.setdefault(score.position, []).append(score.model_copy(update={"reasoning": f"[{label}] {score.reasoning}"}))
         scores = [
-            PositionScore(position=position, score=sum(s.score for s in seen) / len(seen), reasoning="\n\n".join(s.reasoning for s in seen))
+            PositionScore(
+                position=position,
+                score=sum(s.score for s in seen) / len(seen),
+                probability=sum(s.probability for s in seen) / len(seen),
+                reasoning="\n\n".join(s.reasoning for s in seen),
+            )
             for position, seen in by_position.items()
         ]
+        ranked = sorted((s.probability for s in scores), reverse=True)
+        margin = ranked[0] - ranked[1] if len(ranked) > 1 else 0.0
+        clear = margin >= self.min_margin
         if not agreed:
             headline = (
                 f"The orders disagreed -- {first.winner} in configured order, {second.winner} reversed -- so this is "
@@ -248,14 +274,21 @@ class CounterbalancedArbitrateModel(VerdictProvider):
             )
         elif first.winner is None:
             headline = "Both presentation orders left this undecided."
+        elif not clear:
+            headline = (
+                f"Both presentation orders chose {first.winner}, but the pooled margin was {margin:.2f}, under the {self.min_margin:.2f} "
+                "required, so this is recorded as undecided. Agreeing on a near-tie is still a near-tie."
+            )
         else:
-            headline = f"Both presentation orders chose {first.winner}."
+            headline = f"Both presentation orders chose {first.winner}, by a pooled margin of {margin:.2f}."
         return Verdict(
-            winner=first.winner if agreed else None,
+            winner=first.winner if agreed and clear else None,
             scores=scores,
             rationale=f"{headline}\n\n[configured order] {first.rationale}\n\n[reversed order] {second.rationale}",
-            # Agreement alone is not decisiveness: both arbiters must also have found their own call clear.
-            decisive=agreed and first.decisive and second.decisive,
+            # Agreement alone is not decisiveness: the pooled margin must clear the bar and both
+            # arbiters must also have found their own call clear.
+            decisive=agreed and clear and first.decisive and second.decisive,
+            confidence=(first.confidence + second.confidence) / 2,
         )
 
     @Flow.call

@@ -69,15 +69,17 @@ def _critique(position, confidence=0.5):
     )
 
 
-def _verdict(winner, pro, con, decisive):
+def _verdict(winner, pro, con, decisive, probabilities=(0.7, 0.3)):
+    pro_p, con_p = probabilities
     return Verdict(
         winner=winner,
         scores=[
-            PositionScore(position="pro", score=pro, reasoning="pro said things"),
-            PositionScore(position="con", score=con, reasoning="con said things"),
+            PositionScore(position="pro", score=pro, probability=pro_p, reasoning="pro said things"),
+            PositionScore(position="con", score=con, probability=con_p, reasoning="con said things"),
         ],
         rationale=f"{winner} won",
         decisive=decisive,
+        confidence=0.6,
     )
 
 
@@ -171,11 +173,12 @@ class TestPresentationNeutrality(TestCase):
         verdict = Verdict(
             winner="case_2",
             scores=[
-                PositionScore(position="case_1", score=0.4, reasoning="case_1 asserted"),
-                PositionScore(position="case_2", score=0.7, reasoning="case_2 quoted"),
+                PositionScore(position="case_1", score=0.4, probability=0.35, reasoning="case_1 asserted"),
+                PositionScore(position="case_2", score=0.7, probability=0.65, reasoning="case_2 quoted"),
             ],
             rationale="case_2 beat case_1",
             decisive=True,
+            confidence=0.6,
         )
         restored = ArbitrateModel._unblind(verdict, {"case_1": "pro", "case_2": "con"})
         self.assertEqual(restored.winner, "con")
@@ -188,9 +191,10 @@ class TestPresentationNeutrality(TestCase):
             with self.subTest(written=written):
                 verdict = Verdict(
                     winner="case_1",
-                    scores=[PositionScore(position="case_1", score=0.6, reasoning=f"{written} quoted well.")],
+                    scores=[PositionScore(position="case_1", score=0.6, probability=1.0, reasoning=f"{written} quoted well.")],
                     rationale=f"{written} edges ahead.",
                     decisive=True,
+                    confidence=0.6,
                 )
                 restored = ArbitrateModel._unblind(verdict, {"case_1": "pro", "case_2": "con"})
                 self.assertEqual(restored.rationale, "pro edges ahead.")
@@ -200,9 +204,10 @@ class TestPresentationNeutrality(TestCase):
         """`VerdictWellFormed` accepts a position case-insensitively, so restoring must match the same way."""
         verdict = Verdict(
             winner="Case_1",
-            scores=[PositionScore(position="CASE_1", score=0.6, reasoning="fine")],
+            scores=[PositionScore(position="CASE_1", score=0.6, probability=1.0, reasoning="fine")],
             rationale="fine",
             decisive=True,
+            confidence=0.6,
         )
         restored = ArbitrateModel._unblind(verdict, {"case_1": "pro", "case_2": "con"})
         self.assertEqual(restored.winner, "pro")
@@ -211,9 +216,10 @@ class TestPresentationNeutrality(TestCase):
     def test_restoring_does_not_maul_unrelated_words(self):
         verdict = Verdict(
             winner="case_1",
-            scores=[PositionScore(position="case_1", score=0.6, reasoning="The case is well made.")],
+            scores=[PositionScore(position="case_1", score=0.6, probability=1.0, reasoning="The case is well made.")],
             rationale="A staircase and a suitcase are not labels.",
             decisive=True,
+            confidence=0.6,
         )
         restored = ArbitrateModel._unblind(verdict, {"case_1": "pro", "case_2": "con"})
         self.assertEqual(restored.rationale, "A staircase and a suitcase are not labels.")
@@ -221,39 +227,92 @@ class TestPresentationNeutrality(TestCase):
 
 
 class TestCounterbalancedArbitration(TestCase):
-    """A winner is reported only when it survives both presentation orders."""
+    """A winner is reported only when it survives both presentation orders by a wide enough margin."""
+
+    def setUp(self):
+        self.reconcile = CounterbalancedArbitrateModel.model_construct(min_margin=0.2)._reconcile
 
     def test_agreement_keeps_the_winner(self):
-        merged = CounterbalancedArbitrateModel._reconcile(_verdict("pro", 0.8, 0.6, True), _verdict("pro", 0.7, 0.5, True))
+        merged = self.reconcile(_verdict("pro", 0.8, 0.6, True), _verdict("pro", 0.7, 0.5, True))
         self.assertEqual(merged.winner, "pro")
         self.assertTrue(merged.decisive)
 
     def test_disagreement_is_recorded_as_undecided(self):
-        merged = CounterbalancedArbitrateModel._reconcile(_verdict("pro", 0.8, 0.6, True), _verdict("con", 0.5, 0.7, True))
+        merged = self.reconcile(_verdict("pro", 0.8, 0.6, True), _verdict("con", 0.5, 0.7, True))
         self.assertIsNone(merged.winner)
         self.assertFalse(merged.decisive)
         self.assertIn("disagreed", merged.rationale)
 
     def test_agreement_on_a_close_call_is_still_not_decisive(self):
-        merged = CounterbalancedArbitrateModel._reconcile(_verdict("pro", 0.6, 0.58, True), _verdict("pro", 0.6, 0.59, False))
+        merged = self.reconcile(_verdict("pro", 0.6, 0.58, True), _verdict("pro", 0.6, 0.59, False))
         self.assertEqual(merged.winner, "pro")
         self.assertFalse(merged.decisive)
 
+    def test_agreement_inside_the_margin_is_undecided(self):
+        """Two arbiters agree on a coin flip half the time, so agreement alone cannot carry a decision."""
+        thin = (0.52, 0.48)
+        merged = self.reconcile(_verdict("pro", 0.8, 0.6, True, thin), _verdict("pro", 0.7, 0.5, True, thin))
+        self.assertIsNone(merged.winner)
+        self.assertFalse(merged.decisive)
+        self.assertIn("under the 0.20 required", merged.rationale)
+
+    def test_the_margin_is_configurable(self):
+        thin = (0.52, 0.48)
+        lenient = CounterbalancedArbitrateModel.model_construct(min_margin=0.0)._reconcile
+        merged = lenient(_verdict("pro", 0.8, 0.6, True, thin), _verdict("pro", 0.7, 0.5, True, thin))
+        self.assertEqual(merged.winner, "pro")
+
+    def test_probabilities_are_pooled_across_orders(self):
+        merged = self.reconcile(_verdict("pro", 0.8, 0.6, True, (0.8, 0.2)), _verdict("pro", 0.6, 0.4, True, (0.6, 0.4)))
+        self.assertEqual({s.position: round(s.probability, 6) for s in merged.scores}, {"pro": 0.7, "con": 0.3})
+        self.assertAlmostEqual(merged.margin, 0.4)
+
     def test_scores_are_averaged_across_orders(self):
-        merged = CounterbalancedArbitrateModel._reconcile(_verdict("pro", 0.8, 0.6, True), _verdict("pro", 0.6, 0.4, True))
+        merged = self.reconcile(_verdict("pro", 0.8, 0.6, True), _verdict("pro", 0.6, 0.4, True))
         self.assertEqual({s.position: round(s.score, 6) for s in merged.scores}, {"pro": 0.7, "con": 0.5})
 
     def test_both_orders_reasoning_is_retained(self):
-        merged = CounterbalancedArbitrateModel._reconcile(_verdict("pro", 0.8, 0.6, True), _verdict("pro", 0.7, 0.5, True))
+        merged = self.reconcile(_verdict("pro", 0.8, 0.6, True), _verdict("pro", 0.7, 0.5, True))
         pro = next(s for s in merged.scores if s.position == "pro")
         self.assertIn("configured order", pro.reasoning)
         self.assertIn("reversed", pro.reasoning)
 
     def test_agreeing_that_it_is_undecided_reads_as_undecided(self):
-        merged = CounterbalancedArbitrateModel._reconcile(_verdict(None, 0.6, 0.6, False), _verdict(None, 0.6, 0.6, False))
+        merged = self.reconcile(_verdict(None, 0.6, 0.6, False), _verdict(None, 0.6, 0.6, False))
         self.assertIsNone(merged.winner)
         self.assertNotIn("chose None", merged.rationale)
         self.assertTrue(merged.rationale.startswith("Both presentation orders left this undecided."))
+
+
+class TestGradedVerdict(TestCase):
+    """The margin is derived from the distribution rather than reported by the arbiter."""
+
+    def test_margin_is_the_gap_between_the_top_two(self):
+        self.assertAlmostEqual(_verdict("pro", 0.8, 0.4, True, (0.75, 0.25)).margin, 0.5)
+
+    def test_a_tie_has_no_margin(self):
+        self.assertAlmostEqual(_verdict(None, 0.5, 0.5, False, (0.5, 0.5)).margin, 0.0)
+
+    def test_a_single_position_has_no_margin(self):
+        lone = Verdict(
+            winner="pro",
+            scores=[PositionScore(position="pro", score=0.6, probability=1.0, reasoning="r")],
+            rationale="r",
+            decisive=True,
+            confidence=0.6,
+        )
+        self.assertEqual(lone.margin, 0.0)
+
+    def test_the_distribution_is_keyed_by_position(self):
+        self.assertEqual(_verdict("pro", 0.8, 0.4, True, (0.75, 0.25)).distribution, {"pro": 0.75, "con": 0.25})
+
+    def test_derived_fields_serialize_but_are_not_asked_of_the_model(self):
+        """They ride along in a published result, and stay out of the schema the model is held to."""
+        dumped = _verdict("pro", 0.8, 0.4, True).model_dump()
+        self.assertIn("margin", dumped)
+        self.assertIn("distribution", dumped)
+        self.assertNotIn("margin", Verdict.model_json_schema(mode="validation")["properties"])
+        self.assertNotIn("distribution", Verdict.model_json_schema(mode="validation")["properties"])
 
 
 class TestLessonScoping(TestCase):

@@ -23,6 +23,7 @@ __all__ = (
     "LinesWithinLimit",
     "OutputCheck",
     "PositionAsAssigned",
+    "VerdictDistributionWellFormed",
     "VerdictWellFormed",
     "run_checks",
 )
@@ -134,4 +135,40 @@ class VerdictWellFormed(OutputCheck):
                 problems.append("this rubric requires a decision, so winner cannot be null")
         elif output.winner.strip().lower() not in expected:
             problems.append(f"winner {output.winner!r} is not one of the positions argued, {sorted(expected)}")
+        return problems
+
+
+class VerdictDistributionWellFormed(OutputCheck):
+    """The belief shares must be a distribution, and the winner must be the position that leads it.
+
+    Both are arithmetic -- whether a set of numbers sums to one, and which of them is largest -- so
+    neither is asked of the arbiter. A verdict naming one position while giving another the higher
+    probability is incoherent in a way that is cheap to catch here and invisible downstream, where
+    only the winner usually gets read.
+
+    Coverage of the argued positions is `VerdictWellFormed`'s job and is not repeated.
+    """
+
+    tolerance: float = Field(
+        default=0.01, gt=0.0, description="How far the probabilities may sum from 1 before the distribution counts as malformed."
+    )
+
+    def violations(self, output) -> list[str]:
+        if not output.scores:
+            return []
+        problems = []
+        total = sum(score.probability for score in output.scores)
+        if abs(total - 1.0) > self.tolerance:
+            problems.append(
+                f"the probabilities sum to {total:.3f}, not 1; they are shares of one belief across the positions, so raising one must lower another"
+            )
+        if output.winner is not None:
+            leader = max(output.scores, key=lambda score: score.probability)
+            named = next((s for s in output.scores if s.position.strip().lower() == output.winner.strip().lower()), None)
+            # A winner that is not among the scores is already reported by `VerdictWellFormed`.
+            if named is not None and named.probability < leader.probability:
+                problems.append(
+                    f"you named {output.winner!r} the winner but gave {leader.position!r} the higher probability "
+                    f"({leader.probability:.2f} against {named.probability:.2f}); name the position you found most probable"
+                )
         return problems
