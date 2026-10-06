@@ -56,23 +56,23 @@ Publishers (`ccflow.publishers`) are models that write or send data. A common in
 
 Evaluators control *how* a `CallableModel` runs. Set one through `FlowOptions` (see [Core Types](Core-Types#flow-options)). Usage is in [Cache Results](Cache-Results) and [Retry on Failure](Retry-on-Failure).
 
-| Name                                | Path                | Description                                                        |
-| :---------------------------------- | :------------------ | :----------------------------------------------------------------- |
-| `LazyEvaluator`                     | `ccflow.evaluators` | Runs the callable only once an attribute of the result is queried. |
-| `LoggingEvaluator`                  | `ccflow.evaluators` | Logs information about evaluating the callable (the default).      |
-| `MemoryCacheEvaluator`              | `ccflow.evaluators` | Caches results in memory.                                          |
-| `MultiEvaluator`                    | `ccflow.evaluators` | Combines multiple evaluators.                                      |
-| `GraphEvaluator`                    | `ccflow.evaluators` | Evaluates the dependency graph in topologically sorted order.      |
-| `RetryEvaluator`                    | `ccflow.evaluators` | Retries evaluation on failure with exponential backoff and jitter. |
-| `ChunkedDateRangeEvaluator`         | *Coming Soon!*      |                                                                    |
-| `ChunkedDateRangeResultsAggregator` | *Coming Soon!*      |                                                                    |
-| `DependencyTrackingEvaluator`       | *Coming Soon!*      |                                                                    |
-| `DiskCacheEvaluator`                | *Coming Soon!*      |                                                                    |
-| `ParquetCacheEvaluator`             | *Coming Soon!*      |                                                                    |
-| `RayChunkedDateRangeEvaluator`      | *Coming Soon!*      |                                                                    |
-| `RayCacheEvaluator`                 | *Coming Soon!*      |                                                                    |
-| `RayGraphEvaluator`                 | *Coming Soon!*      |                                                                    |
-| `RayDelayedDistributedEvaluator`    | *Coming Soon!*      |                                                                    |
+| Name                                | Path                | Description                                                                                          |
+| :---------------------------------- | :------------------ | :--------------------------------------------------------------------------------------------------- |
+| `LazyEvaluator`                     | `ccflow.evaluators` | Runs the callable only once an attribute of the result is queried.                                   |
+| `LoggingEvaluator`                  | `ccflow.evaluators` | Logs information about evaluating the callable (the default).                                        |
+| `MemoryCacheEvaluator`              | `ccflow.evaluators` | Caches results in memory.                                                                            |
+| `MultiEvaluator`                    | `ccflow.evaluators` | Combines multiple evaluators.                                                                        |
+| `GraphEvaluator`                    | `ccflow.evaluators` | Evaluates the dependency graph in topologically sorted order, running each node once per evaluation. |
+| `RetryEvaluator`                    | `ccflow.evaluators` | Retries evaluation on failure with exponential backoff and jitter.                                   |
+| `ChunkedDateRangeEvaluator`         | *Coming Soon!*      |                                                                                                      |
+| `ChunkedDateRangeResultsAggregator` | *Coming Soon!*      |                                                                                                      |
+| `DependencyTrackingEvaluator`       | *Coming Soon!*      |                                                                                                      |
+| `DiskCacheEvaluator`                | *Coming Soon!*      |                                                                                                      |
+| `ParquetCacheEvaluator`             | *Coming Soon!*      |                                                                                                      |
+| `RayChunkedDateRangeEvaluator`      | *Coming Soon!*      |                                                                                                      |
+| `RayCacheEvaluator`                 | *Coming Soon!*      |                                                                                                      |
+| `RayGraphEvaluator`                 | *Coming Soon!*      |                                                                                                      |
+| `RayDelayedDistributedEvaluator`    | *Coming Soon!*      |                                                                                                      |
 
 ### How cache keys are built
 

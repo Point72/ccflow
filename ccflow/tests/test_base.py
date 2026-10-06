@@ -175,8 +175,8 @@ class TestBaseModel(TestCase):
 
     def test_panel(self):
         from ccflow import ModelRegistry
-        from ccflow.ui.model import ModelViewer
-        from ccflow.ui.registry import ModelRegistryViewer
+        from ccflow.ui.panel.model import ModelViewer
+        from ccflow.ui.panel.registry import ModelRegistryViewer
 
         m = ModelA(x="foo")
         panel_obj = m.__panel__()

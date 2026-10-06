@@ -778,6 +778,34 @@ class TestNormalizeTokenNumpyPandas:
         arr = np.array([(1, 2.0), (3, 4.0)], dtype=dt)
         assert normalize_token(arr)[0] == "ndarray"
 
+    def test_numpy_structured_array_ignores_padding(self):
+        dt = np.dtype([("a", np.uint8), ("b", np.uint64)], align=True)
+        a = np.frombuffer(bytearray(dt.itemsize), dtype=dt)
+        b = np.frombuffer(bytearray(b"\xff" * dt.itemsize), dtype=dt)
+        for arr in (a, b):
+            arr["a"] = 7
+            arr["b"] = 12345
+        assert a.tobytes() != b.tobytes()
+        assert normalize_token(a) == normalize_token(b)
+
+    def test_numpy_structured_array_different_values(self):
+        dt = np.dtype([("a", np.uint8), ("b", np.uint64)], align=True)
+        a = np.zeros(1, dtype=dt)
+        b = np.zeros(1, dtype=dt)
+        a["b"] = 1
+        b["b"] = 2
+        assert normalize_token(a) != normalize_token(b)
+
+    def test_numpy_structured_array_nested(self):
+        dt = np.dtype([("p", [("x", np.float32), ("y", np.float32)]), ("m", np.int16, (2, 2))], align=True)
+        a = np.zeros(2, dtype=dt)
+        b = np.zeros(2, dtype=dt)
+        a["p"]["x"] = 1.5
+        b["p"]["x"] = 1.5
+        assert normalize_token(a) == normalize_token(b)
+        b["m"][0, 0, 0] = 4
+        assert normalize_token(a) != normalize_token(b)
+
     def test_numpy_scalar(self):
         s = np.int64(42)
         assert normalize_token(s) == ("np_scalar", "int64", 42)

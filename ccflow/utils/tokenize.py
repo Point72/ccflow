@@ -159,6 +159,13 @@ def _normalize_date(obj):
 
 @normalize_token.register(datetime)
 def _normalize_datetime(obj):
+    cls = type(obj)
+    # pandas.Timestamp subclasses datetime and must not share a token with an equal plain datetime.
+    # Matching by name keeps `import ccflow` from paying for pandas just to register one handler.
+    # DataFrame/Series/Index have no structural handler and fall through to cloudpickle; adding them
+    # (as dask does) would require real lazy registration rather than this name check.
+    if cls is not datetime and any(c.__name__ == "Timestamp" and _module_in(c.__module__, ("pandas",)) for c in cls.__mro__):
+        return ("pd_timestamp", obj.isoformat())
     return ("datetime", obj.isoformat())
 
 
@@ -355,6 +362,10 @@ def _register_numpy() -> None:
         # element-wise instead. Cycle detection is keyed on the array because tolist() returns a fresh list.
         if obj.dtype.hasobject:
             return _with_cycle_check(obj, lambda: ("ndarray", str(obj.dtype), obj.shape, normalize_token(obj.tolist())))
+        # Structured dtypes may carry padding between fields. Those bytes are never written, so hashing the
+        # raw buffer gives arrays with identical field values different tokens. Recurse per field to skip them.
+        if obj.dtype.names is not None:
+            return ("ndarray", str(obj.dtype), obj.shape, tuple((name, normalize_token(obj[name])) for name in obj.dtype.names))
         return ("ndarray", str(obj.dtype), obj.shape, hashlib.sha256(np.ascontiguousarray(obj).tobytes()).hexdigest())
 
     @normalize_token.register(np.ma.MaskedArray)
@@ -371,22 +382,7 @@ def _register_numpy() -> None:
         return ("np_scalar", str(type(obj).__name__), obj.item())
 
 
-def _register_pandas() -> None:
-    try:
-        import pandas as pd
-    except ImportError:  # pragma: no cover
-        return
-
-    # Only Timestamp has a structural handler; DataFrame/Series/Index fall through to the cloudpickle
-    # fallback. That works today but is fragile across pandas version upgrades — a follow-up could add
-    # structural handlers (matching dask) for stability and a perf win on large frames.
-    @normalize_token.register(pd.Timestamp)
-    def _normalize_pd_timestamp(obj):
-        return ("pd_timestamp", obj.isoformat())
-
-
 _register_numpy()
-_register_pandas()
 
 
 def tokenize(*args: Any, **kwargs: Any) -> str:
@@ -441,9 +437,7 @@ _SKIPPED_METHODS = frozenset(
 )
 
 
-# ---------------------------------------------------------------------------
 # Behavior hashing — bytecode-based fingerprinting of class methods
-# ---------------------------------------------------------------------------
 
 
 def _unwrap_function(func: object) -> Callable | None:

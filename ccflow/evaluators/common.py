@@ -486,10 +486,14 @@ def get_dependency_graph(evaluation_context: ModelEvaluationContext) -> Callable
 class GraphEvaluator(EvaluatorBase):
     """Evaluator that evaluates the dependency graph of callable models in topologically sorted order.
 
-    It is suggested to combine it with a caching evaluator.
+    Each graph node is evaluated once per graph evaluation. When a node's ``__call__`` calls one of its declared
+    dependencies again, the result already computed for that graph node is reused, whether or not results are
+    cacheable. Volatile nodes are never reused and recompute on every call. Those results are released when the graph evaluation finishes. Calls that are not graph nodes are
+    evaluated normally and not retained; combine with a caching evaluator to reuse them.
     """
 
     _is_evaluating: bool = PrivateAttr(False)
+    _node_results: dict[bytes, ResultType] = PrivateAttr(default_factory=dict)
 
     def is_transparent(self, context: ModelEvaluationContext) -> bool:
         return True
@@ -499,8 +503,12 @@ class GraphEvaluator(EvaluatorBase):
         import graphlib
 
         # If we are evaluating deps, or if we have already started using the graph evaluator further up the call tree,
-        # do not apply it any further
+        # do not apply it any further beyond reusing results for nodes of the graph being evaluated.
         if self._is_evaluating:
+            if self._node_results:
+                key = _effective_evaluation_key(context)
+                if key in self._node_results:
+                    return self._node_results[key]
             return context()
         self._is_evaluating = True
         root_result = None
@@ -510,8 +518,13 @@ class GraphEvaluator(EvaluatorBase):
             for key in ts.static_order():
                 evaluation_context = graph.ids[key]
                 result = evaluation_context()
+                # Volatile nodes always recompute, so never share their result with nested calls.
+                inner, _, _ = _flatten_cache_key_context(evaluation_context)
+                if not inner.options.get("volatile"):
+                    self._node_results[key] = result
                 if key == graph.root_id:
                     root_result = result
         finally:
             self._is_evaluating = False
+            self._node_results = {}
         return root_result
