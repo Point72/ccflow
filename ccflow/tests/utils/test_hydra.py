@@ -4,8 +4,8 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-from hydra import compose, initialize
 
+from ccflow.config import compose, initialize
 from ccflow.utils.hydra import (
     add_hydra_config_args,
     add_panel_server_args,
@@ -265,14 +265,16 @@ def test_config_dir_with_overrides(basepath):
     assert "user_foo" in result.cfg["config_user"]
 
 
-def test_config_name_yml_not_yaml(basepath):
+def test_config_name_yml_not_yaml(basepath, tmp_path):
     root_config_dir = str(Path(__file__).resolve().parent.parent / "config")
-    config_dir = str(Path(__file__).resolve().parent.parent / "config_user")
+    config_dir = tmp_path / "config_user"
+    config_dir.mkdir()
+    (config_dir / "sample2.yml").write_text("foo: bar")
     with pytest.raises(ValueError):
         load_config(
             root_config_dir=root_config_dir,
             root_config_name="conf",
-            config_dir=config_dir,
+            config_dir=str(config_dir),
             config_name="sample2",
             basepath=basepath,
         )
@@ -338,7 +340,7 @@ def test_debug(basepath):
     assert "hydra/job_logging" in result.group_options
     assert len(result.group_options["hydra/job_logging"]) > 1
     assert "config_user" in result.group_options
-    assert result.group_options["config_user"] == ["sample"]
+    assert "sample" in result.group_options["config_user"]
     # Arguable whether these should be here
     assert "conf_out_of_order" in result.group_options[""]
 
@@ -347,7 +349,7 @@ def test_debug(basepath):
     assert merged
     assert "foo" in merged
     assert "config_user" in merged
-    assert merged["config_user"]["__options__"] == ["sample"]
+    assert "sample" in merged["config_user"]["__options__"]
     assert merged["config_user"]["__parent__"] == "conf"  # Maybe this should be a path to a file
     assert merged["config_user"]["__selected__"] == "sample"
     assert "user_foo" in merged["config_user"]

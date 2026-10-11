@@ -12,11 +12,18 @@ class TestEnumType:
 
 
 class TestEnum(TestCase):
+    def setUp(self) -> None:
+        self._csp_modules = {name: module for name, module in sys.modules.items() if name == "csp" or name.startswith("csp.")}
+
     def tearDown(self) -> None:
         # Because test_init_parent and test_init_parent_csp muck around with imports
         # Make sure we always rest the imports at the end of each test so that other
         # tests are unaffected
         os.environ.pop("CCFLOW_NO_CSP", None)
+        for name in list(sys.modules):
+            if name == "csp" or name.startswith("csp."):
+                sys.modules.pop(name)
+        sys.modules.update(self._csp_modules)
         importlib.invalidate_caches()
         import ccflow.enums
 
