@@ -636,7 +636,7 @@ class TestNormalizeTokenPrimitives:
         "value,expected",
         [
             (date(2024, 1, 15), ("date", "2024-01-15")),
-            (datetime(2024, 1, 15, 10, 30, 0), ("datetime", "2024-01-15T10:30:00")),  # noqa: DTZ001
+            (datetime(2024, 1, 15, 10, 30, 0), ("datetime", "2024-01-15T10:30:00")),
             (time(10, 30, 0), ("time", "10:30:00")),
             (timedelta(hours=1, minutes=30), ("timedelta", 0, 5400, 0)),
         ],

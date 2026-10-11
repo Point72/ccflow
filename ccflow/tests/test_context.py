@@ -102,7 +102,7 @@ class TestContexts(TestCase):
         dt = datetime(2022, 1, 1, 12, 0, tzinfo=timezone.utc)
         c = DatetimeContext(dt=dt)
         self.assertEqual(DatetimeContext(dt=str(dt)), c)
-        self.assertEqual(DatetimeContext(dt=dt.date()), DatetimeContext(dt=datetime(2022, 1, 1)))  # noqa: DTZ001
+        self.assertEqual(DatetimeContext(dt=dt.date()), DatetimeContext(dt=datetime(2022, 1, 1)))
 
         # Test validation from other types
         self.assertEqual(TypeAdapter(DatetimeContext).validate_python({"dt": dt}), c)
