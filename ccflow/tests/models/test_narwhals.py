@@ -243,7 +243,7 @@ class TestJoinTransform:
         lf = nw.from_native(pl.LazyFrame({"x": [1, 2, 3]}))
         right_src = FrameSource(data={"x": [1, 2, 3], "y": ["a", "b", "c"]})
         jt = JoinTransform(other=right_src, on="x", how="left")
-        out = lf.pipe(jt).collect().to_native()
+        out = lf.pipe(jt).collect().to_native().sort("x")
         assert out.columns == ["x", "y"]
         assert out["y"].to_list() == ["a", "b", "c"]
 
@@ -255,7 +255,7 @@ class TestJoinTransform:
         jt = JoinTransform(other=right_src, on="x", how="left", suffix="_r")
         jt2 = JoinTransform.model_validate_json(jt.model_dump_json())
         lf = nw.from_native(pl.LazyFrame({"x": [1, 2, 3]}))
-        assert lf.pipe(jt).collect().to_native().equals(lf.pipe(jt2).collect().to_native())
+        assert lf.pipe(jt).collect().to_native().sort("x").equals(lf.pipe(jt2).collect().to_native().sort("x"))
 
     def test_rejects_non_narwhals_other(self):
         class BadSrc(CallableModel):
@@ -271,7 +271,7 @@ class TestJoinTransform:
         main = FrameSource(data={"x": [1, 2, 3], "v": [10, 20, 30]})
         side = FrameSource(data={"x": [1, 2, 3], "label": ["a", "b", "c"]})
         p = NarwhalsPipelineModel(source=main, transforms=[JoinTransform(other=side, on="x")])
-        out = p(NullContext()).df.collect().to_native()
+        out = p(NullContext()).df.collect().to_native().sort("x")
         assert out.columns == ["x", "v", "label"]
         assert out["label"].to_list() == ["a", "b", "c"]
 
@@ -279,7 +279,7 @@ class TestJoinTransform:
         lf = nw.from_native(pl.LazyFrame({"a": [1, 2, 3]}))
         right_src = FrameSource(data={"b": [1, 2, 3], "y": ["a", "b", "c"]})
         jt = JoinTransform(other=right_src, left_on="a", right_on="b", how="inner")
-        out = lf.pipe(jt).collect().to_native()
+        out = lf.pipe(jt).collect().to_native().sort("a")
         assert out["y"].to_list() == ["a", "b", "c"]
 
     def test_cross_join(self):
@@ -318,7 +318,7 @@ class TestJoinTransform:
         src = TableSource(tables={"r": {"x": [1, 2], "y": ["a", "b"]}})
         lf = nw.from_native(pl.LazyFrame({"x": [1, 2]}))
         jt = JoinTransform(other=src, other_context=TableCtx(table="r"), on="x")
-        out = lf.pipe(jt).collect().to_native()
+        out = lf.pipe(jt).collect().to_native().sort("x")
         assert out["y"].to_list() == ["a", "b"]
 
     def test_rejects_other_context_type_mismatch(self):
@@ -346,7 +346,7 @@ class TestJoinBackTransform:
                 return df.select(nw.col("x"), (nw.col("v") * 100).alias("hund"))
 
         jb = JoinBackTransform(inner=Project(), on="x")
-        out = lf.pipe(jb).collect().to_native()
+        out = lf.pipe(jb).collect().to_native().sort("x")
         assert out.columns == ["x", "v", "hund"]
         assert out["hund"].to_list() == [1000, 2000, 3000]
 
