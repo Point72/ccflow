@@ -1,0 +1,6 @@
+# @package _global_
+# Each task sets its own `task_name`, so the single-node tasks write distinct files under `run_dir`
+# and chain by pointing a downstream file source at an upstream output.
+publisher:
+  _target_: ccflow.publishers.PydanticJSONPublisher
+  name: ${run_dir}/${task_name}

@@ -1,0 +1,4 @@
+# @package _global_
+# Mechanical constraints decided in code. This should stay on against any real model: turning it off
+# returns every countable fact to the arbiter's arithmetic.
+enforce_checks: true

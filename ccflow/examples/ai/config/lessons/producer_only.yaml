@@ -1,0 +1,13 @@
+# @package _global_
+# A single-role book, kept as the worked example of scoping: every lesson here is about writing the
+# poem, so none reaches the advocates or the arbiter. Selecting this group changes what the producer
+# is told and nothing else.
+lessons:
+  general: []
+  by_role:
+    producer:
+      - Prefer one exact image to three approximate ones.
+      - >
+        Do not argue for the poem in the notes. State the choices you made and let the critics decide
+        whether they worked; a note that defends the poem hands the pro advocate its case and reads
+        as special pleading.

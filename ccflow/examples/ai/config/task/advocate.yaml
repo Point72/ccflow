@@ -1,0 +1,20 @@
+# @package _global_
+#
+# Argue one position about a previously published poem. The position is chosen on the command line,
+# and both the persona and the output filename follow it.
+#
+#   python -m ccflow.examples.ai task=advocate publisher=json position=pro
+#   python -m ccflow.examples.ai task=advocate publisher=json position=con
+
+task_name: critique_${position}
+
+task:
+  _target_: ccflow.examples.ai.AdvocateModel
+  publisher: ${publisher}
+  enforce_checks: ${enforce_checks}
+  position: ${position}
+  rubric: ${critique_rubric}
+  session: ${advocate_session}
+  produce:
+    _target_: ccflow.examples.ai.PoemFileSource
+    path: ${run_dir}/poem.json

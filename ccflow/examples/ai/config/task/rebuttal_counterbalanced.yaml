@@ -1,0 +1,79 @@
+# @package _global_
+#
+# Both defences at once: a rebuttal round, then arbitration in both presentation orders. The
+# strongest configuration here, and the slowest -- seven model calls.
+#
+#   python -m ccflow.examples.ai task=rebuttal_counterbalanced
+#
+# A `decisive: true` verdict here means the winner survived reading the opposing case *and* survived
+# being shown in either slot. That is a materially different claim from a single-order first-round
+# verdict, which is the one measurement this harness has shown to be unreliable.
+
+task_name: verdict
+
+produce:
+  _target_: ccflow.examples.ai.ProduceModel
+  enforce_checks: ${enforce_checks}
+  spec: ${poem_spec}
+  session: ${producer_session}
+
+pro_opening:
+  _target_: ccflow.examples.ai.AdvocateModel
+  enforce_checks: ${enforce_checks}
+  position: pro
+  produce: ${produce}
+  rubric: ${critique_rubric}
+  session: ${pro_session}
+
+con_opening:
+  _target_: ccflow.examples.ai.AdvocateModel
+  enforce_checks: ${enforce_checks}
+  position: con
+  produce: ${produce}
+  rubric: ${critique_rubric}
+  session: ${con_session}
+
+pro_rebuttal:
+  _target_: ccflow.examples.ai.RebuttalModel
+  enforce_checks: ${enforce_checks}
+  position: pro
+  own: ${pro_opening}
+  opponent: ${con_opening}
+  artifact: ${produce}
+  rubric: ${critique_rubric}
+  session: ${pro_rebuttal_session}
+
+con_rebuttal:
+  _target_: ccflow.examples.ai.RebuttalModel
+  enforce_checks: ${enforce_checks}
+  position: con
+  own: ${con_opening}
+  opponent: ${pro_opening}
+  artifact: ${produce}
+  rubric: ${critique_rubric}
+  session: ${con_rebuttal_session}
+
+task:
+  _target_: ccflow.examples.ai.DebateModel
+  publisher: ${publisher}
+  arbiter:
+    _target_: ccflow.examples.ai.CounterbalancedArbitrateModel
+    enforce_checks: ${enforce_checks}
+    forward:
+      _target_: ccflow.examples.ai.ArbitrateModel
+      enforce_checks: ${enforce_checks}
+      rubric: ${arbitration_rubric}
+      artifact: ${produce}
+      session: ${arbiter_session}
+      advocates:
+        - ${pro_rebuttal}
+        - ${con_rebuttal}
+    reverse:
+      _target_: ccflow.examples.ai.ArbitrateModel
+      enforce_checks: ${enforce_checks}
+      rubric: ${arbitration_rubric}
+      artifact: ${produce}
+      session: ${arbiter_session}
+      advocates:
+        - ${con_rebuttal}
+        - ${pro_rebuttal}
