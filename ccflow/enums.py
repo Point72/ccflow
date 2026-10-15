@@ -1,6 +1,8 @@
 """We define our own enum type for use in ccflow.
 The implementation of this enum depends on whether csp is found in the environment or not.
 If it is found, it uses csp.Enum for seamless communication with the C++ layer of csp, otherwise it uses enum.Enum.
+Since csp 0.19, csp accepts any IntEnum natively, so for those versions it uses an IntEnum matching csp.Enum
+and does not import csp.
 We define a new subclass whose parent is either of the above, so that testing whether something is an enum
 (i.e. isinstance, or type hints) does not need to specify either of the implementations,
 i.e. isinstance(x, ccflow.enums.Enum).
@@ -28,36 +30,79 @@ __all__ = ("Enum", "auto", "make_enum")
 
 from enum import (
     Enum as BaseEnum,
+    IntEnum,
     auto,
 )
 
 BaseEnum.auto = auto
 
 _CSP_ENUM = False
+_CSP_DYNAMIC_ENUM = False
+
+
+def _csp_version() -> tuple[int, int] | None:
+    """Return the installed csp (major, minor) from package metadata, without importing csp."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        major, minor = version("csp").split(".")[:2]
+        return int(major), int(minor)
+    except (PackageNotFoundError, ValueError):
+        return None
+
+
+class _IntEnum(IntEnum):
+    """Matches csp.Enum from csp 0.19, which csp accepts natively along with any other IntEnum."""
+
+    @classmethod
+    def _missing_(cls, value):
+        # Allow construction by name, i.e. MyEnum("FOO") as well as MyEnum(1)
+        if isinstance(value, str):
+            return cls._member_map_.get(value)
+        return None
+
+    def __str__(self):
+        return f"{type(self).__name__}.{self.name}"
+
+    __hash__ = int.__hash__
+
+    def __eq__(self, other):
+        return type(self) is type(other) and self.value == other.value
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
 
 if not TYPE_CHECKING and environ.get("CCFLOW_NO_CSP", "0") != "1":
-    try:
-        from csp import DynamicEnum, Enum as BaseEnum
-
-        auto = BaseEnum.auto
-
+    if (_csp_version() or (0, 0)) >= (0, 19):
+        # Since csp 0.19, csp treats any IntEnum as a native enum, so csp (and its import cost) is not needed here.
+        BaseEnum = _IntEnum
         _CSP_ENUM = True
-
-    except ImportError:
+    else:
         try:
-            from enum import auto
+            from csp import DynamicEnum, Enum as BaseEnum
 
-            from csp.impl.enum import DynamicEnum, Enum as BaseEnum
+            auto = BaseEnum.auto
 
             _CSP_ENUM = True
+            _CSP_DYNAMIC_ENUM = True
 
         except ImportError:
-            # if csp is not installed, rely on python Enum
-            pass
+            try:
+                from enum import auto
+
+                from csp.impl.enum import DynamicEnum, Enum as BaseEnum
+
+                _CSP_ENUM = True
+                _CSP_DYNAMIC_ENUM = True
+
+            except ImportError:
+                # if csp is not installed, rely on python Enum
+                pass
 
 
 class Enum(BaseEnum):
-    """Hybrid enum type based on csp.Enum if csp is available, otherwise enum.Enum"""
+    """Hybrid enum type based on csp.Enum (or an equivalent IntEnum for csp >= 0.19) if csp is available, otherwise enum.Enum"""
 
     # NOTE: we overload the default numbering
     # behavior to start at 0 and match to csp
@@ -116,7 +161,7 @@ def make_enum(name: str, values: dict[str, float] | list, start=0):
     """
 
     module_name = inspect.currentframe().f_back.f_globals["__name__"]
-    if _CSP_ENUM:
+    if _CSP_DYNAMIC_ENUM:
         e = DynamicEnum(name, values, start, module_name=module_name)
         # DynamicEnum is a BaseEnum (csp.Enum or csp.impl.enum.Enum) but it is not a ccflow.enums.Enum. To make
         # issubclass and isinstance return True when testing against ccflow.enums.Enum, we need to add it as a

@@ -64,9 +64,12 @@ class TestEnum(TestCase):
         mock_csp.Enum = TestEnumType
         mock_csp.DynamicEnum = MagicMock()
         mock_csp.EnumMeta = MagicMock()
-        with patch.dict(
-            "sys.modules",
-            {"csp": mock_csp, "csp.impl": mock_csp, "csp.impl.enum": mock_csp},
+        with (
+            patch.dict(
+                "sys.modules",
+                {"csp": mock_csp, "csp.impl": mock_csp, "csp.impl.enum": mock_csp},
+            ),
+            patch("importlib.metadata.version", return_value="0.18.0"),
         ):
             importlib.invalidate_caches()
 
@@ -79,6 +82,34 @@ class TestEnum(TestCase):
             from ccflow.enums import Enum
 
             self.assertTrue(issubclass(Enum, csp.Enum))
+
+    def test_init_parent_csp_int_enum(self):
+        """Test initialization of ccflow.enum.Enum when csp >= 0.19 is installed, which accepts any IntEnum."""
+        # csp must not be imported on this path, so make importing it fail
+        with patch.dict("sys.modules", {"csp": None}), patch("importlib.metadata.version", return_value="0.19.0"):
+            import ccflow.enums
+
+            importlib.reload(ccflow.enums)
+
+            from ccflow.enums import Enum, auto, make_enum
+
+            self.assertTrue(issubclass(Enum, enum.IntEnum))
+            self.assertTrue(ccflow.enums._CSP_ENUM)
+
+            class MyEnum(Enum):
+                A = auto()
+                B = auto()
+
+            self.assertEqual(MyEnum.A.value, 0)
+            self.assertEqual(MyEnum("B"), MyEnum.B)
+            self.assertEqual(MyEnum(1), MyEnum.B)
+            self.assertEqual(str(MyEnum.A), "MyEnum.A")
+            self.assertNotEqual(MyEnum.A, 0)
+            self.assertEqual(hash(MyEnum.A), hash(0))
+
+            MyDynamicEnum = make_enum("MyDynamicEnum", ["A", "B"], start=2)
+            self.assertEqual(MyDynamicEnum.A.value, 2)
+            self.assertTrue(issubclass(MyDynamicEnum, Enum))
 
     def test_init(self):
         """Test standard enum behavior. This test should pass in all environments (both with and without csp).
@@ -131,7 +162,7 @@ class TestEnum(TestCase):
 
         importlib.reload(ccflow.enums)
 
-        # csp will only be in sys.modules if it's actually installed
-        if importlib.util.find_spec("csp") is not None:
+        # csp will only be in sys.modules if it's actually installed and older than 0.19
+        if importlib.util.find_spec("csp") is not None and ccflow.enums._csp_version() < (0, 19):
             self.assertTrue("csp" in sys.modules)
         os.environ.pop("CCFLOW_NO_CSP", None)

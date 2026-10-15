@@ -18,16 +18,16 @@ class TestValidators(TestCase):
         c1 = datetime.now().astimezone().date() - timedelta(1)
         self.assertEqual(normalize_date("-1d"), c1)
 
-        self.assertEqual(normalize_date(datetime.now()), c)  # noqa: DTZ005
-        self.assertEqual(normalize_date(datetime.now().isoformat()), c)  # noqa: DTZ005
+        self.assertEqual(normalize_date(datetime.now()), c)
+        self.assertEqual(normalize_date(datetime.now().isoformat()), c)
 
         self.assertEqual(normalize_date("foo"), "foo")
         self.assertEqual(normalize_date(None), None)
 
     def test_normalize_datetime(self):
         today = datetime.today()  # noqa: DTZ002
-        now = datetime.now()  # noqa: DTZ005
-        c = datetime(today.year, today.month, today.day)  # noqa: DTZ001
+        now = datetime.now()
+        c = datetime(today.year, today.month, today.day)
 
         self.assertEqual(normalize_datetime(c), c)
         self.assertEqual(normalize_datetime("0d"), c)
