@@ -219,6 +219,23 @@ class TestMetaData(TestCase):
             self.assertEqual(get_options(model), new_options)
         self.assertEqual(get_options(model), options)
 
+    def test_meta_keeps_unset_global_options(self):
+        # meta only overrides the fields it sets, so a globally configured evaluator still applies
+        evaluator = DummyEvaluator()
+        model = DefaultModel(meta={"options": {"cacheable": False}})
+        get_options = DefaultModel.__call__.get_options
+        with FlowOptionsOverride(options=FlowOptions(evaluator=evaluator, cacheable=True, log_level=logging.WARNING)):
+            options = get_options(model)
+        self.assertIs(options.evaluator, evaluator)
+        self.assertEqual(options.log_level, logging.WARNING)
+        self.assertFalse(options.cacheable)
+
+    def test_meta_keeps_unset_decorator_options(self):
+        model = MyModel(meta={"options": {"cacheable": True}})
+        options = MyModel.__call__.get_options(model)
+        self.assertEqual(options.log_level, logging.WARNING)
+        self.assertTrue(options.cacheable)
+
 
 class TestFlowOptionsOverride(TestCase):
     def setUp(self):

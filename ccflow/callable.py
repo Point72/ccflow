@@ -440,7 +440,7 @@ class FlowOptionsOverride(BaseModel):
             current_options = cls._apply_options(current_options, model_options)
         # Then apply the model meta-provided options
         if model.meta.options:
-            current_options = model.meta.options
+            current_options = cls._apply_options(current_options, model.meta.options)
         # Then apply all model-specific overrides
         for override in overrides:
             if any(model is m for m in override.models) or isinstance(model, override.model_types):
