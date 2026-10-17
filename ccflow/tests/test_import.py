@@ -22,6 +22,7 @@ if __name__ == "__main__":
         "matplotlib",
         "mlflow",
         "plotly",
+        "pyarrow",
         "pyarrow.dataset",
         # These aren't necessarily expensive, just things we don't want to import.
         "cexprtk",
