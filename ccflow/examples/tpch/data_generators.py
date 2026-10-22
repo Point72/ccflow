@@ -103,10 +103,10 @@ class TPCHDuckDBBackend(BaseModel):
         return pl.from_arrow(tbl_arrow)
 
     def get_answer(self, query_id: int) -> pa.Table:
-        row = self._conn.query(f"SELECT answer FROM tpch_answers() WHERE scale_factor={self.scale_factor} AND query_nr={query_id}").fetchone()
-        if not row:
+        rows = self._conn.query(f"SELECT answer FROM tpch_answers() WHERE scale_factor={self.scale_factor} AND query_nr={query_id}").fetchall()
+        if not rows:
             raise ValueError(f"No TPC-H answer found for scale_factor={self.scale_factor}, query_nr={query_id}")
-        return pc.read_csv(io.BytesIO(row[0].encode("utf-8")), parse_options=pc.ParseOptions(delimiter="|"))
+        return pc.read_csv(io.BytesIO(rows[0][0].encode("utf-8")), parse_options=pc.ParseOptions(delimiter="|"))
 
 
 class TPCHTableProvider(CallableModel):
