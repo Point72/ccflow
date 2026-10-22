@@ -493,7 +493,7 @@ class GraphEvaluator(EvaluatorBase):
     """
 
     _is_evaluating: bool = PrivateAttr(False)
-    _node_results: dict[bytes, ResultType] = PrivateAttr(default_factory=dict)
+    _node_results: dict[bytes, ResultType] = PrivateAttr(default={})
 
     def is_transparent(self, context: ModelEvaluationContext) -> bool:
         return True
