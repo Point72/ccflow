@@ -433,6 +433,11 @@ _SKIPPED_METHODS = frozenset(
         "__get_pydantic_core_schema__",
         "__get_pydantic_json_schema__",
         "model_post_init",
+        # PEP 649: the auto-generated __annotate__ closure is PYTHONHASHSEED-sensitive,
+        # which would make the behavior token differ between processes. Annotations are
+        # already captured through other paths, so skipping these is lossless.
+        "__annotate__",
+        "__annotate_func__",
     }
 )
 

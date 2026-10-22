@@ -265,6 +265,25 @@ class TestMethodCollection:
 
         assert compute_behavior_token(A) == compute_behavior_token(B)
 
+    def test_skips_annotate_methods(self):
+        """PEP 649 __annotate__/__annotate_func__ are skipped (injected here to run pre-3.14)."""
+
+        def _annotate(fmt):
+            return {"x": int}
+
+        class A:
+            __annotate__ = _annotate
+            __annotate_func__ = _annotate
+
+            def f(self):
+                return 1
+
+        class B:
+            def f(self):
+                return 1
+
+        assert compute_behavior_token(A) == compute_behavior_token(B)
+
 
 def _helper_add(x):
     return x + 1
