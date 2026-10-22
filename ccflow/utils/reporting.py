@@ -241,7 +241,7 @@ class InMemoryReporter(Reporter):
     """
 
     # Private so it does not affect tokenization/serialization of the reporter itself.
-    _events: list[ReportEvent] = PrivateAttr(default_factory=list)
+    _events: list[ReportEvent] = PrivateAttr(default=[])
 
     @property
     def events(self) -> list[ReportEvent]:

@@ -273,7 +273,7 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
         return PyObjectPath.validate(cls)
 
     # We want to track under what names a model has been registered
-    _registrations: list[tuple["ModelRegistry", str]] = PrivateAttr(default_factory=list)
+    _registrations: list[tuple["ModelRegistry", str]] = PrivateAttr(default=[])
     _was_registered: bool = PrivateAttr(default=False)
 
     model_config = ConfigDict(
@@ -760,10 +760,10 @@ class LazyRegistry(ModelRegistry):
     """Registry that instantiates configured models when they are first accessed."""
 
     name: str = ""
-    _pending: dict[str, Any] = PrivateAttr(default_factory=dict)
-    _pending_lookup_registries: dict[str, list[ModelRegistry]] = PrivateAttr(default_factory=dict)
-    _entry_order: list[str] = PrivateAttr(default_factory=list)
-    _lookup_registries: list[ModelRegistry] = PrivateAttr(default_factory=list)
+    _pending: dict[str, Any] = PrivateAttr(default={})
+    _pending_lookup_registries: dict[str, list[ModelRegistry]] = PrivateAttr(default={})
+    _entry_order: list[str] = PrivateAttr(default=[])
+    _lookup_registries: list[ModelRegistry] = PrivateAttr(default=[])
     _lock: Any = PrivateAttr(default_factory=threading.RLock)
 
     @field_validator("name")
