@@ -53,7 +53,8 @@ def load_agent_profile(name: str) -> AgentProfile:
     """Read one persona by file stem, searching `profile_search_roots` in order."""
     roots = profile_search_roots()
     for root in roots:
-        path = root / f"{name}.md"
+        stem = "against" if name == "con" and root == roots[-1] else name
+        path = root / f"{stem}.md"
         if path.is_file():
             metadata, body = _split_frontmatter(path.read_text(encoding="utf-8"))
             return AgentProfile(name=name, description=metadata.get("description", ""), instructions=body.strip())
