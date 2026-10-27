@@ -448,13 +448,16 @@ def _is_config_model(value: dict):
     return False
 
 
+def _dict_config_type():
+    # omegaconf is optional; a DictConfig can only exist once omegaconf has been imported.
+    return getattr(sys.modules.get("omegaconf"), "DictConfig", ())
+
+
 def _is_config_subregistry(value):
     """Test whether a config value is a subregistry, i.e. it is a dict which either
     contains a _target_ key, or recursively contains a dict that has a _target_ key.
     """
-    from omegaconf import DictConfig
-
-    if isinstance(value, (dict, DictConfig)):
+    if isinstance(value, (dict, _dict_config_type())):
         if _is_config_model(value):
             return True
         else:
@@ -844,9 +847,10 @@ class LazyRegistry(ModelRegistry):
         self._lock = threading.RLock()
 
     def _load_config(self, cfg, overwrite: bool, lookup_registries: list[ModelRegistry]) -> None:
-        from omegaconf import DictConfig, OmegaConf
+        dict_config = _dict_config_type()
+        if isinstance(cfg, dict_config):
+            from omegaconf import OmegaConf
 
-        if isinstance(cfg, DictConfig):
             cfg = OmegaConf.to_container(cfg, resolve=True)
         for key, value in cfg.items():
             if isinstance(value, BaseModel):
@@ -854,10 +858,12 @@ class LazyRegistry(ModelRegistry):
                     f"Lazy registry entry '{key}' was instantiated before reaching LazyRegistry. "
                     "Set '_recursive_: false' on the LazyRegistry Hydra config."
                 )
-            if not isinstance(value, (dict, DictConfig)):
-                continue
-            if isinstance(value, DictConfig):
+            if isinstance(value, dict_config):
+                from omegaconf import OmegaConf
+
                 value = OmegaConf.to_container(value, resolve=True)
+            if not isinstance(value, dict):
+                continue
             if _is_config_model(value):
                 self._add_pending(key, value, overwrite, lookup_registries)
             elif _is_config_subregistry(value):

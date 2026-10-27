@@ -6,7 +6,6 @@ from collections.abc import Callable
 import panel as pn
 
 from ccflow import ModelRegistry
-from ccflow.utils.hydra import add_hydra_config_args, add_panel_server_args, load_config, resolve_config_paths
 
 from .registry import ModelRegistryViewer
 
@@ -15,6 +14,8 @@ __all__ = ("registry_viewer_cli",)
 
 def _get_ui_args_parser() -> argparse.ArgumentParser:
     """Create argument parser with UI server configuration options."""
+    from ccflow.utils.hydra import add_hydra_config_args, add_panel_server_args
+
     parser = argparse.ArgumentParser(
         add_help=True,
         description="Serve ModelRegistryViewer as a Panel application",
@@ -56,6 +57,8 @@ def registry_viewer_cli(
         hydra_main: The function decorated with hydra.main(). Used to resolve config_path
             relative to the decorated function's file location.
     """
+    from ccflow.utils.hydra import load_config, resolve_config_paths
+
     parser = _get_ui_args_parser()
     args = parser.parse_args()
 

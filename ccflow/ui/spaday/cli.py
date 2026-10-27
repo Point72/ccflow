@@ -16,7 +16,6 @@ from spaday_trees import package as trees_package
 from spaday_webawesome import package as webawesome_package
 
 from ccflow import ModelRegistry
-from ccflow.utils.hydra import _find_parent_config_folder, add_hydra_config_args, load_config, resolve_config_paths
 
 from .model import MATERIALIZE_ENDPOINT
 from .registry import CARD_ENDPOINT, DARK_FIELD, SELECTED_FIELD, model_card, registry_leaves, registry_store, registry_viewer
@@ -131,6 +130,8 @@ def serve_registry(
 
 def _get_ui_args_parser() -> argparse.ArgumentParser:
     """Create the argument parser for the spaday viewer server."""
+    from ccflow.utils.hydra import add_hydra_config_args
+
     parser = argparse.ArgumentParser(
         add_help=True,
         description="Serve the ccflow ModelRegistry viewer as a spaday application",
@@ -175,6 +176,8 @@ def registry_viewer_cli(
         hydra_main: The function decorated with hydra.main(). Used to resolve config_path relative to
             the decorated function's file location.
     """
+    from ccflow.utils.hydra import _find_parent_config_folder, load_config, resolve_config_paths
+
     parser = _get_ui_args_parser()
     args = parser.parse_args()
 
