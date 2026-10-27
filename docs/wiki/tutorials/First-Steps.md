@@ -2,7 +2,7 @@
 
 This is the shortest possible tour of `ccflow`. In a few minutes you will define two configuration objects, load them into a registry from plain data, look them up, and watch the registry keep linked objects in sync. Type it into a Python session and follow along — everything here runs as shown.
 
-You only need `ccflow` installed (see [Installation](Installation)). Everything below happens in Python; no files or command line yet.
+You need `ccflow` and `hydra-core` installed (see [Installation](Installation)). Everything below happens in Python; no files or command line yet.
 
 Paste the whole block into a Python session:
 

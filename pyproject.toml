@@ -39,7 +39,6 @@ dependencies = [
     "cloudpathlib",
     "cloudpickle",
     "deprecated",
-    "hydra-core",
     "jinja2",
     "narwhals",
     "numpy<3",
@@ -99,6 +98,7 @@ develop = [
     "cexprtk",
     "csp>=0.8.0,<1; python_version < '3.14'",  # TODO: remove when when 3.14 wheels disted
     "duckdb",
+    "hydra-core",
     "IPython",
     "panel",
     "panel_material_ui",
@@ -128,6 +128,7 @@ develop = [
 test = [
     "beautifulsoup4",
     "httpx2",
+    "hydra-core",
     "opentelemetry-api",
     "pytest",
     "pytest-asyncio",
