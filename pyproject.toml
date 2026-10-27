@@ -57,6 +57,7 @@ full = [
     "bleach",
     "cexprtk",
     "duckdb",
+    "hydra-core",
     "IPython",
     "opentelemetry-api",
     "panel",
