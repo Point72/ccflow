@@ -4,7 +4,6 @@ from typing import IO, Any, Generic, Literal
 
 import narwhals.stable.v1 as nw
 import pandas as pd
-import yaml
 from cloudpathlib import AnyPath
 from pydantic import Field, field_validator
 from typing_extensions import override
@@ -91,6 +90,8 @@ class YAMLPublisher(BasePublisher):
 
     @override
     def __call__(self) -> AnyPath:
+        import yaml
+
         return GenericFilePublisher(
             name=self.name,
             name_params=self.name_params,

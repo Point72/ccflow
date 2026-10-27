@@ -1,7 +1,6 @@
 import logging
 from typing import Any, Generic, Literal
 
-import yaml
 from pydantic import Field, field_validator
 from typing_extensions import override
 
@@ -77,6 +76,8 @@ class PrintYAMLPublisher(BasePublisher):
 
     @override
     def __call__(self) -> Any:
+        import yaml
+
         print(yaml.dump(self.data, **self.kwargs))
         return self.data
 
