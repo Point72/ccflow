@@ -1,9 +1,13 @@
 import logging
-from datetime import datetime, timedelta
-from unittest import TestCase
+from calendar import monthrange
+from datetime import date, datetime, timedelta
+from unittest import TestCase, mock
 from zoneinfo import ZoneInfo
 
-from ccflow.validators import eval_or_load_object, load_object, normalize_date, normalize_datetime, str_to_log_level
+import pytest
+
+from ccflow import Frequency
+from ccflow.validators import _shift, eval_or_load_object, load_object, normalize_date, normalize_datetime, str_to_log_level
 
 
 class A:
@@ -17,12 +21,22 @@ class TestValidators(TestCase):
         self.assertEqual(normalize_date("0d"), c)
         c1 = datetime.now().astimezone().date() - timedelta(1)
         self.assertEqual(normalize_date("-1d"), c1)
+        with pytest.warns(FutureWarning):
+            self.assertEqual(normalize_date("D"), normalize_date("1D"))
 
         self.assertEqual(normalize_date(datetime.now()), c)
         self.assertEqual(normalize_date(datetime.now().isoformat()), c)
 
         self.assertEqual(normalize_date("foo"), "foo")
         self.assertEqual(normalize_date(None), None)
+
+    def test_normalize_date_frequency_errors_surface(self):
+        # Frequency-like strings with an invalid or sub-day unit raise instead of falling through to the date parser.
+        for bad in ("-1M", "-1ME", "-1B", "1MS", "1bh", "1NS", "-6m", "1h", "1h30min", "1000000000d"):
+            self.assertRaises(ValueError, normalize_date, bad)
+        # Other strings, including ones that start with a number but have no frequency unit, fall through to the date parser.
+        self.assertEqual(normalize_date("15Mar"), "15Mar")
+        self.assertEqual(normalize_date("2022-01-01"), date(2022, 1, 1))
 
     def test_normalize_datetime(self):
         today = datetime.today()  # noqa: DTZ002
@@ -52,13 +66,21 @@ class TestValidators(TestCase):
             now.astimezone(tz=ZoneInfo("US/Hawaii")),
         )
 
-    def test_normalize_date_accepts_legacy_and_canonical_frequency_aliases(self):
-        self.assertEqual(normalize_date("1M"), normalize_date("1ME"))
-        self.assertEqual(normalize_date("1A-DEC"), normalize_date("1YE-DEC"))
+    def test_calendar_offsets_keep_day_of_month(self):
+        with mock.patch("ccflow.validators._local_today", return_value=date(2024, 3, 31)):
+            self.assertEqual(normalize_date("-1mo"), date(2024, 2, 29))
+            self.assertEqual(normalize_date("P1M"), date(2024, 4, 30))
+            self.assertEqual(normalize_datetime("-1y"), datetime(2023, 3, 31))
+            # Nanoseconds floor to the containing microsecond.
+            self.assertEqual(normalize_datetime("-1ns"), datetime(2024, 3, 30, 23, 59, 59, 999999))
 
-    def test_normalize_datetime_accepts_legacy_and_canonical_frequency_aliases(self):
-        self.assertEqual(normalize_datetime("1M"), normalize_datetime("1ME"))
-        self.assertEqual(normalize_datetime("1A-DEC"), normalize_datetime("1YE-DEC"))
+    def test_calendar_offsets_match_polars(self):
+        pl = pytest.importorskip("polars")
+        dates = [date(y, m, d) for y in (2000, 2023, 2024) for m in (1, 2, 3, 12) for d in (1, 15, 28, 29, 30, 31) if d <= monthrange(y, m)[1]]
+        for value in ("1mo", "-1mo", "2q", "-1q", "1y", "-3y", "13mo", "3d", "-2w"):
+            f = Frequency.validate(value)
+            expected = pl.Series(dates).dt.offset_by(value).to_list()
+            self.assertEqual([_shift(d, f).date() for d in dates], expected, value)
 
     def test_load_object(self):
         self.assertEqual(load_object("ccflow.tests.test_validators.A"), A)

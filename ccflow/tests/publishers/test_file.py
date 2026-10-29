@@ -7,7 +7,7 @@ from unittest import TestCase
 
 import narwhals.stable.v1 as nw
 import pandas as pd
-from pydantic import BaseModel as PydanticBaseModel
+from pydantic import BaseModel as PydanticBaseModel, ValidationError
 
 from ccflow.exttypes import NDArray
 from ccflow.publishers import (
@@ -125,6 +125,7 @@ class TestFilePublishers(TestCase):
                 name_params={"param": "pandas"},
                 kwargs={"border": 0},  # Remove ugly HTML border!
             )
+            self.assertRaises(ValidationError, setattr, p, "data", {"a": [1, 2, 3]})
             p.data = pd.DataFrame({"a": [1, 2, 3], "b": ["foo", "bar", "baz"]})
             path = p()
             self.assertEqual(path, Path("test_pandas.html"))
