@@ -114,7 +114,7 @@ class TestContexts(TestCase):
 
     def test_coercion(self):
         d = DateContext(date=date(2022, 1, 1))
-        f = FreqDateContext(freq="5T", date=date(2022, 1, 1))
+        f = FreqDateContext(freq="5m", date=date(2022, 1, 1))
         self.assertEqual(DateContext.model_validate(f), f)
         self.assertRaises(ValidationError, FreqDateContext.model_validate, d)
 
@@ -139,12 +139,12 @@ class TestContexts(TestCase):
 
     def test_freq(self):
         self.assertEqual(
-            FreqDateContext.model_validate("5min,2022-01-01"),
-            FreqDateContext(freq="5T", date=date(2022, 1, 1)),
+            FreqDateContext.model_validate("5m,2022-01-01"),
+            FreqDateContext(freq="5m", date=date(2022, 1, 1)),
         )
         self.assertEqual(
-            FreqDateRangeContext.model_validate("5min,2022-01-01,2022-02-01"),
-            FreqDateRangeContext(freq="5T", start_date=date(2022, 1, 1), end_date=date(2022, 2, 1)),
+            FreqDateRangeContext.model_validate("5m,2022-01-01,2022-02-01"),
+            FreqDateRangeContext(freq="5m", start_date=date(2022, 1, 1), end_date=date(2022, 2, 1)),
         )
 
     def test_universe(self):
@@ -167,10 +167,10 @@ class TestContexts(TestCase):
             ModelDateRangeContext(model="EULTS", start_date=date(2022, 1, 1), end_date=date(2022, 2, 1)),
         )
         self.assertEqual(
-            ModelFreqDateRangeContext.model_validate("EULTS,2 min,2022-01-01,2022-02-01"),
+            ModelFreqDateRangeContext.model_validate("EULTS,2m,2022-01-01,2022-02-01"),
             ModelFreqDateRangeContext(
                 model="EULTS",
-                freq="2T",
+                freq="2m",
                 start_date=date(2022, 1, 1),
                 end_date=date(2022, 2, 1),
             ),
@@ -188,7 +188,7 @@ class TestContexts(TestCase):
 
     def test_list_scalar_consistency(self):
         """Test that for the contexts with one field, validation from scalar and list of length 1 is consistent."""
-        test_cases = [(UniverseContext, "US"), (FreqContext, "1D"), (DateContext, date(2024, 1, 1)), (ModelContext, "USFASTD")]
+        test_cases = [(UniverseContext, "US"), (FreqContext, "1d"), (DateContext, date(2024, 1, 1)), (ModelContext, "USFASTD")]
         for context_type, v in test_cases:
             context_from_scalar = context_type.model_validate(v)
             context_from_list = context_type.model_validate([v])
