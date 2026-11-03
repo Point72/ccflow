@@ -1,9 +1,9 @@
 import pickle
+import sys
 from collections.abc import Callable
 from typing import IO, Any, Generic, Literal
 
 import narwhals.stable.v1 as nw
-import pandas as pd
 from cloudpathlib import AnyPath
 from pydantic import Field, field_validator
 from typing_extensions import override
@@ -178,14 +178,24 @@ class PandasFilePublisher(BasePublisher):
     For large-scale exporting (using parquet), see .parquet.PandasParquetPublisher.
     """
 
-    data: pd.DataFrame = None
+    data: Any = None  # typed Any so importing this module does not import pandas; _check_data enforces the type
     kwargs: dict[str, Any] = Field(default_factory=dict)
     func: str = "to_html"  # The access function must be able to write to a buffer or file-like object.
     suffix: str = ".html"
     mode: Literal["w", "wb"] = "w"
 
+    @field_validator("data")
+    @classmethod
+    def _check_data(cls, v):
+        pd = sys.modules.get("pandas")  # a DataFrame cannot exist unless pandas is already imported
+        if v is not None and (pd is None or not isinstance(v, pd.DataFrame)):
+            raise ValueError(f"data must be a pandas DataFrame, not {type(v).__name__}")
+        return v
+
     @override
     def __call__(self) -> AnyPath:
+        import pandas as pd
+
         return GenericFilePublisher(
             name=self.name,
             name_params=self.name_params,

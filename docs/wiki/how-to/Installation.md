@@ -22,6 +22,14 @@ Loading registries from YAML configs, the `_target_`-based `ModelRegistry.load_c
 pip install hydra-core
 ```
 
+## Install pandas
+
+`PandasResult`, `XArrayResult`, `PandasFilePublisher` and `Frequency.offset` (which returns a pandas offset) need [pandas](https://pandas.pydata.org). `ccflow` does not install it by default; install it directly or through the `full` extra:
+
+```bash
+pip install pandas
+```
+
 ## Source installation
 
 For other platforms and for development installations, [build `ccflow` from source](Build-from-Source).
