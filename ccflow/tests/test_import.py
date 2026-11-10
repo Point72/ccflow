@@ -62,6 +62,34 @@ class TestImports(TestCase):
         if res.returncode != 0:
             raise AssertionError(res.stderr)
 
+    def test_without_pandas(self):
+        # pandas is optional; frequencies, relative dates and chunking must work without it.
+        code = textwrap.dedent(
+            """
+            import sys
+            from datetime import date
+
+            class _Uninstalled:
+                def find_spec(self, name, path=None, target=None):
+                    if name.partition(".")[0] == "pandas":
+                        raise ModuleNotFoundError(f"No module named {name!r}", name=name)
+
+            sys.meta_path.insert(0, _Uninstalled())
+
+            from ccflow import DateContext, Frequency
+            from ccflow.publishers import PandasFilePublisher  # noqa: F401
+            from ccflow.publishers.file import PandasFilePublisher as _P  # noqa: F401
+            from ccflow.utils.chunker import dates_to_chunks
+
+            assert Frequency.validate("3mo") == "1q"
+            assert isinstance(DateContext(date="-1d").date, date)
+            assert dates_to_chunks(date(2022, 4, 6), date(2022, 4, 7), "1mo") == [(date(2022, 4, 1), date(2022, 4, 30))]
+            """
+        )
+        res = subprocess.run([sys.executable, "-c", code], capture_output=True, check=False, text=True)
+        if res.returncode != 0:
+            raise AssertionError(res.stderr)
+
 
 if __name__ == "__main__":
     import ccflow
