@@ -125,7 +125,7 @@ def _parse(value: str) -> tuple[int, str]:
 def _from_timedelta(value: timedelta) -> tuple[int, str]:
     """Whole days become ``d``; anything else is a fixed duration such as ``36h``."""
     # A pandas Timedelta subclasses timedelta and adds a sub-microsecond ``nanoseconds`` component.
-    total_ns = value // timedelta(microseconds=1) * 1000 + getattr(value, "nanoseconds", 0)
+    total_ns = ((value.days * 86400 + value.seconds) * 1_000_000 + value.microseconds) * 1000 + getattr(value, "nanoseconds", 0)
     days, remainder = divmod(total_ns, _DAY_NS)
     return _reduce(days, "d") if remainder == 0 else _reduce(total_ns, "ns")
 

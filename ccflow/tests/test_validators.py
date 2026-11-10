@@ -1,6 +1,8 @@
 import logging
+import os
+import time
 from calendar import monthrange
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from unittest import TestCase, mock
 from zoneinfo import ZoneInfo
 
@@ -73,6 +75,36 @@ class TestValidators(TestCase):
             self.assertEqual(normalize_datetime("-1y"), datetime(2023, 3, 31))
             # Nanoseconds floor to the containing microsecond.
             self.assertEqual(normalize_datetime("-1ns"), datetime(2024, 3, 30, 23, 59, 59, 999999))
+
+    @pytest.mark.skipif(not hasattr(time, "tzset"), reason="requires local timezone configuration")
+    def test_fixed_offsets_use_elapsed_time_across_dst(self):
+        cases = (
+            (date(2024, 3, 10), "24h", datetime(2024, 3, 11, 1)),
+            (date(2024, 3, 10), "1d", datetime(2024, 3, 11)),
+            (date(2024, 3, 10), "2h", datetime(2024, 3, 10, 3)),
+            (date(2024, 3, 11), "-24h", datetime(2024, 3, 9, 23)),
+            (date(2024, 11, 3), "24h", datetime(2024, 11, 3, 23)),
+            (date(2024, 11, 3), "1d", datetime(2024, 11, 4)),
+            (date(2024, 11, 3), "2h", datetime(2024, 11, 3, 1, fold=1)),
+            (date(2024, 11, 3), "-1ns", datetime(2024, 11, 2, 23, 59, 59, 999999)),
+            (date(2500, 1, 1), "1us", datetime(2500, 1, 1, 0, 0, 0, 1)),
+        )
+        try:
+            with mock.patch.dict(os.environ, {"TZ": "America/New_York"}):
+                time.tzset()
+                for today, value, expected in cases:
+                    with self.subTest(today=today, value=value), mock.patch("ccflow.validators._local_today", return_value=today):
+                        actual = normalize_datetime(value)
+                        self.assertEqual(actual, expected)
+                        self.assertEqual(actual.fold, expected.fold)
+                        self.assertEqual(actual.astimezone(timezone.utc), expected.astimezone(timezone.utc))
+        finally:
+            time.tzset()
+
+    def test_fixed_offset_timestamp_errors_surface_as_value_errors(self):
+        with mock.patch("ccflow.validators.datetime", wraps=datetime) as datetime_type:
+            datetime_type.fromtimestamp.side_effect = OSError("timestamp out of range")
+            self.assertRaisesRegex(ValueError, "frequency offset is out of range", normalize_datetime, "1h")
 
     def test_calendar_offsets_match_polars(self):
         pl = pytest.importorskip("polars")

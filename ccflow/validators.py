@@ -2,7 +2,7 @@
 
 import calendar
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -31,18 +31,21 @@ def _local_today() -> date:
 def _shift(d: date, freq: Frequency) -> datetime:
     """Shift midnight on ``d`` by ``freq`` with polars ``offset_by`` semantics.
 
-    Months, quarters and years keep the day of month, clamped to the end of a shorter month. Nanoseconds round down to the containing microsecond,
-    because datetime has microsecond resolution.
+    Fixed units count elapsed time; calendar units keep local wall time. The result is a naive local datetime. Months, quarters and years keep the
+    day of month, clamped to the end of a shorter month. Nanoseconds round down to the containing microsecond.
     """
     try:
         if freq.unit in _MONTHS:
             year, month = divmod(d.year * 12 + d.month - 1 + freq.n * _MONTHS[freq.unit], 12)
             return datetime(year, month + 1, min(d.day, calendar.monthrange(year, month + 1)[1]))
         midnight = datetime(d.year, d.month, d.day)
-        if freq.unit == "ns":
-            return midnight + timedelta(microseconds=freq.n // 1000)
-        return midnight + freq.timedelta
-    except (OverflowError, ValueError):
+        delta = timedelta(microseconds=freq.n // 1000) if freq.unit == "ns" else freq.timedelta
+        if freq.unit in ("d", "w"):
+            return midnight + delta
+        shifted = midnight.astimezone(timezone.utc) + delta
+        seconds = (shifted - datetime(1970, 1, 1, tzinfo=timezone.utc)) // timedelta(seconds=1)
+        return datetime.fromtimestamp(seconds).replace(microsecond=shifted.microsecond)
+    except (OSError, OverflowError, ValueError):
         raise ValueError(f"frequency offset is out of range: {freq}") from None
 
 
