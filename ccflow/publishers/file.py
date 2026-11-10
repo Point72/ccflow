@@ -189,7 +189,7 @@ class PandasFilePublisher(BasePublisher):
     def _check_data(cls, v):
         pd = sys.modules.get("pandas")  # a DataFrame cannot exist unless pandas is already imported
         if v is not None and (pd is None or not isinstance(v, pd.DataFrame)):
-            raise ValueError(f"data must be a pandas DataFrame, not {type(v).__name__}")
+            raise ValueError("data must be a pandas DataFrame")
         return v
 
     @override

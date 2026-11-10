@@ -1,10 +1,11 @@
 from pickle import dumps as pdumps, loads as ploads
 from typing import Generic, TypeVar
 from unittest import TestCase
+from unittest.mock import Mock, patch
 
 import cloudpickle
 import ray
-from pydantic import Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from ray.cloudpickle import dumps as rcpdumps, loads as rcploads
 
 from ccflow import (
@@ -244,6 +245,12 @@ class MyWrapperGeneric(WrapperModel):
     @Flow.call
     def __call__(self, context):
         return self.model(context)
+
+
+class UnionBranchHost(BaseModel):
+    """Host with a ``CallableModelGenericType[Ctx, R] | R`` union field."""
+
+    field: CallableModelGenericType[MyContext, MyResult] | MyResult
 
 
 class MyTest(ContextBase):
@@ -598,6 +605,19 @@ class TestCallableModelGenericType(TestCase):
         self.assertEqual(w.model, m)
         self.assertEqual(w.context_type, m.context_type)
         self.assertEqual(w.result_type, m.result_type)
+
+    def test_union_rejection_does_not_format_value(self):
+        # When a union has a generic-callable branch, pydantic still attempts that branch for a
+        # plain-model value. The wrap validator must reject it without stringifying the value.
+        inst = MyResult(x=1, y="a")
+        str_mock = Mock(return_value="<patched str>")
+        repr_mock = Mock(return_value="<patched repr>")
+        with patch.object(MyResult, "__str__", str_mock), patch.object(MyResult, "__repr__", repr_mock):
+            host = UnionBranchHost(field=inst)
+        str_mock.assert_not_called()
+        repr_mock.assert_not_called()
+        self.assertIsInstance(host.field, MyResult)
+        self.assertEqual(host.field.x, 1)
 
     def test_use_as_base_class(self):
         class MyCallable(CallableModelGenericType[NullContext, GenericResult[int]]):

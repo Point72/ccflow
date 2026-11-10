@@ -74,7 +74,7 @@ class _PolarsExprPydanticAnnotation:
                 raise ValueError(f"Supplied value '{value}' does not evaluate to a Polars expression")  # noqa: TRY004
             return cls._coerce_from_expr(expression)
 
-        raise ValueError(f"Supplied value '{value}' cannot be converted to a Polars expression")
+        raise ValueError("Cannot convert value to a Polars expression")
 
 
 class _PolarsSelectorPydanticAnnotation(_PolarsExprPydanticAnnotation):
