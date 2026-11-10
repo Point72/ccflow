@@ -116,9 +116,10 @@ class TestFrequency(TestCase):
 
     def test_large_pandas_timedelta(self):
         pd = pytest.importorskip("pandas", minversion="3.0")
+        one_second = pd.Timedelta(seconds=1).as_unit("s")
         for days in (106_751_992, -106_751_992):
             with self.subTest(days=days):
-                value = pd.Timedelta(days * 86400, unit="s")
+                value = one_second * (days * 86400)
                 self.assertEqual(str(Frequency.validate(value)), f"{days}d")
 
     def test_nanoseconds(self):
