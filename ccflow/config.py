@@ -1,12 +1,22 @@
-"""Expose the selected configuration framework through one API.
+"""Expose the selected configuration backend through one API.
 
-Lerna is preferred when available unless ``CCFLOW_CONFIG_FRAMEWORK=hydra``.
-Applications that select Hydra must install ``hydra-core``.
+Hydra is preferred when available, otherwise Lerna is used. Set ``CCFLOW_CONFIG_BACKEND=lerna`` to require Lerna instead.
+The backend is loaded on first API access, so importing ccflow does not require either package.
 """
 
 import importlib
 import os
+from functools import cache
 from types import ModuleType
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from hydra import compose, initialize, initialize_config_dir, main
+    from hydra.core.hydra_config import HydraConfig
+    from hydra.errors import InstantiationException
+    from hydra.utils import instantiate
+
+    CONFIG_FRAMEWORK: str
 
 __all__ = (
     "CONFIG_FRAMEWORK",
@@ -19,54 +29,39 @@ __all__ = (
     "main",
 )
 
-_ENV_VAR = "CCFLOW_CONFIG_FRAMEWORK"
-_requested = os.environ.get(_ENV_VAR, "").strip().lower()
-
-if _requested not in ("", "hydra", "lerna"):
-    raise ValueError(f"{_ENV_VAR} must be 'hydra', 'lerna', or unset, got {_requested!r}")
-
-
-def _import_framework(name: str) -> ModuleType:
-    package = "hydra-core" if name == "hydra" else name
-    try:
-        return importlib.import_module(name)
-    except ModuleNotFoundError as error:
-        if error.name != name:
-            raise
-        raise ImportError(f"{_ENV_VAR}={name} requires the '{package}' package") from error
+_ENV_VAR = "CCFLOW_CONFIG_BACKEND"
+_SUBMODULES = {
+    "DefaultsList": "_internal.defaults_list",
+    "GlobalHydra": "core.global_hydra",
+    "HydraConfig": "core.hydra_config",
+    "InstantiationException": "errors",
+    "ObjectType": "core.object_type",
+    "RunMode": "types",
+    "instantiate": "utils",
+}
 
 
-if _requested == "hydra":
-    _framework = _import_framework("hydra")
-elif _requested == "lerna":
-    _framework = _import_framework("lerna")
-else:
-    try:
-        _framework = importlib.import_module("lerna")
-    except ModuleNotFoundError as error:
-        if error.name != "lerna":
-            raise
-        _framework = _import_framework("hydra")
+@cache
+def _get_framework() -> ModuleType:
+    requested = os.environ.get(_ENV_VAR, "").strip().lower()
+    frameworks = ("lerna",) if requested == "lerna" else ("hydra", "lerna")
+    for name in frameworks:
+        try:
+            return importlib.import_module(name)
+        except ModuleNotFoundError as error:
+            if error.name != name:
+                raise
+    if requested == "lerna":
+        raise ImportError(f"{_ENV_VAR}=lerna requires the 'lerna' package")
+    raise ImportError("Configuration requires 'hydra-core' or 'lerna'; install one to use ccflow.config")
 
-CONFIG_FRAMEWORK = _framework.__name__
-main = _framework.main
-compose = _framework.compose
-initialize = _framework.initialize
-initialize_config_dir = _framework.initialize_config_dir
 
-if CONFIG_FRAMEWORK == "lerna":
-    DefaultsList = importlib.import_module("lerna._internal.defaults_list").DefaultsList
-    GlobalHydra = importlib.import_module("lerna.core.global_hydra").GlobalHydra
-    HydraConfig = importlib.import_module("lerna.core.hydra_config").HydraConfig
-    InstantiationException = importlib.import_module("lerna.errors").InstantiationException
-    ObjectType = importlib.import_module("lerna.core.object_type").ObjectType
-    RunMode = importlib.import_module("lerna.types").RunMode
-    instantiate = importlib.import_module("lerna.utils").instantiate
-else:
-    DefaultsList = importlib.import_module("hydra._internal.defaults_list").DefaultsList
-    GlobalHydra = importlib.import_module("hydra.core.global_hydra").GlobalHydra
-    HydraConfig = importlib.import_module("hydra.core.hydra_config").HydraConfig
-    InstantiationException = importlib.import_module("hydra.errors").InstantiationException
-    ObjectType = importlib.import_module("hydra.core.object_type").ObjectType
-    RunMode = importlib.import_module("hydra.types").RunMode
-    instantiate = importlib.import_module("hydra.utils").instantiate
+def __getattr__(name: str):
+    if name == "CONFIG_FRAMEWORK":
+        return _get_framework().__name__
+    if name in ("main", "compose", "initialize", "initialize_config_dir"):
+        return getattr(_get_framework(), name)
+    if name in _SUBMODULES:
+        module = importlib.import_module(f"{_get_framework().__name__}.{_SUBMODULES[name]}")
+        return getattr(module, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

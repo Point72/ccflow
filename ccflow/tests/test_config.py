@@ -10,17 +10,20 @@ def _config_framework(
     *,
     hide_hydra: bool = False,
     hide_lerna: bool = False,
+    hide_omegaconf: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     if env_value is None:
-        env.pop("CCFLOW_CONFIG_FRAMEWORK", None)
+        env.pop("CCFLOW_CONFIG_BACKEND", None)
     else:
-        env["CCFLOW_CONFIG_FRAMEWORK"] = env_value
+        env["CCFLOW_CONFIG_BACKEND"] = env_value
     hidden_modules = []
     if hide_hydra:
         hidden_modules.append("hydra")
     if hide_lerna:
         hidden_modules.append("lerna")
+    if hide_omegaconf:
+        hidden_modules.append("omegaconf")
     hide_modules_statement = "".join(f'sys.modules["{name}"] = None;' for name in hidden_modules)
     return subprocess.run(
         [
@@ -35,15 +38,15 @@ def _config_framework(
     )
 
 
-def _compose_config(config_dir, framework: str, overrides: list[str] | None = None) -> subprocess.CompletedProcess[str]:
+def _compose_config(config_dir, framework: str, overrides: list[str] | None = None, *, hide_hydra: bool = False) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
-    env["CCFLOW_CONFIG_FRAMEWORK"] = framework
+    env["CCFLOW_CONFIG_BACKEND"] = framework
     return subprocess.run(
         [
             sys.executable,
             "-c",
             (
-                "from ccflow import config; "
+                ("import sys; sys.modules['hydra'] = None; " if hide_hydra else "") + "from ccflow import config; "
                 f"context = config.initialize_config_dir(config_dir={str(config_dir)!r}, version_base=None); "
                 f"context.__enter__(); cfg = config.compose(config_name='config', overrides={overrides or []!r}); "
                 "print(cfg); context.__exit__(None, None, None)"
@@ -56,13 +59,15 @@ def _compose_config(config_dir, framework: str, overrides: list[str] | None = No
     )
 
 
-def test_lerna_is_preferred_when_available():
+@pytest.mark.parametrize("env_value", [None, "hydra", "hydraa"])
+def test_hydra_is_preferred_when_available(env_value):
+    pytest.importorskip("hydra")
     pytest.importorskip("lerna")
 
-    result = _config_framework(None)
+    result = _config_framework(env_value)
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "lerna"
+    assert result.stdout.strip() == "hydra"
 
 
 def test_hydra_can_be_selected_explicitly():
@@ -74,10 +79,21 @@ def test_hydra_can_be_selected_explicitly():
     assert result.stdout.strip() == "hydra"
 
 
-def test_lerna_can_be_selected_explicitly():
+@pytest.mark.parametrize("env_value", ["lerna", " LERNA "])
+def test_lerna_can_be_selected_explicitly(env_value):
     pytest.importorskip("lerna")
 
-    result = _config_framework("lerna")
+    result = _config_framework(env_value)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "lerna"
+
+
+@pytest.mark.parametrize("env_value", [None, "hydra", "hydraa"])
+def test_lerna_is_used_when_hydra_is_unavailable(env_value):
+    pytest.importorskip("lerna")
+
+    result = _config_framework(env_value, hide_hydra=True)
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "lerna"
@@ -96,21 +112,25 @@ def test_explicit_unavailable_lerna_fails_clearly():
     result = _config_framework("lerna", hide_lerna=True)
 
     assert result.returncode != 0
-    assert "CCFLOW_CONFIG_FRAMEWORK=lerna requires the 'lerna' package" in result.stderr
+    assert "CCFLOW_CONFIG_BACKEND=lerna requires the 'lerna' package" in result.stderr
 
 
-def test_explicit_unavailable_hydra_fails_clearly():
-    result = _config_framework("hydra", hide_hydra=True)
-
-    assert result.returncode != 0
-    assert "CCFLOW_CONFIG_FRAMEWORK=hydra requires the 'hydra-core' package" in result.stderr
-
-
-def test_unknown_framework_is_rejected():
-    result = _config_framework("hydraa")
+@pytest.mark.parametrize("env_value", [None, "hydra", "hydraa"])
+def test_missing_frameworks_fail_clearly(env_value):
+    result = _config_framework(env_value, hide_hydra=True, hide_lerna=True)
 
     assert result.returncode != 0
-    assert "CCFLOW_CONFIG_FRAMEWORK must be 'hydra', 'lerna', or unset" in result.stderr
+    assert "requires 'hydra-core' or 'lerna'" in result.stderr
+
+
+def test_missing_backend_dependency_is_not_hidden_by_fallback():
+    pytest.importorskip("hydra")
+
+    result = _config_framework(None, hide_omegaconf=True)
+
+    assert result.returncode != 0
+    assert "ModuleNotFoundError" in result.stderr
+    assert "omegaconf" in result.stderr
 
 
 def test_public_api_used_by_downstream_applications():
@@ -124,6 +144,16 @@ def test_public_api_used_by_downstream_applications():
     assert callable(config.instantiate)
     assert hasattr(config.HydraConfig, "get")
     assert issubclass(config.InstantiationException, Exception)
+
+
+def test_lerna_fallback_can_compose_without_hydra(tmp_path):
+    pytest.importorskip("lerna")
+    (tmp_path / "config.yaml").write_text("value: 42\n")
+
+    result = _compose_config(tmp_path, "hydra", hide_hydra=True)
+
+    assert result.returncode == 0, result.stderr
+    assert "'value': 42" in result.stdout
 
 
 def test_lerna_patch_is_available_through_facade(tmp_path):

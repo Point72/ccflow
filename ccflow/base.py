@@ -1112,20 +1112,21 @@ class _ModelRegistryLoader:
         self, cfg: "DictConfig", registry: ModelRegistry, skip_exceptions: bool = False, resolve_from: ModelRegistry | None = None
     ) -> ModelRegistry:
         """Load from OmegaConf DictConfig that follows hydra conventions."""
+        from .config import InstantiationException, instantiate
+
         # Here we use hydra's 'instantiate' to instantiate models,
         # because it provides a standard way to resolve the class name
         # that's being constructed, through the "_target_" field.
         # This also allows for nested attributes on the model itself to
         # be constructed, even if they are not themselves of BaseModel type,
         # or if they are of a specific subclass of the parent.
-        from omegaconf import OmegaConf, UnsupportedValueType
-
-        from .config import InstantiationException, instantiate
-
         if resolve_from is not None and resolve_from is not registry:
             initial_chain = [resolve_from, registry]
         else:
             initial_chain = [registry]
+
+        from omegaconf import OmegaConf, UnsupportedValueType
+
         models_to_register = self._make_subregistries(cfg, initial_chain)
         while True:
             unresolved_models = []

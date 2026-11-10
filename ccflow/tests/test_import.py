@@ -27,6 +27,8 @@ class TestImports(TestCase):
 
             import ccflow
 
+            assert ccflow.config.__name__ == "ccflow.config"
+
             registry = ccflow.ModelRegistry(name="test")
             registry.add("model", ccflow.BaseModel())
             assert isinstance(registry["model"], ccflow.BaseModel)
@@ -38,14 +40,14 @@ class TestImports(TestCase):
             for load in (lambda: lazy["model"], lambda: registry.load_config({"m": {"_target_": "ccflow.BaseModel"}})):
                 try:
                     load()
-                except ModuleNotFoundError as e:
-                    assert e.name == "hydra", e
+                except ImportError as e:
+                    assert "requires" in str(e) and "lerna" in str(e), e
                 else:
-                    raise AssertionError("expected hydra to be required")
+                    raise AssertionError("expected a config framework to be required")
 
             try:
                 import ccflow.utils.hydra  # noqa: F401
-            except ModuleNotFoundError:
+            except ImportError:
                 pass
             else:
                 raise AssertionError("ccflow.utils.hydra imported without hydra")
