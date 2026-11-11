@@ -120,7 +120,7 @@ class Enum(BaseEnum):
                 raise ValueError(f"Cannot convert value to {cls.__name__}: {v}") from e
         elif isinstance(v, int):
             return cls(v)
-        raise ValueError(f"Cannot convert value to enum: {v}")
+        raise ValueError(f"Cannot convert value to {cls.__name__}")
 
     @staticmethod
     def _serialize(value: "Enum") -> str:

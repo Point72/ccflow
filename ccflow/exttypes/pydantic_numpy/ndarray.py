@@ -59,7 +59,7 @@ class NDArray(Generic[T], nd_array_type):  # noqa: PYI059
                 return np.asarray(v)
 
             except TypeError:
-                raise ValueError(f"Unable to convert {v} to an array.")
+                raise ValueError("Unable to convert value to an array.")
 
         return core_schema.no_info_before_validator_function(
             _validate,
