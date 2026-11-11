@@ -951,7 +951,7 @@ class CallableModelGeneric(CallableModel, Generic[ContextType, ResultType]):
 
         # Raise ValueError (not TypeError) as per https://docs.pydantic.dev/latest/errors/errors/
         if not isinstance(m, CallableModel):
-            raise ValueError(f"{m} is not a CallableModel: {type(m)}")  # noqa: TRY004
+            raise ValueError("Expected a CallableModel")  # noqa: TRY004
 
         subtypes = cls.__pydantic_generic_metadata__["args"]
         if subtypes:

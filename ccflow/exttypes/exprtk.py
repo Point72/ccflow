@@ -37,7 +37,7 @@ class ExprTkExpression(str):
 
             return cls(value)
 
-        raise ValueError(f"{value} cannot be converted into an ExprTkExpression.")
+        raise ValueError("Value cannot be converted into an ExprTkExpression.")
 
     @classmethod
     def validate(cls, value: Any) -> Self:

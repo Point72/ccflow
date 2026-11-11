@@ -51,7 +51,7 @@ class ArrowSchema(type):
         if isinstance(value, pa.Schema):
             return ArrowSchema.make(value)
 
-        raise ValueError(f"Cannot convert value to ArrowSchema, expects ArrowSchema or pa.Schema: {value}")
+        raise ValueError("Cannot convert value to ArrowSchema, expects ArrowSchema or pa.Schema")
 
     @classmethod
     def validate(cls, value: Any) -> Self:
@@ -89,7 +89,7 @@ class ArrowTable(pa.Table, Generic[S]):
             except TypeError:
                 pass
         if not isinstance(v, pa.Table):
-            raise ValueError(f"Value of type {type(v)} cannot be converted to pyarrow.Table")  # noqa: TRY004
+            raise ValueError("Value cannot be converted to pyarrow.Table")  # noqa: TRY004
 
         if schema:
             if strict is True:
@@ -134,7 +134,7 @@ class PyArrowDatatype(str):
             _ = value.datatype
             return value
 
-        raise ValueError(f"ensure this value contains a valid PyarrowDatatype string: {value}")
+        raise ValueError("ensure this value contains a valid PyarrowDatatype string")
 
     @classmethod
     def validate(cls, value) -> Self:

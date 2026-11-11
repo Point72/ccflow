@@ -134,7 +134,7 @@ class PyObjectPath(str):
         if hasattr(value, "__module__") and hasattr(value, "__qualname__"):
             return cls(_build_standard_import_path(value))
 
-        raise ValueError(f"ensure this value contains valid import path or importable object: unable to import path for {value}")
+        raise ValueError("ensure this value contains valid import path or importable object")
 
     @classmethod
     @cache

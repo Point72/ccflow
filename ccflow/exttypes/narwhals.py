@@ -86,7 +86,7 @@ class FrameValidator:
             if cls.lazy is False and isinstance(value, nw.LazyFrame):
                 value = value.collect()
             if cls.lazy is None and not isinstance(value, source_origin):
-                raise ValueError(f"Expected {source_origin} but got {type(value)}")
+                raise ValueError(f"Expected {source_origin}")
 
             try:
                 source_arg_adapter.validate_python(value.to_native())
@@ -156,14 +156,14 @@ class _DTypeValidator:
             if inspect.isclass(value) and issubclass(value, nw.dtypes.DType):
                 value = value()
             if not isinstance(value, nw.dtypes.DType):
-                raise ValueError(f"Expected a Narwhals DType but got {type(value)}")  # noqa: TRY004
+                raise ValueError("Expected a Narwhals DType")  # noqa: TRY004
             return value
 
         def serialize(value: Any):
             if inspect.isclass(value) and issubclass(value, nw.dtypes.DType):
                 value = value()
             if not isinstance(value, nw.dtypes.DType):
-                raise ValueError(f"Expected a Narwhals DType but got {type(value)}")  # noqa: TRY004
+                raise ValueError("Expected a Narwhals DType")  # noqa: TRY004
             return str(value)
 
         from_any_schema = core_schema.no_info_plain_validator_function(validate_from_any)
@@ -199,7 +199,7 @@ class SchemaValidator:
     def __get_pydantic_core_schema__(self, source_type: Any, handler: GetCoreSchemaHandler) -> core_schema.CoreSchema:
         def validate_schema(value: Any):
             if not isinstance(value, (nw.DataFrame, nw.LazyFrame)):
-                raise ValueError(f"Expected a Narwhals DataFrame or LazyFrame but got {type(value)}")  # noqa: TRY004
+                raise ValueError("Expected a Narwhals DataFrame or LazyFrame")  # noqa: TRY004
             schema = value.collect_schema()
             if self.allow_subset:
                 schema = nw.Schema({k: v for k, v in schema.items() if k in self.schema})
