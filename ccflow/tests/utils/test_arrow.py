@@ -95,3 +95,46 @@ class TestMetaData(TestCase):
 
         # Get it back in "normal" form
         self.assertDictEqual(get_field_metadata(t2), metadata)
+
+    def test_add_field_metadata_preserves_schema_metadata(self):
+        schema = pa.schema(
+            [
+                pa.field("price", pa.float64(), nullable=False, metadata={"description": '"closing price"'}),
+                pa.field("symbol", pa.string(), metadata={"description": '"ticker"'}),
+            ],
+            metadata={b"dataset": b"prices", b"binary": b"\x00\xff"},
+        )
+        table = pa.Table.from_pydict({"price": [10.0, 20.0], "symbol": ["A", "B"]}, schema=schema)
+
+        for metadata in ({"price": {"unit": "USD"}}, {}, {"missing": {"unit": "USD"}}):
+            with self.subTest(metadata=metadata):
+                result = add_field_metadata(table, metadata)
+
+                self.assertEqual(result.schema.metadata, table.schema.metadata)
+                self.assertTrue(result.schema.field("symbol").equals(schema.field("symbol"), check_metadata=True))
+                self.assertFalse(result.schema.field("price").nullable)
+                self.assertEqual(result.to_pydict(), table.to_pydict())
+
+    def test_add_field_metadata_preserves_pandas_index(self):
+        indexes = [
+            pd.RangeIndex(10, 12, name="row"),
+            pd.Index(["trade_a", "trade_b"], name="trade"),
+            pd.MultiIndex.from_tuples([("A", 1), ("B", 2)], names=["symbol", "trade"]),
+        ]
+        for index in indexes:
+            with self.subTest(index=index):
+                frame = pd.DataFrame({"price": [10.0, 20.0]}, index=index)
+                table = pa.Table.from_pandas(frame)
+
+                result = add_field_metadata(table, {"price": {"unit": "USD"}})
+
+                pd.testing.assert_frame_equal(result.to_pandas(), frame)
+
+    def test_add_field_metadata_still_replaces_selected_field_metadata(self):
+        schema = pa.schema([pa.field("price", pa.float64(), metadata={"description": '"closing price"'})])
+        table = pa.Table.from_pydict({"price": [10.0]}, schema=schema)
+
+        result = add_field_metadata(table, {"price": {"unit": "USD"}})
+
+        self.assertEqual(result.schema.field("price").metadata, {b"unit": b'"USD"'})
+        self.assertIsNone(result.schema.metadata)
