@@ -9,13 +9,13 @@ from typing import ClassVar
 from unittest import TestCase, mock
 
 import pytest
-from hydra.errors import InstantiationException
 from omegaconf import OmegaConf
 from omegaconf.errors import InterpolationKeyError
 from pydantic import ConfigDict, Field
 
 from ccflow import BaseModel, LazyRegistry, ModelRegistry, RegistryLookupContext, RootModelRegistry, model_alias
 from ccflow.base import RegistryKeyError, resolve_str
+from ccflow.config import InstantiationException
 
 
 class MyTestModel(BaseModel):
@@ -461,6 +461,25 @@ class TestRegistryLoading(TestCase):
         r.load_config(cfg, overwrite=True)
         self.assertEqual(r["foo"], m)
 
+    def test_load_config_uses_selected_framework(self):
+        from ccflow import config
+
+        cfg = OmegaConf.create(
+            {
+                "foo": {
+                    "_target_": "ccflow.tests.test_base_registry.MyTestModel",
+                    "a": "test",
+                    "b": 0.0,
+                }
+            }
+        )
+        registry = ModelRegistry(name="test")
+
+        with mock.patch("ccflow.config.instantiate", wraps=config.instantiate) as instantiate:
+            registry.load_config(cfg)
+
+        instantiate.assert_called_once()
+
     def test_load_config_with_function(self):
         cfg = OmegaConf.create(
             {
@@ -754,6 +773,17 @@ class TestLazyRegistry(TestCase):
         self.assertIs(root["/lazy/group/source"], source)
         self.assertEqual(LazyTestModel.constructions, 1)
 
+    def test_materialization_uses_selected_framework(self):
+        from ccflow import config
+
+        root = self._load_registry()
+
+        with mock.patch("ccflow.config.instantiate", wraps=config.instantiate) as instantiate:
+            source = root["/lazy/group/source"]
+
+        self.assertIsInstance(source, LazyTestModel)
+        instantiate.assert_called_once()
+
     def test_materializes_dependency_closure(self):
         root = self._load_registry()
 
@@ -870,7 +900,9 @@ class TestLazyRegistry(TestCase):
             left["model"]
 
     def test_concurrent_cross_registry_cycle_does_not_deadlock(self):
-        from hydra.utils import instantiate as hydra_instantiate
+        from ccflow import config
+
+        selected_instantiate = config.instantiate
 
         root = ModelRegistry.root()
         left = LazyRegistry(name="left")
@@ -890,10 +922,10 @@ class TestLazyRegistry(TestCase):
             if not getattr(local, "started", False):
                 local.started = True
                 barrier.wait(timeout=2)
-            return hydra_instantiate(*args, **kwargs)
+            return selected_instantiate(*args, **kwargs)
 
         with (
-            mock.patch("hydra.utils.instantiate", side_effect=synchronized_instantiate),
+            mock.patch("ccflow.config.instantiate", side_effect=synchronized_instantiate),
             concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor,
         ):
             futures = [executor.submit(registry.__getitem__, "model") for registry in (left, right)]
@@ -979,6 +1011,7 @@ class TestLazyRegistry(TestCase):
         self.assertEqual(registry["pending"].a, "pending")
 
     def test_recursive_hydra_instantiation_is_rejected(self):
+        from hydra.errors import InstantiationException as HydraInstantiationException
         from hydra.utils import instantiate
 
         cfg = OmegaConf.create(
@@ -993,7 +1026,7 @@ class TestLazyRegistry(TestCase):
             }
         )
 
-        with self.assertRaisesRegex(InstantiationException, "Set '_recursive_: false'"):
+        with self.assertRaisesRegex(HydraInstantiationException, "Set '_recursive_: false'"):
             instantiate(cfg, _convert_="all")
 
     def test_resolve_from_applies_to_direct_pending_entry(self):

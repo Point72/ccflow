@@ -9,11 +9,11 @@ from pprint import pprint
 from textwrap import dedent
 from typing import Any
 
-from hydra._internal.defaults_list import DefaultsList
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
 from ..base import ModelRegistry
 from ..callable import FlowOptions, FlowOptionsOverride
+from ..config import CONFIG_FRAMEWORK, DefaultsList, GlobalHydra, ObjectType, RunMode, compose, initialize_config_dir
 
 _log = getLogger(__name__)
 
@@ -105,14 +105,30 @@ def _dict_add_source(d, source):
     return d
 
 
+def _dict_add_provenance(data, composition, prefix=""):
+    result = {}
+    for key, value in data.items():
+        if isinstance(key, int) and prefix:
+            path = f"{prefix}[{key}]"
+        else:
+            path = f"{prefix}.{key}" if prefix else str(key)
+        if isinstance(value, dict):
+            result[key] = _dict_add_provenance(value, composition, path)
+        else:
+            provenance = composition.provenance(path)
+            result[key] = {
+                "value_raw": value,
+                "source_file": provenance.source_identifier.removeprefix("file://") if provenance is not None else "unknown",
+            }
+    return result
+
+
 def _find_group_options(config_loader, path, config_name, overrides, results):
     """This function finds the names of all the options in the config group hierarchy.
 
     Note that it will pick up config files that are not intended to be used as config group options,
     but that exist to provide common config options to other files in the group (i.e. to default)
     """
-    from hydra.core.object_type import ObjectType
-
     groups = config_loader.get_group_options(path, ObjectType.GROUP, config_name, overrides)
     options = config_loader.get_group_options(path, ObjectType.CONFIG, config_name, overrides)
     if options:
@@ -179,11 +195,6 @@ def load_config(
         basepath: The base path to start searching for the `config_dir`. This is useful when you want to load from an absolute (rather than relative) path.
         debug: (Experimental) Whether to enable debug mode. This will return more information about the configs on ConfigLoadResult.
     """
-    # Heavy import, only import if used
-    import os
-
-    from hydra import compose, initialize_config_dir
-
     if return_hydra_config and debug:
         raise ValueError("Cannot return hydra config and debug=True at the same time. Please set return_hydra_config=False.")
 
@@ -201,26 +212,32 @@ def load_config(
             else:
                 overrides = [*overrides.copy(), f"hydra.searchpath=[{','.join(searchpaths)}]"]
 
-        cfg = compose(config_name=root_config_name, overrides=overrides, return_hydra_config=return_hydra_config)
+        composition = None
+        if debug and CONFIG_FRAMEWORK == "lerna":
+            from lerna import compose_with_provenance
+
+            composition = compose_with_provenance(config_name=root_config_name, overrides=overrides)
+            cfg = composition.config
+        else:
+            cfg = compose(config_name=root_config_name, overrides=overrides, return_hydra_config=return_hydra_config)
         result = ConfigLoadResult(root_config_dir=root_config_dir, root_config_name=root_config_name, cfg=cfg)
         if debug:
-            import yaml
-            from hydra.core.global_hydra import GlobalHydra
-            from hydra.types import RunMode
+            if composition is not None:
+                result.cfg_sources = OmegaConf.create(_dict_add_provenance(OmegaConf.to_container(cfg, resolve=False), composition))
+            else:
+                import yaml
 
-            # To track the source file for each config value, we need to monkey patch the yaml loader
-            original_yaml_load = yaml.load
-            try:
+                original_yaml_load = yaml.load
+                try:
 
-                def yaml_load(*args, **kwargs):
-                    res = original_yaml_load(*args, **kwargs)
-                    return _dict_add_source(res, args[0].name)
+                    def yaml_load(*args, **kwargs):
+                        res = original_yaml_load(*args, **kwargs)
+                        return _dict_add_source(res, args[0].name)
 
-                yaml.load = yaml_load
-                # We can't load the hydra config after monkey patching yaml loading, so skip that step
-                result.cfg_sources = compose(config_name=root_config_name, overrides=overrides, return_hydra_config=False)
-            finally:
-                yaml.load = original_yaml_load
+                    yaml.load = yaml_load
+                    result.cfg_sources = compose(config_name=root_config_name, overrides=overrides, return_hydra_config=False)
+                finally:
+                    yaml.load = original_yaml_load
 
             config_loader = GlobalHydra.instance().config_loader()
             # Load defaults list using the standard hydra function
