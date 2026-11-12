@@ -1,7 +1,6 @@
 import argparse
 import inspect
 import os
-import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from logging import getLogger
@@ -14,7 +13,7 @@ from omegaconf import DictConfig, ListConfig, OmegaConf
 
 from ..base import ModelRegistry
 from ..callable import FlowOptions, FlowOptionsOverride
-from ..config import DefaultsList, GlobalHydra, ObjectType, RunMode, compose, initialize_config_dir
+from ..config import CONFIG_FRAMEWORK, DefaultsList, GlobalHydra, ObjectType, RunMode, compose, initialize_config_dir
 
 _log = getLogger(__name__)
 
@@ -106,6 +105,24 @@ def _dict_add_source(d, source):
     return d
 
 
+def _dict_add_provenance(data, composition, prefix=""):
+    result = {}
+    for key, value in data.items():
+        if isinstance(key, int) and prefix:
+            path = f"{prefix}[{key}]"
+        else:
+            path = f"{prefix}.{key}" if prefix else str(key)
+        if isinstance(value, dict):
+            result[key] = _dict_add_provenance(value, composition, path)
+        else:
+            provenance = composition.provenance(path)
+            result[key] = {
+                "value_raw": value,
+                "source_file": provenance.source_identifier.removeprefix("file://") if provenance is not None else "unknown",
+            }
+    return result
+
+
 def _find_group_options(config_loader, path, config_name, overrides, results):
     """This function finds the names of all the options in the config group hierarchy.
 
@@ -195,41 +212,32 @@ def load_config(
             else:
                 overrides = [*overrides.copy(), f"hydra.searchpath=[{','.join(searchpaths)}]"]
 
-        cfg = compose(config_name=root_config_name, overrides=overrides, return_hydra_config=return_hydra_config)
+        composition = None
+        if debug and CONFIG_FRAMEWORK == "lerna":
+            from lerna import compose_with_provenance
+
+            composition = compose_with_provenance(config_name=root_config_name, overrides=overrides)
+            cfg = composition.config
+        else:
+            cfg = compose(config_name=root_config_name, overrides=overrides, return_hydra_config=return_hydra_config)
         result = ConfigLoadResult(root_config_dir=root_config_dir, root_config_name=root_config_name, cfg=cfg)
         if debug:
-            import yaml
+            if composition is not None:
+                result.cfg_sources = OmegaConf.create(_dict_add_provenance(OmegaConf.to_container(cfg, resolve=False), composition))
+            else:
+                import yaml
 
-            # To track the source file for each config value, we need to monkey patch the yaml loader
-            original_yaml_load = yaml.load
-            # Lerna may use a Rust YAML parser that bypasses yaml.load entirely.
-            # Temporarily disable it so our monkey patch can intercept all YAML loading.
-            _rust_patches = {}
-            for _mod_name in (
-                "lerna._internal.core_plugins.file_config_source",
-                "lerna._internal.core_plugins.importlib_resources_config_source",
-            ):
-                _mod = sys.modules.get(_mod_name)
-                if _mod and getattr(_mod, "_RUST_AVAILABLE", False):
-                    _rust_patches[_mod] = True
-                    _mod._RUST_AVAILABLE = False
+                original_yaml_load = yaml.load
+                try:
 
-            try:
+                    def yaml_load(*args, **kwargs):
+                        res = original_yaml_load(*args, **kwargs)
+                        return _dict_add_source(res, args[0].name)
 
-                def yaml_load(*args, **kwargs):
-                    res = original_yaml_load(*args, **kwargs)
-                    # hydra passes file objects (with .name) to yaml.load;
-                    # lerna passes strings. Use "unknown" as fallback source.
-                    source = getattr(args[0], "name", "unknown") if args else "unknown"
-                    return _dict_add_source(res, source)
-
-                yaml.load = yaml_load
-                # We can't load the hydra config after monkey patching yaml loading, so skip that step
-                result.cfg_sources = compose(config_name=root_config_name, overrides=overrides, return_hydra_config=False)
-            finally:
-                yaml.load = original_yaml_load
-                for _mod, _val in _rust_patches.items():
-                    _mod._RUST_AVAILABLE = _val
+                    yaml.load = yaml_load
+                    result.cfg_sources = compose(config_name=root_config_name, overrides=overrides, return_hydra_config=False)
+                finally:
+                    yaml.load = original_yaml_load
 
             config_loader = GlobalHydra.instance().config_loader()
             # Load defaults list using the standard hydra function

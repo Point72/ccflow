@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import sys
@@ -193,3 +194,65 @@ def test_lerna_list_operations_are_available_through_facade(tmp_path):
     assert "three" in lerna_result.stdout
     assert hydra_result.returncode != 0
     assert "Unknown function 'append'" in hydra_result.stderr
+
+
+def _explain_lerna_config(config_dir, overrides: list[str] | None = None, *, structured_config: dict | None = None) -> dict:
+    pytest.importorskip("lerna")
+    setup = ""
+    if structured_config is not None:
+        setup = f"from lerna.core.config_store import ConfigStore; ConfigStore.instance().store(name='config', node={structured_config!r}); "
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import json; from ccflow.utils.hydra import load_config; "
+                + setup
+                + f"result = load_config(root_config_dir={str(config_dir)!r}, root_config_name='config', "
+                f"config_dir='', overrides={overrides or []!r}, debug=True); "
+                "print(json.dumps(result.merge()))"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "CCFLOW_CONFIG_BACKEND": "lerna"},
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def test_lerna_debug_supports_list_operations(tmp_path):
+    (tmp_path / "config.yaml").write_text("tags: [one, two]\n")
+
+    explained = _explain_lerna_config(tmp_path, ["tags=append(three)"])
+
+    assert explained["tags"]["value_raw"] == ["one", "two", "three"]
+    assert explained["tags"]["value_interp"] == ["one", "two", "three"]
+
+
+def test_lerna_debug_preserves_yaml_scalar_types(tmp_path):
+    (tmp_path / "config.yaml").write_text("words: [off, on, yes, no]\n")
+
+    explained = _explain_lerna_config(tmp_path)
+
+    assert explained["words"]["value_raw"] == ["off", "on", "yes", "no"]
+    assert explained["words"]["value_interp"] == ["off", "on", "yes", "no"]
+
+
+def test_lerna_debug_tracks_package_sources(tmp_path):
+    (tmp_path / "config.yaml").write_text(
+        "defaults:\n  - function/add@from_package\n  - _self_\nhydra:\n  searchpath:\n    - pkg://ccflow.examples.calculator.config\n"
+    )
+
+    explained = _explain_lerna_config(tmp_path)
+
+    assert explained["from_package"]["offset"]["value_raw"] == 0.0
+    assert explained["from_package"]["offset"]["source_file"] == "pkg://ccflow.examples.calculator.config/function/add.yaml"
+
+
+def test_lerna_debug_tracks_integer_mapping_keys(tmp_path):
+    explained = _explain_lerna_config(tmp_path, structured_config={"codes": {200: "ok"}})
+
+    assert explained["codes"]["200"]["value_raw"] == "ok"
+    assert explained["codes"]["200"]["source_file"] == "structured://config.yaml"
