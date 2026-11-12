@@ -1,0 +1,258 @@
+import json
+import os
+import subprocess
+import sys
+
+import pytest
+
+
+def _config_framework(
+    env_value: str | None,
+    *,
+    hide_hydra: bool = False,
+    hide_lerna: bool = False,
+    hide_omegaconf: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    if env_value is None:
+        env.pop("CCFLOW_CONFIG_BACKEND", None)
+    else:
+        env["CCFLOW_CONFIG_BACKEND"] = env_value
+    hidden_modules = []
+    if hide_hydra:
+        hidden_modules.append("hydra")
+    if hide_lerna:
+        hidden_modules.append("lerna")
+    if hide_omegaconf:
+        hidden_modules.append("omegaconf")
+    hide_modules_statement = "".join(f'sys.modules["{name}"] = None;' for name in hidden_modules)
+    return subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            f"import sys; {hide_modules_statement} from ccflow import config; print(config.CONFIG_FRAMEWORK)",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+
+def _compose_config(config_dir, framework: str, overrides: list[str] | None = None, *, hide_hydra: bool = False) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env["CCFLOW_CONFIG_BACKEND"] = framework
+    return subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                ("import sys; sys.modules['hydra'] = None; " if hide_hydra else "") + "from ccflow import config; "
+                f"context = config.initialize_config_dir(config_dir={str(config_dir)!r}, version_base=None); "
+                f"context.__enter__(); cfg = config.compose(config_name='config', overrides={overrides or []!r}); "
+                "print(cfg); context.__exit__(None, None, None)"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+
+@pytest.mark.parametrize("env_value", [None, "hydra", "hydraa"])
+def test_hydra_is_preferred_when_available(env_value):
+    pytest.importorskip("hydra")
+    pytest.importorskip("lerna")
+
+    result = _config_framework(env_value)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "hydra"
+
+
+def test_hydra_can_be_selected_explicitly():
+    pytest.importorskip("hydra")
+
+    result = _config_framework("hydra")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "hydra"
+
+
+@pytest.mark.parametrize("env_value", ["lerna", " LERNA "])
+def test_lerna_can_be_selected_explicitly(env_value):
+    pytest.importorskip("lerna")
+
+    result = _config_framework(env_value)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "lerna"
+
+
+@pytest.mark.parametrize("env_value", [None, "hydra", "hydraa"])
+def test_lerna_is_used_when_hydra_is_unavailable(env_value):
+    pytest.importorskip("lerna")
+
+    result = _config_framework(env_value, hide_hydra=True)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "lerna"
+
+
+def test_hydra_is_used_when_lerna_is_unavailable():
+    pytest.importorskip("hydra")
+
+    result = _config_framework(None, hide_lerna=True)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "hydra"
+
+
+def test_explicit_unavailable_lerna_fails_clearly():
+    result = _config_framework("lerna", hide_lerna=True)
+
+    assert result.returncode != 0
+    assert "CCFLOW_CONFIG_BACKEND=lerna requires the 'lerna' package" in result.stderr
+
+
+@pytest.mark.parametrize("env_value", [None, "hydra", "hydraa"])
+def test_missing_frameworks_fail_clearly(env_value):
+    result = _config_framework(env_value, hide_hydra=True, hide_lerna=True)
+
+    assert result.returncode != 0
+    assert "requires 'hydra-core' or 'lerna'" in result.stderr
+
+
+def test_missing_backend_dependency_is_not_hidden_by_fallback():
+    pytest.importorskip("hydra")
+
+    result = _config_framework(None, hide_omegaconf=True)
+
+    assert result.returncode != 0
+    assert "ModuleNotFoundError" in result.stderr
+    assert "omegaconf" in result.stderr
+
+
+def test_public_api_used_by_downstream_applications():
+    from ccflow import config
+
+    assert config.CONFIG_FRAMEWORK in ("hydra", "lerna")
+    assert callable(config.main)
+    assert callable(config.compose)
+    assert callable(config.initialize)
+    assert callable(config.initialize_config_dir)
+    assert callable(config.instantiate)
+    assert hasattr(config.HydraConfig, "get")
+    assert issubclass(config.InstantiationException, Exception)
+
+
+def test_lerna_fallback_can_compose_without_hydra(tmp_path):
+    pytest.importorskip("lerna")
+    (tmp_path / "config.yaml").write_text("value: 42\n")
+
+    result = _compose_config(tmp_path, "hydra", hide_hydra=True)
+
+    assert result.returncode == 0, result.stderr
+    assert "'value': 42" in result.stdout
+
+
+def test_lerna_patch_is_available_through_facade(tmp_path):
+    pytest.importorskip("hydra")
+    group = tmp_path / "group"
+    group.mkdir()
+    (group / "base.yaml").write_text("drop_me: true\nkeep: 42\n")
+    (tmp_path / "config.yaml").write_text(
+        """defaults:
+  - group/base@_here_
+  - _self_
+  - _patch_:
+    - ~drop_me
+"""
+    )
+
+    lerna_result = _compose_config(tmp_path, "lerna")
+    hydra_result = _compose_config(tmp_path, "hydra")
+
+    assert lerna_result.returncode == 0, lerna_result.stderr
+    assert "drop_me" not in lerna_result.stdout
+    assert "'keep': 42" in lerna_result.stdout
+    assert hydra_result.returncode != 0
+    assert "Could not load '_patch_/~drop_me'" in hydra_result.stderr
+
+
+def test_lerna_list_operations_are_available_through_facade(tmp_path):
+    pytest.importorskip("hydra")
+    (tmp_path / "config.yaml").write_text("tags: [one, two]\n")
+
+    lerna_result = _compose_config(tmp_path, "lerna", ["tags=append(three)"])
+    hydra_result = _compose_config(tmp_path, "hydra", ["tags=append(three)"])
+
+    assert lerna_result.returncode == 0, lerna_result.stderr
+    assert "one" in lerna_result.stdout
+    assert "two" in lerna_result.stdout
+    assert "three" in lerna_result.stdout
+    assert hydra_result.returncode != 0
+    assert "Unknown function 'append'" in hydra_result.stderr
+
+
+def _explain_lerna_config(config_dir, overrides: list[str] | None = None, *, structured_config: dict | None = None) -> dict:
+    pytest.importorskip("lerna")
+    setup = ""
+    if structured_config is not None:
+        setup = f"from lerna.core.config_store import ConfigStore; ConfigStore.instance().store(name='config', node={structured_config!r}); "
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import json; from ccflow.utils.hydra import load_config; "
+                + setup
+                + f"result = load_config(root_config_dir={str(config_dir)!r}, root_config_name='config', "
+                f"config_dir='', overrides={overrides or []!r}, debug=True); "
+                "print(json.dumps(result.merge()))"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "CCFLOW_CONFIG_BACKEND": "lerna"},
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def test_lerna_debug_supports_list_operations(tmp_path):
+    (tmp_path / "config.yaml").write_text("tags: [one, two]\n")
+
+    explained = _explain_lerna_config(tmp_path, ["tags=append(three)"])
+
+    assert explained["tags"]["value_raw"] == ["one", "two", "three"]
+    assert explained["tags"]["value_interp"] == ["one", "two", "three"]
+
+
+def test_lerna_debug_preserves_yaml_scalar_types(tmp_path):
+    (tmp_path / "config.yaml").write_text("words: [off, on, yes, no]\n")
+
+    explained = _explain_lerna_config(tmp_path)
+
+    assert explained["words"]["value_raw"] == ["off", "on", "yes", "no"]
+    assert explained["words"]["value_interp"] == ["off", "on", "yes", "no"]
+
+
+def test_lerna_debug_tracks_package_sources(tmp_path):
+    (tmp_path / "config.yaml").write_text(
+        "defaults:\n  - function/add@from_package\n  - _self_\nhydra:\n  searchpath:\n    - pkg://ccflow.examples.calculator.config\n"
+    )
+
+    explained = _explain_lerna_config(tmp_path)
+
+    assert explained["from_package"]["offset"]["value_raw"] == 0.0
+    assert explained["from_package"]["offset"]["source_file"] == "pkg://ccflow.examples.calculator.config/function/add.yaml"
+
+
+def test_lerna_debug_tracks_integer_mapping_keys(tmp_path):
+    explained = _explain_lerna_config(tmp_path, structured_config={"codes": {200: "ok"}})
+
+    assert explained["codes"]["200"]["value_raw"] == "ok"
+    assert explained["codes"]["200"]["source_file"] == "structured://config.yaml"

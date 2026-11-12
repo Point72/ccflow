@@ -5,6 +5,7 @@ __version__ = "0.9.4"
 # which, in turn, import `ccflow`).
 from .exttypes import *  # noqa: I001
 
+from . import config as config
 from .base import *
 from .compose import *
 from .callable import *

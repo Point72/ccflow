@@ -38,7 +38,7 @@ ALL_OPTIONS = [(group, option) for group in GROUPS for option in _options(group)
 
 
 def _registry(*overrides):
-    return load_config(overrides=["checks=off", *overrides])
+    return load_config(overrides=["checks='off'", *overrides])
 
 
 class RegistryTestCase(TestCase):
@@ -70,7 +70,7 @@ class TestGroupLayout(RegistryTestCase):
     def test_every_option_composes_and_instantiates(self):
         for group, option in ALL_OPTIONS:
             with self.subTest(group=group, option=option):
-                self.assertIsNotNone(_registry(f"{group}={option}")["/task"])
+                self.assertIsNotNone(_registry(f"{group}={option!r}")["/task"])
 
 
 class TestTasks(RegistryTestCase):
@@ -177,9 +177,9 @@ class TestGroupsReachEveryNode(RegistryTestCase):
 
     def test_the_concise_agents_variant_inherits_every_session(self):
         # `load_config` mutates the one root registry, so each value must be read before reloading.
-        default = load_config(overrides=["checks=off", "agents=poem"])["/task"].arbiter.session
+        default = load_config(overrides=["checks='off'", "agents=poem"])["/task"].arbiter.session
         default_command, contract = default.command, default.output_contract
-        concise = load_config(overrides=["checks=off", "agents=poem_concise"])["/task"].arbiter.session
+        concise = load_config(overrides=["checks='off'", "agents=poem_concise"])["/task"].arbiter.session
         self.assertNotEqual(concise.command, default_command)
         self.assertEqual(concise.output_contract, contract)
 
