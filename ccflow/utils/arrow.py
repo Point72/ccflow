@@ -64,7 +64,7 @@ def convert_large_types(table: pa.Table) -> pa.Table:
 
 
 def add_field_metadata(table: pa.Table, metadata: dict[str, Any]):
-    """Helper function to add column-level meta data to an arrow table for multiple columns at once."""
+    """Add column-level metadata to multiple columns while preserving table-level metadata."""
     # There does not seem to be a pyarrow function to do this easily
     new_schema = []
     for field in table.schema:
@@ -74,7 +74,7 @@ def add_field_metadata(table: pa.Table, metadata: dict[str, Any]):
         else:
             new_field = field
         new_schema.append(new_field)
-    return table.cast(pa.schema(new_schema))
+    return table.cast(pa.schema(new_schema, metadata=table.schema.metadata))
 
 
 def get_field_metadata(table: pa.Table) -> dict[str, Any]:
