@@ -24,6 +24,7 @@ SOFTWARE.
 """
 
 import sys
+from functools import lru_cache
 from typing import Any, Generic, TypeVar, get_args
 
 import numpy as np
@@ -48,11 +49,36 @@ class NDArray(Generic[T], nd_array_type):  # noqa: PYI059
 
     @classmethod
     def __get_pydantic_core_schema__(cls, source_type, handler):
+        from pydantic import TypeAdapter
         from pydantic_core import core_schema
 
+        subtypes = get_args(source_type)
+        dtype = subtypes[0] if subtypes and subtypes[0] != Any else None
+
+        @lru_cache(maxsize=64)
+        def _serialization_adapter(ndim):
+            item_type = dtype
+            for _ in range(ndim):
+                item_type = list[item_type]
+            return TypeAdapter(item_type)
+
+        def _serialize(v, nxt, info):
+            if not isinstance(v, np.ndarray) or v.dtype != object or not hasattr(dtype, "__get_pydantic_core_schema__"):
+                return cls._serialize(v, nxt)
+            # NumPy can coerce IntEnum items to numbers even in object arrays.
+            if not isinstance(dtype, type) or any(not isinstance(item, dtype) for item in v.flat):
+                return cls._serialize(v, nxt)
+            options = {
+                name: getattr(info, name)
+                for name in ("mode", "include", "exclude", "by_alias", "exclude_unset", "exclude_defaults", "exclude_none", "round_trip")
+            }
+            # Newer Pydantic versions expose additional serialization controls.
+            for name in ("context", "serialize_as_any", "exclude_computed_fields", "polymorphic_serialization"):
+                if hasattr(info, name):
+                    options[name] = getattr(info, name)
+            return _serialization_adapter(v.ndim).dump_python(v.tolist(), **options)
+
         def _validate(v):
-            subtypes = get_args(source_type)
-            dtype = subtypes[0] if subtypes and subtypes[0] != Any else None
             try:
                 if dtype:
                     return np.asarray(v, dtype=dtype)
@@ -65,8 +91,8 @@ class NDArray(Generic[T], nd_array_type):  # noqa: PYI059
             _validate,
             core_schema.any_schema(),
             serialization=core_schema.wrap_serializer_function_ser_schema(
-                cls._serialize,
-                info_arg=False,
+                _serialize,
+                info_arg=True,
                 return_schema=core_schema.list_schema(),
             ),
         )

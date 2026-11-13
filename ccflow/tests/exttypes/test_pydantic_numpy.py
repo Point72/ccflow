@@ -23,11 +23,16 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
-import numpy as np
-from numpy.testing import assert_allclose
-from pydantic import BaseModel
+import json
+from enum import IntEnum
 
-from ccflow import NDArray, float32
+import numpy as np
+import pytest
+from numpy.testing import assert_allclose
+from pydantic import BaseModel, Field, TypeAdapter
+from pydantic_core import PydanticSerializationError, core_schema
+
+from ccflow import Enum, NDArray, float32
 
 
 class MySettings(BaseModel):
@@ -128,3 +133,122 @@ def test_union_field():
     assert 0 in model2.x
     assert len(model2.x) == 1
     np.testing.assert_array_equal(model2.x[0], np.array([0.0, 1.0, 2.0]))
+
+
+class SerializedLabel:
+    def __init__(self, value):
+        self.value = value
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source_type, handler):
+        def serialize(value, info):
+            prefix = (getattr(info, "context", None) or {}).get("prefix", "")
+            return prefix + value.value
+
+        return core_schema.is_instance_schema(
+            cls,
+            serialization=core_schema.plain_serializer_function_ser_schema(serialize, info_arg=True, when_used="json"),
+        )
+
+
+@pytest.mark.parametrize(
+    "shape,expected",
+    [((2,), ["BUY", "SELL"]), ((1, 2), [["BUY", "SELL"]]), ((2, 1, 1), [[["BUY"]], [["SELL"]]])],
+)
+def test_custom_item_serializer(shape, expected):
+    adapter = TypeAdapter(NDArray[SerializedLabel])
+    array = adapter.validate_python(np.array([SerializedLabel("BUY"), SerializedLabel("SELL")], dtype=object).reshape(shape))
+    original = array.copy()
+    assert json.loads(adapter.dump_json(array)) == expected
+    assert array.dtype == object
+    np.testing.assert_array_equal(array, original)
+
+
+def test_custom_item_serializer_retains_python_mode():
+    value = SerializedLabel("BUY")
+    adapter = TypeAdapter(NDArray[SerializedLabel])
+    array = adapter.validate_python([value])
+    assert adapter.dump_python(array)[0] is value
+    assert adapter.dump_python(array, mode="json") == ["BUY"]
+
+
+def test_custom_item_serializer_respects_index_filters():
+    adapter = TypeAdapter(NDArray[SerializedLabel])
+    array = adapter.validate_python([SerializedLabel("BUY"), SerializedLabel("SELL")])
+    assert json.loads(adapter.dump_json(array, include={1})) == ["SELL"]
+    assert json.loads(adapter.dump_json(array, exclude={0})) == ["SELL"]
+
+
+@pytest.mark.parametrize("shape,expected", [((0,), []), ((2, 0), [[], []])])
+def test_custom_item_serializer_empty_arrays(shape, expected):
+    adapter = TypeAdapter(NDArray[SerializedLabel])
+    assert json.loads(adapter.dump_json(np.empty(shape, dtype=object))) == expected
+
+
+def test_custom_item_serializer_in_optional_field():
+    class ArrayModel(BaseModel):
+        values: NDArray[SerializedLabel] | None = None
+
+    assert json.loads(ArrayModel().model_dump_json()) == {"values": None}
+    assert json.loads(ArrayModel(values=[SerializedLabel("BUY")]).model_dump_json()) == {"values": ["BUY"]}
+
+
+def test_custom_item_serializer_uses_context():
+    import inspect
+
+    if "context" not in inspect.signature(TypeAdapter.dump_json).parameters:
+        pytest.skip("serialization context is unavailable in this Pydantic version")
+    adapter = TypeAdapter(NDArray[SerializedLabel])
+    array = adapter.validate_python([SerializedLabel("BUY")])
+    assert json.loads(adapter.dump_json(array, context={"prefix": "trade:"})) == ["trade:BUY"]
+
+
+def test_custom_item_serializer_preserves_model_options():
+    class Payload(BaseModel):
+        value: str = Field(alias="label")
+        optional: str | None = None
+
+    adapter = TypeAdapter(NDArray[Payload])
+    array = adapter.validate_python([Payload(label="BUY"), Payload(label="SELL")])
+    assert json.loads(adapter.dump_json(array, by_alias=True, exclude_none=True)) == [{"label": "BUY"}, {"label": "SELL"}]
+    assert adapter.dump_python(array, include={1: {"value"}}) == [{"value": "SELL"}]
+
+
+def test_custom_item_serializer_honors_ccflow_enum_names():
+    class Side(Enum):
+        BUY = Enum.auto()
+        SELL = Enum.auto()
+
+    adapter = TypeAdapter(NDArray[Side])
+    array = adapter.validate_python(np.array([Side.BUY, Side.SELL], dtype=object))
+    assert json.loads(adapter.dump_json(array)) == ["BUY", "SELL"]
+
+
+def test_untyped_object_array_does_not_guess_custom_schema():
+    with pytest.raises(PydanticSerializationError):
+        TypeAdapter(NDArray).dump_json(np.array([SerializedLabel("BUY")], dtype=object))
+
+
+def test_native_numpy_dtype_serialization_unchanged():
+    adapter = TypeAdapter(NDArray[np.int64])
+    array = adapter.validate_python([[1, 2], [3, 4]])
+    assert json.loads(adapter.dump_json(array)) == [[1, 2], [3, 4]]
+
+
+def test_numeric_array_does_not_apply_object_item_serializer():
+    class NumericSide(IntEnum):
+        BUY = 0
+        SELL = 1
+
+        @classmethod
+        def __get_pydantic_core_schema__(cls, source_type, handler):
+            return core_schema.is_instance_schema(
+                cls,
+                serialization=core_schema.plain_serializer_function_ser_schema(lambda value: value.name, when_used="json"),
+            )
+
+    adapter = TypeAdapter(NDArray[NumericSide])
+    array = adapter.validate_python(np.array([NumericSide.BUY, NumericSide.SELL]))
+    # NumPy has already coerced these values to integers, not enum instances.
+    assert all(not isinstance(value, NumericSide) for value in array.flat)
+    assert json.loads(adapter.dump_json(array)) == [0, 1]
