@@ -153,6 +153,53 @@ class TestArrowTable(TestCase):
         m = Model(strict=[batch])
         self.assertEqual(m.strict, pa.Table.from_pydict(data, RAW_SCHEMA))
 
+    def test_weak_preserves_extra_field_metadata(self):
+        extra_fields = [
+            pa.field("d", pa.int64(), metadata={b"unit": b"shares"}),
+            pa.field("e", pa.string(), metadata={b"source": b"example"}),
+        ]
+        schema = pa.schema([*RAW_SCHEMA, *extra_fields])
+        data = {**self.data, "e": ["foo", None, "baz"]}
+        table = pa.Table.from_pydict(data, schema=schema)
+
+        result = Model(weak=table).weak
+
+        self.assertTrue(result.schema.equals(schema, check_metadata=True))
+        self.assertEqual(result.to_pydict(), table.to_pydict())
+        self.assertTrue(table.schema.equals(schema, check_metadata=True))
+
+    def test_weak_preserves_extra_field_nullability(self):
+        extra = pa.field("d", pa.int64(), nullable=False)
+        schema = pa.schema([*RAW_SCHEMA, extra])
+        table = pa.Table.from_pydict(self.data, schema=schema)
+
+        result = Model(weak=table).weak
+
+        self.assertTrue(result.schema.field("d").equals(extra, check_metadata=True))
+        self.assertEqual(result.column("d"), table.column("d"))
+
+    def test_weak_preserves_extra_fields_from_batches(self):
+        extra = pa.field("d", pa.int64(), nullable=False, metadata={b"unit": b"shares"})
+        source_schema = pa.schema([pa.field("a", pa.float64()), pa.field("b", pa.int64()), RAW_SCHEMA.field("c"), extra])
+        expected_schema = pa.schema([*RAW_SCHEMA, extra])
+        inputs = {
+            "empty": [pa.RecordBatch.from_pydict({key: [] for key in self.data}, schema=source_schema)],
+            "chunked": [
+                pa.RecordBatch.from_pydict({key: values[:1] for key, values in self.data.items()}, schema=source_schema),
+                pa.RecordBatch.from_pydict({key: values[1:] for key, values in self.data.items()}, schema=source_schema),
+            ],
+        }
+        for name, batches in inputs.items():
+            with self.subTest(name=name):
+                table = pa.Table.from_batches(batches)
+                result = Model(weak=batches, filter=batches)
+
+                self.assertTrue(result.weak.schema.equals(expected_schema, check_metadata=True))
+                self.assertEqual(result.weak.column("d"), table.column("d"))
+                self.assertEqual(result.weak.column("d").num_chunks, table.column("d").num_chunks)
+                self.assertTrue(result.filter.schema.equals(RAW_SCHEMA, check_metadata=True))
+                self.assertRaises(ValidationError, Model, strict=batches)
+
     def test_bad_type(self):
         t = pa.Table.from_pydict(self.data)
         data_bad = {"a": ["oops", 2, 3], "b": [4, 5, 6], "c": ["foo", "bar", "baz"]}
