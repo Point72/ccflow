@@ -101,7 +101,7 @@ class ArrowTable(pa.Table, Generic[S]):
                 extra_cols = [c for c in v.schema.names if c not in schema.names]
                 v_checked = v.drop(extra_cols).cast(schema)
                 for extra in extra_cols:
-                    v_checked = v_checked.append_column(extra, v[extra])
+                    v_checked = v_checked.append_column(v.schema.field(extra), v[extra])
                 return v_checked
         return v
 

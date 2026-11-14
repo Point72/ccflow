@@ -125,6 +125,65 @@ class TestCompositePublishers(TestCase):
             }
             self.assertDictEqual(paths, target)
 
+    def test_shared_field_and_default_publisher(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            shared = GenericFilePublisher(name=str(root / "custom_a"), suffix=".txt")
+            publisher = CompositePublisher(
+                name=str(root / "batch"),
+                data={"a": "ALPHA", "b": "BETA"},
+                field_publishers={"a": shared},
+                default_publishers=[shared],
+            )
+
+            paths = publisher()
+
+            self.assertEqual(paths, {"a": root / "custom_a.txt", "b": root / "batch" / "b.txt"})
+            self.assertEqual({field: path.read_text() for field, path in paths.items()}, {"a": "ALPHA", "b": "BETA"})
+
+    def test_publisher_templates_are_not_modified(self):
+        for named in (False, True):
+            with self.subTest(named=named), tempfile.TemporaryDirectory() as tempdir:
+                root = Path(tempdir)
+                template = GenericFilePublisher(
+                    name=str(root / "{{tag}}") if named else None,
+                    name_params={"tag": "template"},
+                    data="SEED",
+                    suffix=".txt",
+                )
+                original_name = template.name
+                publisher = CompositePublisher(
+                    name=str(root / "batch"),
+                    name_params={"tag": "composite"},
+                    data={"a": "ALPHA", "b": "BETA"},
+                    field_publishers={"a": template},
+                    default_publishers=[template],
+                )
+
+                paths = publisher()
+
+                self.assertEqual({field: path.read_text() for field, path in paths.items()}, {"a": "ALPHA", "b": "BETA"})
+                self.assertEqual(template.data, "SEED")
+                self.assertEqual(template.name, original_name)
+                self.assertEqual(template.name_params, {"tag": "template"})
+
+    def test_default_validation_fallback_preserves_templates(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            rejected = DummyPublisher(data=(42,))
+            accepted = GenericFilePublisher(data="SEED", suffix=".txt")
+            publisher = CompositePublisher(
+                name=str(Path(tempdir) / "batch"),
+                data={"a": "ALPHA", "b": "BETA"},
+                default_publishers=[rejected, accepted],
+            )
+
+            paths = publisher()
+
+            self.assertEqual({field: path.read_text() for field, path in paths.items()}, {"a": "ALPHA", "b": "BETA"})
+            self.assertEqual(rejected.data, (42,))
+            self.assertEqual(accepted.data, "SEED")
+            self.assertIsNone(accepted.name)
+
     def test_skip_root_publisher(self):
         with tempfile.TemporaryDirectory() as tempdir:
             os.chdir(tempdir)

@@ -59,8 +59,9 @@ class CompositePublisher(BasePublisher, Generic[PydanticModelType]):
             if not publisher:
                 for try_publisher in self.default_publishers:
                     try:
-                        try_publisher.data = value
-                        publishers[field] = try_publisher.model_copy()
+                        candidate = try_publisher.model_copy()
+                        candidate.data = value
+                        publishers[field] = candidate
                         publishers[field].name = full_name
                         publishers[field].name_params = self.name_params
                         break
@@ -76,9 +77,9 @@ class CompositePublisher(BasePublisher, Generic[PydanticModelType]):
             else:
                 # If value is the wrong type for the configured publisher, it will raise
                 # User should provide the right type of publisher for a given field.
+                publisher = publisher.model_copy()
                 publisher.data = value
                 if not publisher.name:
-                    publisher = publisher.model_copy()
                     publisher.name = full_name
                     publisher.name_params = self.name_params
                 publishers[field] = publisher
