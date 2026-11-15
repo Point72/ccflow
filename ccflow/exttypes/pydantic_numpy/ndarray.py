@@ -48,11 +48,33 @@ class NDArray(Generic[T], nd_array_type):  # noqa: PYI059
 
     @classmethod
     def __get_pydantic_core_schema__(cls, source_type, handler):
-        from pydantic_core import core_schema
+        from pydantic_core import PydanticSerializationUnexpectedValue, core_schema
+
+        subtypes = get_args(source_type)
+        dtype = subtypes[0] if subtypes and subtypes[0] != Any else None
+
+        serialization_schema = core_schema.any_schema()
+        definitions = []
+        if isinstance(dtype, type) and hasattr(dtype, "__get_pydantic_core_schema__"):
+
+            def _serialize_item(value, nxt):
+                if not isinstance(value, dtype):
+                    raise PydanticSerializationUnexpectedValue()
+                return nxt(value)
+
+            item_ref = f"{source_type}:{id(source_type)}:items"
+            serialization_schema = core_schema.definition_reference_schema(item_ref)
+            item_schema = core_schema.any_schema(
+                serialization=core_schema.wrap_serializer_function_ser_schema(_serialize_item, schema=handler.generate_schema(dtype))
+            )
+            definitions.append(
+                core_schema.union_schema(
+                    [item_schema, core_schema.list_schema(serialization_schema), core_schema.any_schema()],
+                    ref=item_ref,
+                )
+            )
 
         def _validate(v):
-            subtypes = get_args(source_type)
-            dtype = subtypes[0] if subtypes and subtypes[0] != Any else None
             try:
                 if dtype:
                     return np.asarray(v, dtype=dtype)
@@ -61,12 +83,14 @@ class NDArray(Generic[T], nd_array_type):  # noqa: PYI059
             except TypeError:
                 raise ValueError("Unable to convert value to an array.")
 
-        return core_schema.no_info_before_validator_function(
+        schema = core_schema.no_info_before_validator_function(
             _validate,
             core_schema.any_schema(),
             serialization=core_schema.wrap_serializer_function_ser_schema(
                 cls._serialize,
                 info_arg=False,
+                schema=serialization_schema,
                 return_schema=core_schema.list_schema(),
             ),
         )
+        return core_schema.definitions_schema(schema, definitions) if definitions else schema
