@@ -1,3 +1,7 @@
+import ctypes
+import gc
+import sys
+import sysconfig
 import unittest
 from unittest import TestCase
 
@@ -56,3 +60,19 @@ class TestExprTkExpression(TestCase):
             self.assertAlmostEqual(2.0, m.expression.expression(symbol_table)())
         else:
             self.assertRaisesRegex(ValueError, "Unable to import cexprtk. Please make sure you have it installed.", MyModel, expression=expression)
+
+    @unittest.skipIf(not _has_cexprtk(), "Requires cexprtk to be installed")
+    @unittest.skipIf(sys.implementation.name != "cpython" or sysconfig.get_config_var("Py_GIL_DISABLED"), "Requires a default CPython build")
+    def test_symbol_table_freed_by_gc(self):
+        import cexprtk
+
+        ExprTkExpression.validate("1.0")
+        table = cexprtk.Symbol_Table({"a": 1.0})
+        cycle = [table]
+        cycle.append(cycle)
+        del table, cycle
+        after_none = id(None) + sys.getsizeof(None)
+        before = ctypes.string_at(after_none, 64)
+        gc.collect()
+        # Freeing a Symbol_Table through the cyclic garbage collector must not write to the memory next to None.
+        self.assertEqual(before, ctypes.string_at(after_none, 64))
