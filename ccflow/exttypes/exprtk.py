@@ -1,3 +1,7 @@
+import ctypes
+import functools
+import sys
+import sysconfig
 from typing import Any
 
 from pydantic import TypeAdapter
@@ -6,14 +10,32 @@ from typing_extensions import Self
 
 __all__ = ("ExprTkExpression",)
 
+# Slot id of tp_clear in CPython's typeslots.h, and its offset in PyTypeObject on default (non free-threaded) builds.
+_PY_TP_CLEAR = 51
+_TP_CLEAR_OFFSET = 24 * ctypes.sizeof(ctypes.c_void_p)
 
+
+def _disable_gc_clear(tp: type) -> None:
+    # cexprtk's Symbol_Table.__dealloc__ writes through attributes that its tp_clear has already set to None, so a
+    # Symbol_Table freed by the cyclic garbage collector corrupts the memory next to the None object. Without tp_clear,
+    # the collector breaks such cycles through the other objects and the table is freed by reference counting.
+    # This is what @cython.no_gc_clear would do; remove once cexprtk applies it to Symbol_Table.
+    if sys.implementation.name != "cpython" or sysconfig.get_config_var("Py_GIL_DISABLED"):
+        return
+    get_slot = ctypes.PYFUNCTYPE(ctypes.c_void_p, ctypes.py_object, ctypes.c_int)(("PyType_GetSlot", ctypes.pythonapi))
+    slot = ctypes.c_void_p.from_address(id(tp) + _TP_CLEAR_OFFSET)
+    if slot.value is not None and slot.value == get_slot(tp, _PY_TP_CLEAR):
+        slot.value = None
+
+
+@functools.cache
 def _import_cexprtk():
     try:
         import cexprtk
-
-        return cexprtk
     except ImportError:
         raise ValueError("Unable to import cexprtk. Please make sure you have it installed.")
+    _disable_gc_clear(cexprtk.Symbol_Table)
+    return cexprtk
 
 
 class ExprTkExpression(str):
