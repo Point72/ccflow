@@ -41,6 +41,19 @@ DateContext.model_validate("0d")                # today
 DateRangeContext.model_validate(("-7d", "0d"))  # last 7 days through today
 ```
 
+A context also validates from an instance of another model whose fields fit, so a caller can pass the context it has where a model expects a different context type:
+
+```python
+class ReportContext(ContextBase):
+    date: date
+
+ReportContext.model_validate(DateContext(date="2025-01-01"))  # ReportContext(date=datetime.date(2025, 1, 1))
+```
+
+Other models do not do this, as in pydantic: passing a `DateContext` where an unrelated non-context model is expected raises a `ValidationError`.
+
+Validation may build a context from an input more than once, for example while pydantic tries each member of a union, and then discard it. Context validators should therefore have no side effects.
+
 ## Results
 
 All results derive from `ResultBase`.

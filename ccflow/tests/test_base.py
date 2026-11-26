@@ -1,9 +1,9 @@
 from typing import Any
 from unittest import TestCase, mock
 
-from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
 
-from ccflow import BaseModel, CallableModel, ContextBase, Flow, GenericResult, NullContext, PyObjectPath
+from ccflow import BaseModel, CallableModel, ContextBase, DateContext, Flow, GenericResult, NullContext, PyObjectPath
 from ccflow.local_persistence import LOCAL_ARTIFACTS_MODULE_NAME
 
 
@@ -58,6 +58,51 @@ class GenericAliasAdjust(BaseModel):
     x: list[str]
 
 
+class ContextA(ContextBase):
+    x: str
+
+
+class ContextB(ContextBase):
+    x: str
+
+
+class ContextC(ContextBase):
+    x: Any
+    y: str = None
+
+
+_VALIDATED = []
+
+
+class TrackedModel(BaseModel):
+    x: str = "foo"
+
+    @model_validator(mode="after")
+    def _track(self):
+        _VALIDATED.append(type(self).__name__)
+        return self
+
+
+class RaisingModel(BaseModel):
+    x: str = "foo"
+
+    @model_validator(mode="after")
+    def _raise(self):
+        raise RuntimeError("validator of another union member should not run")
+
+
+class UnionModel(BaseModel):
+    smart: TrackedModel | ModelB | None = None
+    left_to_right: TrackedModel | ModelB | None = Field(default=None, union_mode="left_to_right")
+    raising: RaisingModel | ModelB | None = None
+    nested: list[TrackedModel | ModelB] = Field(default_factory=list)
+    contexts: ContextA | DateContext | None = None
+
+
+class PlainUnionModel(PydanticBaseModel):
+    smart: TrackedModel | ModelB
+
+
 class TestBaseModel(TestCase):
     def test_extra_fields(self):
         self.assertRaises(ValidationError, MyTestModel, a="foo", b=0.0, extra=None)
@@ -87,14 +132,38 @@ class TestBaseModel(TestCase):
         self.assertEqual(m.model_validate(d).model_dump(by_alias=True), d)
 
     def test_coerce_from_other_type(self):
+        # Unrelated models are rejected, as in pydantic
+        self.assertRaises(ValidationError, ModelB.model_validate, ModelA(x="foo"))
+        self.assertRaises(ValidationError, ModelA.model_validate, ModelC(x="foo", y="bar"))
+
+    def test_coerce_from_other_context_type(self):
         # This test would have broken when we originally turned on extra field validation,
-        # due to the fact that ModelA and ModelB are unrelated types, and so coercion attempts
-        # to take dict(ModelA(x="foo")), which contains the "type_" field, which is considered as
+        # due to the fact that ContextA and ContextB are unrelated types, and so coercion attempts
+        # to take dict(ContextA(x="foo")), which contains the "type_" field, which is considered as
         # an "extra" field due to the aliasing, which then causes a failure.
         # It was fixed by popping this out in the pre-root validation.
-        self.assertEqual(ModelB.model_validate(ModelA(x="foo")), ModelB(x="foo"))
+        self.assertEqual(ContextB.model_validate(ContextA(x="foo")), ContextB(x="foo"))
 
-        self.assertRaises(ValidationError, ModelA.model_validate, ModelC(x="foo", y="bar"))
+        self.assertRaises(ValidationError, ContextA.model_validate, ContextC(x="foo", y="bar"))
+
+    def test_union_returns_matching_member(self):
+        _VALIDATED.clear()
+        b = ModelB(x="foo")
+        m = UnionModel(smart=b, left_to_right=b, nested=[b])
+        self.assertIs(m.smart, b)
+        self.assertIs(m.left_to_right, b)
+        self.assertIs(m.nested[0], b)
+        self.assertIs(TypeAdapter(TrackedModel | ModelB).validate_python(b), b)
+        self.assertIs(PlainUnionModel(smart=b).smart, b)
+        # No TrackedModel was built from b and then discarded
+        self.assertEqual(_VALIDATED, [])
+
+    def test_union_does_not_run_validators_of_other_members(self):
+        b = ModelB(x="foo")
+        self.assertIs(UnionModel(raising=b).raising, b)
+
+    def test_union_of_contexts_coerces(self):
+        self.assertEqual(UnionModel(contexts=ContextB(x="foo")).contexts, ContextA(x="foo"))
 
     def test_type_after_assignment(self):
         # This test catches an original bug where the type_ validator didn't originally return

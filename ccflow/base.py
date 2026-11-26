@@ -383,8 +383,9 @@ class BaseModel(PydanticBaseModel, _RegistryMixin, metaclass=_SerializeAsAnyMeta
                 if cls != type_cls:
                     return type_cls.model_validate(v)
 
-        if isinstance(v, PydanticBaseModel):
-            # Coerce from one BaseModel type to another (because it worked automatically in v1)
+        if isinstance(v, PydanticBaseModel) and issubclass(cls, ContextBase):
+            # Contexts are value objects, so any model whose fields fit is a valid input (as it was in pydantic v1).
+            # Other models reject instances of unrelated models, as in pydantic.
             v = v.model_dump(exclude={"type_"})
 
         return handler(v)
